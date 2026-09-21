@@ -14,25 +14,60 @@
 <body>
   <script>
     (function () {
-      function showError(title, detail) {
-        var box = document.getElementById('kt-error-box');
-        if (!box) {
-          box = document.createElement('div');
-          box.id = 'kt-error-box';
-          box.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#5a1d1d;color:#f48771;padding:12px;font:12px monospace;z-index:99999;max-height:60vh;overflow:auto;white-space:pre-wrap;border-bottom:2px solid #ff4444;';
-          document.body.appendChild(box);
-        }
-        box.textContent += '[' + title + '] ' + detail + '\n\n';
+      window.__ktErrorQueue = window.__ktErrorQueue || [];
+
+      function pushError(source, message, detail) {
+        try {
+          window.__ktErrorQueue.push({
+            id: 'err-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+            source: String(source || 'runtime'),
+            message: String(message || 'Unknown error'),
+            detail: String(detail || ''),
+            timestamp: Date.now()
+          });
+          if (window.__ktErrorQueue.length > 200) {
+            window.__ktErrorQueue.splice(0, window.__ktErrorQueue.length - 200);
+          }
+          if (typeof window.__ktOnError === 'function') {
+            try { window.__ktOnError(); } catch (_) { }
+          }
+        } catch (_) { }
       }
+
+      function showToast(message) {
+        var toast = document.getElementById('kt-error-toast');
+        if (!toast) {
+          toast = document.createElement('div');
+          toast.id = 'kt-error-toast';
+          toast.style.cssText = 'position:fixed;bottom:36px;right:12px;max-width:340px;background:#3a1d1d;color:#f48771;padding:8px 12px;font:12px/1.4 Consolas,monospace;z-index:99999;border:1px solid #ff4444;border-radius:3px;white-space:pre-wrap;pointer-events:none;opacity:0;transition:opacity 0.2s;';
+          document.body.appendChild(toast);
+        }
+        toast.textContent = String(message || '').slice(0, 240);
+        toast.style.opacity = '1';
+        clearTimeout(toast._hideTimer);
+        toast._hideTimer = setTimeout(function () {
+          toast.style.opacity = '0';
+        }, 3500);
+      }
+
       window.addEventListener('error', function (ev) {
-        showError('Error ' + (ev.filename || '?') + ':' + ev.lineno + ':' + ev.colno,
-          ev.message + '\n' + (ev.error && ev.error.stack ? ev.error.stack : ''));
+        var src = (ev.filename || '?') + ':' + (ev.lineno || 0) + ':' + (ev.colno || 0);
+        var msg = ev.message || 'Unknown';
+        var stack = ev.error && ev.error.stack ? ev.error.stack : '';
+        pushError('js', msg, src + '\n' + stack);
       });
+
       window.addEventListener('unhandledrejection', function (ev) {
         var r = ev.reason;
-        showError('Rejection', (r && r.stack) ? r.stack : String(r));
+        var msg = (r && r.message) ? r.message : String(r);
+        var stack = (r && r.stack) ? r.stack : '';
+        pushError('promise', msg, stack);
       });
-      window.__ktShowError = showError;
+
+      window.__ktShowError = function (title, detail) {
+        pushError('app', title, detail);
+        showToast(title);
+      };
     })();
   </script>
 
@@ -104,6 +139,9 @@
   <script src="./assets/js/ui/ketor-panel.js"></script>
   <script src="./assets/js/ui/ketor-statusbar.js"></script>
   <script src="./assets/js/ui/ketor-about.js"></script>
+
+  <script src="./assets/js/ui/ketor-groups-panel.js"></script>
+
   <script src="./assets/js/ui/ketor-translate-state.js"></script>
   <script src="./assets/js/ui/ketor-translate-sidebar.js"></script>
   <script src="./assets/js/ui/ketor-translate-tab.js"></script>
@@ -111,13 +149,19 @@
   <script src="./assets/js/ui/ketor-table-state.js"></script>
   <script src="./assets/js/ui/ketor-table-sidebar.js"></script>
   <script src="./assets/js/ui/ketor-table-tab.js"></script>
+  <script src="./assets/js/ui/ketor-search-state.js"></script>
+  <script src="./assets/js/ui/ketor-search-sidebar.js"></script>
+  <script src="./assets/js/ui/ketor-search-tab.js"></script>
   <script src="./assets/js/ui/ketor-workbench.js"></script>
 
   <script>
     (function () {
       try {
         var R = window.React, RD = window.ReactDOM;
-        if (!R || !RD) { window.__ktShowError('Bootstrap', 'React failed.'); return; }
+        if (!R || !RD) {
+          window.__ktShowError('Bootstrap', 'React failed to load.');
+          return;
+        }
         if (!window.Ketor || !window.Ketor.ui || !window.Ketor.ui.KetorWorkbench) {
           window.__ktShowError('Bootstrap', 'Workbench failed to load.');
           return;

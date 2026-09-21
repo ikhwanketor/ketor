@@ -1,4 +1,12 @@
 /* Ketor Translate Sidebar - registers provider for 'translate' activity */
+/* ============================================================
+   Ketor - Translate Sidebar (v2)
+   ------------------------------------------------------------
+   Adds a Group Manager accordion (Kruptar7-style) directly in
+   the sidebar so users can see their groups while translating
+   without switching to Search Text activity.
+   ============================================================ */
+
 (function (global) {
   'use strict';
   var K = global.Ketor = global.Ketor || {};
@@ -7,12 +15,14 @@
   if (!R) return;
   var e = R.createElement;
   var uC = R.useCallback;
+  var uS = R.useState;
 
   function Section(props) {
     return e('div', { className: 'kt-sidebar-section' },
       e('div', { className: 'kt-sidebar-section-header' }, props.title),
       e('div', { className: 'kt-sidebar-section-body', style: { padding: '6px 12px 12px 12px' } },
-        props.children)
+        props.children
+      )
     );
   }
 
@@ -39,19 +49,66 @@
 
   function TranslateSidebar() {
     var t = K.translate.useTranslate();
+    var s = K.search ? K.search.useSearch() : null;
+
+    var expandedSt = uS({});
+    var expandedGroups = expandedSt[0];
+    var setExpandedGroups = expandedSt[1];
+
+    var onToggleExpand = uC(function (id) {
+      setExpandedGroups(function (prev) {
+        var next = Object.assign({}, prev);
+        next[id] = !next[id];
+        return next;
+      });
+    }, []);
 
     var onLoadTable = uC(function () {
-      var inp = document.querySelector('[data-ketor-role="table"]');
+      var inp = document.getElementById('kt-input-table');
       if (inp) inp.click();
     }, []);
 
-    var onExtract = uC(function () { K.translate.extractTexts(); }, []);
+    var onOpenSearch = uC(function () {
+      try {
+        global.dispatchEvent(new CustomEvent('ketor:navigate-activity', {
+          detail: { activity: 'search', source: 'translate-sidebar' }
+        }));
+      } catch (_) { }
+    }, []);
+
     var onBuild = uC(function () { K.translate.buildModifiedRom(); }, []);
     var onExport = uC(function () { K.translate.downloadModifiedRom(); }, []);
     var onExportCsv = uC(function () { K.translate.exportCsv(); }, []);
     var onImportCsv = uC(function () {
       var inp = document.querySelector('[data-ketor-role="csv"]');
       if (inp) inp.click();
+    }, []);
+
+    var groups = (s && s.groups) ? s.groups : [];
+    var texts = (s && s.texts) ? s.texts : [];
+
+    var onRenameGroup = uC(function (id, name) {
+      if (K.search) K.search.renameGroup(id, name);
+    }, []);
+
+    var onDeleteGroup = uC(function (id) {
+      if (K.search) K.search.deleteGroup(id);
+    }, []);
+
+    var onRemoveText = uC(function (groupId, textId) {
+      if (K.search) K.search.removeFromGroup(groupId, textId);
+    }, []);
+
+    var onMoveGroup = uC(function (id, direction) {
+      if (K.search) K.search.moveGroup(id, direction);
+    }, []);
+
+    var onMoveText = uC(function (groupId, textId, direction) {
+      if (K.search) K.search.moveTextInGroup(groupId, textId, direction);
+    }, []);
+
+    var onSortTexts = uC(function (groupId) {
+      if (K.search) K.search.sortTextsInGroup(groupId);
     }, []);
 
     return e('div', { style: { paddingBottom: 12 } },
@@ -85,42 +142,56 @@
             }, 'Load Table (.tbl)')
       ),
 
-      e(Section, { title: 'Extract' },
-        e('div', { style: { fontSize: 11, color: 'var(--kt-sidebar-fg)' } },
-          'Options',
-          e('div', { style: { marginTop: 6 } },
-            e('label', { style: { display: 'flex', alignItems: 'center', gap: 6, padding: '2px 0' } },
-              e('input', {
-                type: 'checkbox',
-                checked: t.options.asciiFallback,
-                onChange: function (ev) { K.translate.setOptions({ asciiFallback: ev.target.checked }); }
-              }),
-              'ASCII fallback'
-            ),
-            e('label', { style: { display: 'flex', alignItems: 'center', gap: 6, padding: '2px 0' } },
-              e('input', {
-                type: 'checkbox',
-                checked: t.options.usePaddingByte,
-                onChange: function (ev) { K.translate.setOptions({ usePaddingByte: ev.target.checked }); }
-              }),
-              'DWE padding'
-            ),
-            e('label', { style: { display: 'flex', alignItems: 'center', gap: 6, padding: '2px 0' } },
-              e('input', {
-                type: 'checkbox',
-                checked: t.options.enableDteMteCompression,
-                onChange: function (ev) { K.translate.setOptions({ enableDteMteCompression: ev.target.checked }); }
-              }),
-              'DTE/MTE compression'
+      e(Section, { title: 'Groups (' + groups.length + ')' },
+        groups.length === 0
+          ? e('div', null,
+              e('div', {
+                style: {
+                  fontSize: 11,
+                  color: 'var(--kt-sidebar-fg)',
+                  opacity: 0.75,
+                  lineHeight: 1.5,
+                  marginBottom: 8
+                }
+              }, 'No groups yet. Extract and group texts in the Search Text activity.'),
+              e('button', {
+                type: 'button',
+                className: 'kt-btn small',
+                style: { width: '100%' },
+                onClick: onOpenSearch,
+                disabled: !t.romBytes
+              }, 'Open Search Text')
             )
-          )
-        ),
-        e('button', {
-          type: 'button', className: 'kt-btn small',
-          style: { marginTop: 8, width: '100%' },
-          onClick: onExtract,
-          disabled: t.isBusy || !t.romBytes || !t.tableData
-        }, t.isBusy ? 'Working...' : 'Extract Texts')
+          : e('div', null,
+              e('div', {
+                style: {
+                  border: '1px solid var(--kt-widget-border-default)',
+                  borderRadius: 3,
+                  overflow: 'hidden',
+                  background: 'var(--kt-sidebar-bg)'
+                }
+              },
+                e(K.ui.KetorGroupsPanel, {
+                  groups: groups,
+                  texts: texts,
+                  expanded: expandedGroups,
+                  onToggleExpand: onToggleExpand,
+                  onRename: onRenameGroup,
+                  onDelete: onDeleteGroup,
+                  onRemoveText: onRemoveText,
+                  onMoveGroup: onMoveGroup,
+                  onMoveText: onMoveText,
+                  onSortTexts: onSortTexts,
+                  selectedGroupId: s ? s.selectedGroupId : null
+                })
+              ),
+              e('button', {
+                type: 'button',
+                className: 'kt-btn small',
+                style: { marginTop: 8, width: '100%' },
+                onClick: onOpenSearch
+              }, 'Edit in Search Text')
+            )
       ),
 
       t.texts.length > 0 ? e(Section, { title: 'Build' },

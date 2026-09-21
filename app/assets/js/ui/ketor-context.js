@@ -10,7 +10,7 @@
    - activityBarVisible: boolean
    - statusBarVisible: boolean
    - panelVisible: boolean
-   - panelActiveTab: string ('background' | 'log' | 'problems')
+   - panelActiveTab: string ('session' | 'log' | 'problems')
    - panelHeight: number
    - sidebarWidth: number
    - editorGroups: Array<{ id, tabs: [], activeTabId }>
@@ -98,7 +98,7 @@
     activityBarVisible: true,
     statusBarVisible: true,
     panelVisible: false,
-    panelActiveTab: 'background',
+    panelActiveTab: 'session',
     panelHeight: 220,
     sidebarWidth: 300,
     editorGroups: [{ id: 'group-1', tabs: [], activeTabId: null }],
@@ -239,7 +239,7 @@
     var panelVisible = st5[0];
     var setPanelVisibleRaw = st5[1];
 
-    var st6 = React.useState(saved.panelActiveTab || 'background');
+    var st6 = React.useState(saved.panelActiveTab || 'session');
     var panelActiveTab = st6[0];
     var setPanelActiveTabRaw = st6[1];
 
@@ -473,7 +473,7 @@
     }, []);
 
     var setTheme = React.useCallback(function (id) { setThemeRaw(id || 'dark-plus'); }, []);
-    var setPanelActiveTab = React.useCallback(function (id) { setPanelActiveTabRaw(id || 'background'); }, []);
+    var setPanelActiveTab = React.useCallback(function (id) { setPanelActiveTabRaw(id || 'session'); }, []);
     var setPanelHeight = React.useCallback(function (px) {
       setPanelHeightRaw(Math.max(80, Math.min(600, Number(px) || 220)));
     }, []);

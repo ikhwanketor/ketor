@@ -244,9 +244,22 @@
           : null
       ),
       e('div', { className: 'kt-editor-content' },
-        activeTab
-          ? renderTabContent(activeTab, group)
-          : e(KetorWelcome, { onAction: props.onWelcomeAction })
+        group.tabs.length === 0
+          ? e(KetorWelcome, { onAction: props.onWelcomeAction })
+          : group.tabs.map(function (tab) {
+              var isActive = tab.id === group.activeTabId;
+              return e('div', {
+                key: tab.id,
+                'data-kt-tab-content': tab.id,
+                style: {
+                  display: isActive ? 'block' : 'none',
+                  height: '100%',
+                  minHeight: 0,
+                  overflow: 'hidden',
+                  position: 'relative'
+                }
+              }, renderTabContent(tab, group));
+            })
       )
     );
   }

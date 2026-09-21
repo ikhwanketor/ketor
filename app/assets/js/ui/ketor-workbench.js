@@ -302,6 +302,7 @@
             onTabChange: actions.setPanelActiveTab,
             onClose: function () { actions.setPanelVisible(false); },
             onResize: actions.setPanelHeight,
+            onClearLogs: actions.clearLogs,
             height: state.panelHeight,
             tasks: props.tasks,
             logs: props.logs,
@@ -568,22 +569,43 @@
         ev.target.value = '';
         if (!f) return;
         var A = actionsRef.current;
-        A.appendLog('info', 'Reading ' + f.name + '...', 'rom-loader');
+        var startedAt = Date.now();
+        var lastProgressLog = 0;
+        A.appendLog('info', 'Reading ' + f.name + ' (' + Ketor.core.formatSize(f.size) + ')...', 'rom-loader');
         Ketor.core.loadRomFile(f, {
           onProgress: function (p) {
-            if (p < 1) A.appendLog('info', 'Loading ' + Math.round(p * 100) + '%', 'rom-loader');
+            var now = Date.now();
+            if (p < 1 && (now - lastProgressLog) > 800) {
+              lastProgressLog = now;
+              A.appendLog('info', 'Read progress: ' + Math.round(p * 100) + '%', 'rom-loader');
+            }
           },
           onWarning: function (m) { A.appendLog('warn', m, 'rom-loader'); }
         }).then(function (res) {
+          var readMs = Date.now() - startedAt;
+          A.appendLog('info',
+            'Read complete in ' + readMs + ' ms (' +
+            (res.usedChunkedRead ? 'chunked' : 'direct') + ', ' +
+            Ketor.core.formatSize(res.size) + ')',
+            'rom-loader');
+
+          A.appendLog('info', 'Detecting system from header...', 'rom-loader');
           var sys = 'Unknown';
+          var method = 'unknown';
           try {
             if (Ketor.workflows && Ketor.workflows.detectWorkflow) {
               var wf = Ketor.workflows.detectWorkflow(res.data, res.name);
-              if (wf) sys = wf.name || 'Unknown';
+              if (wf) {
+                sys = wf.name || 'Unknown';
+                method = 'workflow';
+              }
             }
           } catch (_) { }
+          A.appendLog('info', 'System: ' + sys + ' (' + method + ')', 'rom-loader');
+
           setRomInfo({ name: res.name, size: res.size, system: sys });
           A.markDirty();
+          A.appendLog('info', 'Publishing ROM to project / translate / table / search...', 'rom-loader');
           if (Ketor.translate && Ketor.translate.setRomFromLoad) {
             Ketor.translate.setRomFromLoad(res, sys);
           }
@@ -593,6 +615,9 @@
           if (Ketor.table && Ketor.table.setRomFromLoad) {
             Ketor.table.setRomFromLoad(res, sys);
           }
+          if (Ketor.search && Ketor.search.setRomFromLoad) {
+            Ketor.search.setRomFromLoad(res, sys);
+          }
           window.dispatchEvent(new CustomEvent('ketor:rom-loaded', {
             detail: { name: res.name, size: res.size, system: sys }
           }));
@@ -601,8 +626,9 @@
           A.setPanelVisible(true);
           A.setPanelActiveTab('log');
           A.appendLog('success',
-            'ROM loaded: ' + res.name + ' (' + Ketor.core.formatSize(res.size) + ', ' + sys + ')',
+            'ROM ready: ' + res.name + ' · ' + sys + ' · ' + Ketor.core.formatSize(res.size),
             'rom-loader');
+          A.appendLog('info', 'Next: load a table to enable extraction.', 'rom-loader');
         }).catch(function (err) {
           var m = err && err.message ? err.message : String(err);
           A.appendLog('error', 'ROM load failed: ' + m, 'rom-loader');
@@ -659,6 +685,66 @@
       return function () { input.removeEventListener('change', onChange); };
     }, []);
 
+    // ---- Propagate table data to Search Text state ----
+    // Two sources: File menu "Load Table" (via translate state)
+    // and Table activity "Apply for ROM" (via table edit entries).
+    useEffect(function () {
+      if (!Ketor.search || !Ketor.search.setTableData) return;
+
+      function pushFromTranslate() {
+        if (!Ketor.translate || !Ketor.translate.getState) return;
+        var tt = Ketor.translate.getState();
+        if (!tt || !tt.tableData || !tt.tableData.entryCount) return;
+        var st = Ketor.search.getState();
+        if (st.tableData &&
+            st.tableData.entryCount === tt.tableData.entryCount &&
+            st.tableData.name === tt.tableData.name) return;
+        Ketor.search.setTableData(tt.tableData);
+      }
+
+      function pushFromTable() {
+        if (!Ketor.table || !Ketor.table.getState) return;
+        var ts = Ketor.table.getState();
+        if (!ts || !ts.isApplied || !ts.editEntries || !ts.editEntries.length) return;
+        var single = {};
+        var multi = {};
+        var count = 0;
+        ts.editEntries.forEach(function (en) {
+          if (!en.hex || en.char === undefined || en.char === null) return;
+          var hex = String(en.hex).toUpperCase();
+          if (!/^[0-9A-F]+$/.test(hex) || hex.length % 2 !== 0) return;
+          if (hex.length === 2) single[parseInt(hex, 16)] = en.char;
+          else multi[hex] = en.char;
+          count++;
+        });
+        if (!count) return;
+        var st = Ketor.search.getState();
+        var name = 'from-table';
+        if (st.tableData && st.tableData.name === name && st.tableData.entryCount === count) return;
+        Ketor.search.setTableData({
+          singleByte: single,
+          multiByte: multi,
+          entryCount: count,
+          name: name
+        });
+      }
+
+      var unsubTr = (Ketor.translate && typeof Ketor.translate.subscribe === 'function')
+        ? Ketor.translate.subscribe(pushFromTranslate)
+        : function () {};
+      var unsubTb = (Ketor.table && typeof Ketor.table.subscribe === 'function')
+        ? Ketor.table.subscribe(pushFromTable)
+        : function () {};
+
+      pushFromTranslate();
+      pushFromTable();
+
+      return function () {
+        try { unsubTr(); } catch (_) {}
+        try { unsubTb(); } catch (_) {}
+      };
+    }, []);
+
     // ---- CSV input handler ----
     useEffect(function () {
       var input = document.getElementById('kt-input-csv');
@@ -683,6 +769,36 @@
     useEffect(function () {
       if (!isCompact && kebabOpen) setKebabOpen(false);
     }, [isCompact, kebabOpen]);
+
+        // ---- Drain runtime error queue into Problems panel ----
+    useEffect(function () {
+      function drain() {
+        var q = window.__ktErrorQueue;
+        if (!Array.isArray(q) || q.length === 0) return;
+        var items = q.splice(0, q.length);
+        items.forEach(function (err) {
+          try {
+            actionsRef.current.addProblem({
+              id: err.id,
+              severity: 'error',
+              message: '[' + String(err.source || 'runtime') + '] ' + String(err.message || ''),
+              source: String(err.source || 'runtime'),
+              location: err.detail ? String(err.detail).slice(0, 240) : null
+            });
+          } catch (_) { }
+        });
+        try {
+          actionsRef.current.setPanelVisible(true);
+        } catch (_) { }
+      }
+
+      window.__ktOnError = drain;
+      var initial = setTimeout(drain, 80);
+      return function () {
+        clearTimeout(initial);
+        if (window.__ktOnError === drain) window.__ktOnError = null;
+      };
+    }, []);
 
     var handleActivityClick = useCallback(function (activityId) {
       actions.setActiveActivity(activityId);

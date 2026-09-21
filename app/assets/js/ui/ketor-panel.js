@@ -10,11 +10,22 @@
    - Problems: validation errors/warnings
    ============================================================ */
 
+/* ============================================================
+   Ketor - Panel (bottom) v2
+   ------------------------------------------------------------
+   Tabs:
+   - Session: running tasks + session overview (ROM, table,
+     texts, groups, build, errors)
+   - Log: rich chronological log with ms timestamp, padded
+     source, colored level. Clear + Export buttons.
+   - Problems: validation errors/warnings
+   ============================================================ */
+
 (function (global) {
   'use strict';
 
-  var Ketor = global.Ketor = global.Ketor || {};
-  Ketor.ui = Ketor.ui || {};
+  var K = global.Ketor = global.Ketor || {};
+  K.ui = K.ui || {};
 
   var React = global.React;
   if (!React) return;
@@ -25,10 +36,12 @@
   var useCallback = React.useCallback;
 
   var PANEL_TABS = [
-    { id: 'background', label: 'Background' },
+    { id: 'session', label: 'Session' },
     { id: 'log', label: 'Log' },
     { id: 'problems', label: 'Problems' }
   ];
+
+  var SOURCE_WIDTH = 12;
 
   function formatTime(ts) {
     if (!ts) return '';
@@ -36,7 +49,8 @@
     var hh = String(d.getHours()).padStart(2, '0');
     var mm = String(d.getMinutes()).padStart(2, '0');
     var ss = String(d.getSeconds()).padStart(2, '0');
-    return hh + ':' + mm + ':' + ss;
+    var ms = String(d.getMilliseconds()).padStart(3, '0');
+    return hh + ':' + mm + ':' + ss + '.' + ms;
   }
 
   function formatDuration(startedAt, finishedAt) {
@@ -48,98 +62,250 @@
     return Math.floor(ms / 60000) + 'm ' + Math.floor((ms % 60000) / 1000) + 's';
   }
 
+  function formatBytes(n) {
+    n = Number(n) || 0;
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(2) + ' MB';
+    return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+  }
+
+  // ---- Hook: re-render on any Ketor store change ----
+  function useAllStores() {
+    var st = useState(0);
+    var force = st[1];
+    useEffect(function () {
+      function tick() {
+        force(function (v) { return v + 1; });
+      }
+      var unsubs = [];
+      var stores = [K.project, K.search, K.table, K.translate];
+      for (var i = 0; i < stores.length; i++) {
+        var s = stores[i];
+        if (s && typeof s.subscribe === 'function') {
+          unsubs.push(s.subscribe(tick));
+        }
+      }
+      return function () {
+        unsubs.forEach(function (u) { try { u(); } catch (_) { } });
+      };
+    }, []);
+  }
+
   /* ============================================================
-     BackgroundTab -- real-time running tasks
+     SessionTab
      ============================================================ */
-  function BackgroundTab(props) {
+  function SessionTab(props) {
+    useAllStores();
     var tasks = props.tasks || [];
+    var problems = props.problems || [];
     var [, forceTick] = useState(0);
 
     useEffect(function () {
-      // Re-render every second so durations update live
       var timer = setInterval(function () { forceTick(function (v) { return v + 1; }); }, 1000);
       return function () { clearInterval(timer); };
     }, []);
 
-    if (tasks.length === 0) {
-      return e('div', {
-        className: 'kt-text-dim kt-text-small',
-        style: { padding: '16px', textAlign: 'center' }
-      }, 'No background tasks running.');
+    var running = tasks.filter(function (t) { return t.status === 'running'; });
+
+    var project = K.project ? K.project.getState() : null;
+    var search = K.search ? K.search.getState() : null;
+    var table = K.table ? K.table.getState() : null;
+    var translate = K.translate ? K.translate.getState() : null;
+
+    var romName = (project && project.romName) || (translate && translate.romName) || '';
+    var romSize = (project && project.romSize) || (translate && translate.romSize) || 0;
+    var romSystem = (project && project.romSystem) || (translate && translate.romSystem) || '';
+    var romCrc = (project && project.crc32) || '';
+
+    var tableName = '';
+    var tableEntries = 0;
+    var tableSource = '';
+    if (translate && translate.tableData) {
+      tableName = translate.tableData.name || '';
+      tableEntries = translate.tableData.entryCount || 0;
+      tableSource = 'translate';
+    }
+    if (!tableName && search && search.tableData) {
+      tableName = search.tableData.name || '';
+      tableEntries = search.tableData.entryCount || 0;
+      tableSource = 'search';
+    }
+    if (!tableName && table && table.editEntries && table.editEntries.length) {
+      tableName = table.editSource || 'edit-table';
+      tableEntries = table.editEntries.length;
+      tableSource = 'table';
     }
 
-    return e('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
-      tasks.map(function (t) {
-        var statusColor = t.status === 'failed' ? 'var(--kt-error-fg)'
-          : t.status === 'done' ? 'var(--kt-text-success, #89d185)'
-          : t.status === 'warn' ? 'var(--kt-warning-fg)'
-          : 'var(--kt-editor-fg)';
+    var textsCount = (search && search.texts) ? search.texts.length : 0;
+    var translatedCount = (translate && translate.texts)
+      ? translate.texts.filter(function (x) { return x.translatedText && x.translatedText.trim(); }).length
+      : 0;
+    var pendingCount = Math.max(0, textsCount - translatedCount);
+    var translatedPercent = textsCount > 0 ? Math.round((translatedCount / textsCount) * 100) : 0;
 
-        return e('div', {
-          key: t.id,
+    var groups = (search && search.groups) ? search.groups : [];
+    var groupSummary = groups.map(function (g) {
+      return g.name + ' (' + ((g.textIds || []).length) + ')';
+    }).join(', ');
+
+    var hasBuild = translate && translate.modifiedRom && translate.modifiedRom.length > 0;
+    var buildSize = hasBuild ? translate.modifiedRom.length : 0;
+    var errorCount = problems.filter(function (p) { return p.severity === 'error'; }).length;
+
+    if (!romName && running.length === 0) {
+      return e('div', {
+        className: 'kt-text-dim kt-text-small',
+        style: { padding: '20px', textAlign: 'center', lineHeight: 1.7 }
+      },
+        'No ROM loaded.',
+        e('br'),
+        'Use File > Load ROM to start a session.'
+      );
+    }
+
+    function Row(props2) {
+      return e('div', {
+        style: {
+          display: 'flex',
+          alignItems: 'baseline',
+          gap: 12,
+          padding: '3px 0',
+          fontFamily: 'var(--kt-font-mono)',
+          fontSize: 12,
+          lineHeight: 1.5
+        }
+      },
+        e('span', {
           style: {
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-            padding: '6px 8px',
-            background: 'var(--kt-sidebar-bg)',
-            borderRadius: '2px',
-            borderLeft: '2px solid ' + statusColor,
-            fontFamily: 'var(--kt-font-ui)',
-            fontSize: '12px'
+            flex: '0 0 90px',
+            color: 'var(--kt-input-placeholder-fg)',
+            textTransform: 'uppercase',
+            fontSize: 10,
+            letterSpacing: '0.05em'
           }
-        },
-          e('div', {
+        }, props2.label),
+        e('span', {
+          style: {
+            flex: 1,
+            color: 'var(--kt-editor-fg)',
+            wordBreak: 'break-word',
+            whiteSpace: 'pre-wrap'
+          }
+        }, props2.value)
+      );
+    }
+
+    var blocks = [];
+
+    if (running.length > 0) {
+      blocks.push(e('div', {
+        key: 'running',
+        style: { marginBottom: 12 }
+      },
+        e('div', {
+          style: {
+            fontSize: 10,
+            textTransform: 'uppercase',
+            letterSpacing: '0.06em',
+            color: 'var(--kt-input-placeholder-fg)',
+            marginBottom: 6
+          }
+        }, 'Running Tasks'),
+        running.map(function (t) {
+          return e('div', {
+            key: t.id,
             style: {
-              width: '14px',
-              height: '14px',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center',
-              flex: '0 0 auto'
+              gap: 10,
+              padding: '5px 8px',
+              background: 'var(--kt-sidebar-bg)',
+              borderRadius: 2,
+              borderLeft: '2px solid var(--kt-accent, #3794ff)',
+              fontFamily: 'var(--kt-font-ui)',
+              fontSize: 12,
+              marginBottom: 4
             }
           },
-            t.status === 'running'
-              ? e('span', { className: 'kt-spinner' })
-              : Ketor.ui.icon(
-                  t.status === 'failed' ? 'error' : (t.status === 'warn' ? 'warning' : 'check'),
-                  { size: 14, style: { color: statusColor } }
-                )
-          ),
-          e('div', { style: { flex: '1 1 auto', minWidth: 0 } },
-            e('div', {
-              className: 'kt-ellipsis',
-              style: { color: 'var(--kt-editor-fg)' }
-            }, t.label),
-            t.detail
-              ? e('div', {
-                  className: 'kt-ellipsis kt-text-small kt-text-dim',
-                  style: { marginTop: '1px' }
-                }, t.detail)
-              : null
-          ),
-          e('div', {
-            className: 'kt-text-small kt-text-dim',
-            style: { whiteSpace: 'nowrap', flex: '0 0 auto' }
-          },
-            t.status === 'running'
-              ? Math.floor(t.progress || 0) + '%'
-              : t.status
-          ),
-          e('div', {
-            className: 'kt-text-small kt-text-dim',
-            style: { whiteSpace: 'nowrap', flex: '0 0 auto', minWidth: '48px', textAlign: 'right' }
-          }, formatDuration(t.startedAt, t.finishedAt))
-        );
-      })
+            e('span', { className: 'kt-spinner' }),
+            e('span', { style: { flex: '1 1 auto', color: 'var(--kt-editor-fg)' } }, t.label),
+            e('span', {
+              className: 'kt-text-dim kt-text-small',
+              style: { whiteSpace: 'nowrap' }
+            }, Math.floor(t.progress || 0) + '% · ' + formatDuration(t.startedAt, null))
+          );
+        })
+      ));
+    }
+
+    if (romName) {
+      var romLine = romName + '\n' +
+        formatBytes(romSize) +
+        (romSystem ? ', ' + romSystem : '') +
+        (romCrc ? ', CRC32=' + romCrc : '');
+      blocks.push(e(Row, { key: 'rom', label: 'ROM', value: romLine }));
+    }
+
+    if (tableName) {
+      blocks.push(e(Row, {
+        key: 'table',
+        label: 'Table',
+        value: tableName + '\n' + tableEntries + ' entries (' + tableSource + ')'
+      }));
+    } else if (romName) {
+      blocks.push(e(Row, {
+        key: 'table',
+        label: 'Table',
+        value: 'Not loaded'
+      }));
+    }
+
+    if (textsCount > 0) {
+      blocks.push(e(Row, {
+        key: 'texts',
+        label: 'Texts',
+        value: textsCount.toLocaleString() + ' extracted\n' +
+               translatedCount.toLocaleString() + ' translated (' + translatedPercent + '%)\n' +
+               pendingCount.toLocaleString() + ' pending'
+      }));
+    }
+
+    if (groups.length > 0) {
+      blocks.push(e(Row, {
+        key: 'groups',
+        label: 'Groups',
+        value: groups.length + ' total\n' + groupSummary
+      }));
+    }
+
+    blocks.push(e(Row, {
+      key: 'build',
+      label: 'Last Build',
+      value: hasBuild
+        ? 'Ready (' + formatBytes(buildSize) + ')\nClick "Download ROM" in Translation sidebar to export'
+        : 'Not yet built'
+    }));
+
+    blocks.push(e(Row, {
+      key: 'errors',
+      label: 'Errors',
+      value: errorCount === 0
+        ? '0 active'
+        : errorCount + ' active (see Problems tab)'
+    }));
+
+    return e('div', { style: { padding: '10px 12px' } },
+      blocks
     );
   }
 
   /* ============================================================
-     LogTab -- chronological log
+     LogTab
      ============================================================ */
   function LogTab(props) {
     var logs = props.logs || [];
+    var onClear = props.onClear;
     var containerRef = useRef(null);
     var [autoScroll, setAutoScroll] = useState(true);
 
@@ -156,10 +322,31 @@
       setAutoScroll(atBottom);
     }, []);
 
+    var handleExport = useCallback(function () {
+      try {
+        var lines = logs.map(function (entry) {
+          var t = formatTime(entry.timestamp);
+          var src = String(entry.source || 'ketor');
+          var lvl = String(entry.level || 'info').toUpperCase();
+          return '[' + t + '] [' + lvl + '] ' + src + ': ' + entry.message;
+        });
+        var content = lines.join('\n');
+        var blob = new Blob([content], { type: 'text/plain' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'ketor-log-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.txt';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (_) { }
+    }, [logs]);
+
     if (logs.length === 0) {
       return e('div', {
         className: 'kt-text-dim kt-text-small',
-        style: { padding: '16px', textAlign: 'center' }
+        style: { padding: '20px', textAlign: 'center' }
       }, 'No log entries yet.');
     }
 
@@ -167,38 +354,57 @@
       ref: containerRef,
       onScroll: handleScroll,
       style: {
+        display: 'flex',
+        flexDirection: 'column',
         height: '100%',
+        minHeight: 0,
         overflow: 'auto',
         fontFamily: 'var(--kt-font-mono)',
-        fontSize: '12px',
-        lineHeight: 1.5
+        fontSize: 12,
+        lineHeight: 1.55
       }
     },
-      logs.map(function (entry) {
-        var color = entry.level === 'error' ? 'var(--kt-error-fg)'
-          : entry.level === 'warn' ? 'var(--kt-warning-fg)'
-          : entry.level === 'success' ? '#89d185'
-          : 'var(--kt-editor-fg)';
+      e('div', null,
+        logs.map(function (entry) {
+          var lvl = String(entry.level || 'info').toLowerCase();
+          var color = lvl === 'error' ? 'var(--kt-error-fg)'
+            : lvl === 'warn' ? 'var(--kt-warning-fg)'
+            : lvl === 'success' ? '#89d185'
+            : 'var(--kt-editor-fg)';
 
-        return e('div', {
-          key: entry.id,
-          style: { display: 'flex', gap: '8px', alignItems: 'baseline' }
-        },
-          e('span', { className: 'kt-text-dim', style: { flex: '0 0 auto' } },
-            '[' + formatTime(entry.timestamp) + ']'
-          ),
-          e('span', {
-            className: 'kt-text-dim',
-            style: { flex: '0 0 auto', minWidth: '80px' }
-          }, entry.source || 'ketor'),
-          e('span', { style: { color: color, wordBreak: 'break-word' } }, entry.message)
-        );
-      })
+          var src = String(entry.source || 'ketor');
+          var srcPad = src.length < SOURCE_WIDTH
+            ? src + ' '.repeat(SOURCE_WIDTH - src.length)
+            : src;
+
+          return e('div', {
+            key: entry.id,
+            style: {
+              display: 'flex',
+              alignItems: 'baseline',
+              gap: 8,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word'
+            }
+          },
+            e('span', {
+              className: 'kt-text-dim',
+              style: { flex: '0 0 auto', opacity: 0.7 }
+            }, '[' + formatTime(entry.timestamp) + ']'),
+            e('span', {
+              style: { flex: '0 0 auto', color: 'var(--kt-info-fg, #75beff)', opacity: 0.85 }
+            }, srcPad),
+            e('span', {
+              style: { flex: '1 1 auto', color: color, minWidth: 0 }
+            }, entry.message)
+          );
+        })
+      )
     );
   }
 
   /* ============================================================
-     ProblemsTab -- validation errors/warnings
+     ProblemsTab
      ============================================================ */
   function ProblemsTab(props) {
     var problems = props.problems || [];
@@ -206,7 +412,7 @@
     if (problems.length === 0) {
       return e('div', {
         className: 'kt-text-dim kt-text-small',
-        style: { padding: '16px', textAlign: 'center' }
+        style: { padding: '20px', textAlign: 'center' }
       }, 'No problems detected.');
     }
 
@@ -219,12 +425,12 @@
           key: p.id,
           style: {
             display: 'flex',
-            gap: '8px',
+            gap: 8,
             alignItems: 'flex-start',
             padding: '4px 0'
           }
         },
-          Ketor.ui.icon(
+          K.ui.icon(
             p.severity === 'error' ? 'error' : (p.severity === 'warning' ? 'warning' : 'info'),
             { size: 14, style: { color: color, marginTop: '2px', flex: '0 0 auto' } }
           ),
@@ -243,14 +449,36 @@
      KetorPanel -- main container
      ============================================================ */
   function KetorPanel(props) {
-    var activeTab = props.activeTab || 'background';
+    var activeTab = props.activeTab || 'session';
     var onTabChange = props.onTabChange || function () { };
     var onClose = props.onClose || function () { };
     var onResize = props.onResize;
+    var onClearLogs = props.onClearLogs || function () { };
     var height = props.height || 240;
     var tasks = props.tasks || [];
     var logs = props.logs || [];
     var problems = props.problems || [];
+
+    var onExportLogs = useCallback(function () {
+      try {
+        var lines = (logs || []).map(function (entry) {
+          var t = formatTime(entry.timestamp);
+          var src = String(entry.source || 'ketor');
+          var lvl = String(entry.level || 'info').toUpperCase();
+          return '[' + t + '] [' + lvl + '] ' + src + ': ' + entry.message;
+        });
+        var content = lines.join('\n');
+        var blob = new Blob([content], { type: 'text/plain' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'ketor-log-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.txt';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (_) { }
+    }, [logs]);
 
     var handleTabClick = useCallback(function (id) {
       onTabChange(id);
@@ -314,26 +542,42 @@
           );
         }),
         e('div', { className: 'spacer' }),
+        activeTab === 'log'
+          ? e('button', {
+              type: 'button',
+              className: 'icon-btn',
+              onClick: onExportLogs,
+              title: 'Export log to .txt'
+            }, K.ui.icon('save', { size: 14 }))
+          : null,
+        activeTab === 'log'
+          ? e('button', {
+              type: 'button',
+              className: 'icon-btn',
+              onClick: onClearLogs,
+              title: 'Clear all log entries'
+            }, K.ui.icon('trash', { size: 14 }))
+          : null,
         e('button', {
           type: 'button',
           className: 'icon-btn',
           onClick: onClose,
           title: 'Close Panel'
-        }, Ketor.ui.icon('close', { size: 14 }))
+        }, K.ui.icon('close', { size: 14 }))
       ),
       e('div', { className: 'kt-panel-body' },
-        activeTab === 'background'
-          ? e(BackgroundTab, { tasks: tasks })
+        activeTab === 'session'
+          ? e(SessionTab, { tasks: tasks, problems: problems })
           : activeTab === 'log'
-            ? e(LogTab, { logs: logs })
+            ? e(LogTab, { logs: logs, onClear: onClearLogs })
             : e(ProblemsTab, { problems: problems })
       )
     );
   }
 
-  Ketor.ui.KetorPanel = KetorPanel;
-  Ketor.ui.KetorBackgroundTab = BackgroundTab;
-  Ketor.ui.KetorLogTab = LogTab;
-  Ketor.ui.KetorProblemsTab = ProblemsTab;
+  K.ui.KetorPanel = KetorPanel;
+  K.ui.KetorSessionTab = SessionTab;
+  K.ui.KetorLogTab = LogTab;
+  K.ui.KetorProblemsTab = ProblemsTab;
 
 })(window);
