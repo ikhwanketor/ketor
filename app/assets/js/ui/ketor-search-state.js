@@ -15,6 +15,33 @@
    Reordering persists to sessionStorage.
    ============================================================ */
 
+/* ============================================================
+   Ketor - Search Text State (v3)
+   ------------------------------------------------------------
+   Batch 16: registry unification.
+
+   Identity:
+   - Each text entry is identified by its `startByte` (offset).
+     The `id` field is gone. Offsets are deterministic across
+     re-extraction of the same ROM + table, so group membership
+     survives re-extract naturally.
+
+   Ordering:
+   - All display order is by startByte ascending (physical ROM
+     order: menu first, then intro, then dialogue, etc.).
+
+   Group membership:
+   - groups[].offsets = array of startByte numbers.
+   - Backward migration from old `textIds` discards membership
+     (IDs referenced transient in-memory indexes). Group names,
+     colors, and order are preserved.
+
+   New per-entry fields:
+   - translatedText: '' (filled by Translation tab)
+   - comment: '' (optional note)
+   - source: 'extract' | 'manual'
+   ============================================================ */
+
 (function (global) {
   'use strict';
   var K = global.Ketor = global.Ketor || {};
@@ -53,6 +80,7 @@
     marked: {},
     groups: [],
     selectedGroupId: null,
+    expandedGroups: {},
     page: 1,
     listScrollTop: 0,
     status: ''
@@ -86,11 +114,26 @@
         marked: _state.marked,
         groups: _state.groups,
         selectedGroupId: _state.selectedGroupId,
+        expandedGroups: _state.expandedGroups,
         page: _state.page || 1
       };
       global.sessionStorage.setItem(SESSION_KEY, JSON.stringify(payload));
     } catch (_) { }
   }
+
+  function _migrateGroup(g) {
+    var copy = Object.assign({}, g);
+    // Batch 16: textIds (index-based, transient) -> offsets.
+    // Old textIds cannot be mapped without in-memory texts;
+    // discard membership but keep group name/color/order.
+    if (Array.isArray(copy.textIds) && !Array.isArray(copy.offsets)) {
+      copy.offsets = [];
+      delete copy.textIds;
+    }
+    if (!Array.isArray(copy.offsets)) copy.offsets = [];
+    return copy;
+  }
+
   function _restore() {
     try {
       var raw = global.sessionStorage.getItem(SESSION_KEY);
@@ -99,9 +142,17 @@
       var patch = {};
       if (saved.extractionOptions) patch.extractionOptions = saved.extractionOptions;
       if (saved.filter) patch.filter = saved.filter;
-      if (saved.marked) patch.marked = saved.marked;
-      if (saved.groups && Array.isArray(saved.groups)) patch.groups = saved.groups;
+      if (saved.marked && typeof saved.marked === 'object') {
+        // Marked keys were stringified index IDs; discard.
+        patch.marked = {};
+      }
+      if (saved.groups && Array.isArray(saved.groups)) {
+        patch.groups = saved.groups.map(_migrateGroup);
+      }
       if (saved.selectedGroupId) patch.selectedGroupId = saved.selectedGroupId;
+      if (saved.expandedGroups && typeof saved.expandedGroups === 'object') {
+        patch.expandedGroups = saved.expandedGroups;
+      }
       if (Number.isFinite(Number(saved.page)) && Number(saved.page) > 0) {
         patch.page = Math.floor(Number(saved.page));
       }
@@ -118,6 +169,10 @@
     return COLOR_PALETTE[_state.groups.length % COLOR_PALETTE.length];
   }
 
+  function _offsetHex(sb) {
+    return '0x' + Number(sb || 0).toString(16).toUpperCase().padStart(6, '0');
+  }
+
   function setRomFromLoad(result, systemName) {
     _set({
       romBytes: result.data || null,
@@ -128,8 +183,11 @@
       marked: {},
       groups: [],
       selectedGroupId: null,
+      expandedGroups: {},
       isExtracting: false,
       progress: 0,
+      page: 1,
+      listScrollTop: 0,
       status: 'ROM ready. Load a table to extract texts.'
     });
   }
@@ -166,23 +224,41 @@
     _state = Object.assign({}, _state, { listScrollTop: n });
   }
 
-  function toggleMark(textId) {
-    var id = String(textId);
+  function setExpandedGroups(map) {
+    _set({ expandedGroups: map || {} });
+  }
+
+  function toggleGroupExpand(id) {
+    var next = Object.assign({}, _state.expandedGroups);
+    next[id] = !next[id];
+    _set({ expandedGroups: next });
+  }
+
+  function expandGroup(id) {
+    if (_state.expandedGroups[id]) return;
+    var next = Object.assign({}, _state.expandedGroups);
+    next[id] = true;
+    _set({ expandedGroups: next });
+  }
+
+  // Marking uses startByte keys.
+  function toggleMark(startByte) {
+    var key = String(Number(startByte));
     var next = Object.assign({}, _state.marked);
-    if (next[id]) delete next[id];
-    else next[id] = true;
+    if (next[key]) delete next[key];
+    else next[key] = true;
     _set({ marked: next });
   }
 
-  function markAll(ids) {
+  function markAll(startBytes) {
     var next = Object.assign({}, _state.marked);
-    (ids || []).forEach(function (id) { next[String(id)] = true; });
+    (startBytes || []).forEach(function (sb) { next[String(Number(sb))] = true; });
     _set({ marked: next });
   }
 
   function unmarkAll() { _set({ marked: {} }); }
 
-  function getMarkedIds() {
+  function getMarkedOffsets() {
     return Object.keys(_state.marked).map(function (k) { return Number(k); });
   }
 
@@ -193,12 +269,15 @@
       id: 'g-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
       name: n,
       color: _nextColor(),
-      textIds: [],
+      offsets: [],
       createdAt: Date.now()
     };
+    var expanded = Object.assign({}, _state.expandedGroups);
+    expanded[group.id] = true;
     _set({
       groups: _state.groups.concat([group]),
-      selectedGroupId: group.id
+      selectedGroupId: group.id,
+      expandedGroups: expanded
     });
     return group.id;
   }
@@ -216,7 +295,9 @@
   function deleteGroup(id) {
     var next = _state.groups.filter(function (g) { return g.id !== id; });
     var nextSelected = _state.selectedGroupId === id ? null : _state.selectedGroupId;
-    _set({ groups: next, selectedGroupId: nextSelected });
+    var expanded = Object.assign({}, _state.expandedGroups);
+    delete expanded[id];
+    _set({ groups: next, selectedGroupId: nextSelected, expandedGroups: expanded });
   }
 
   function selectGroup(id) {
@@ -259,19 +340,19 @@
     _set({ groups: next, status: 'Groups sorted by name.' });
   }
 
-  function moveTextInGroup(groupId, textId, direction) {
-    var tid = Number(textId);
+  function moveTextInGroup(groupId, offset, direction) {
+    var sb = Number(offset);
     var next = _state.groups.map(function (g) {
       if (g.id !== groupId) return g;
-      var ids = (g.textIds || []).slice();
-      var idx = ids.indexOf(tid);
+      var list = (g.offsets || []).slice();
+      var idx = list.indexOf(sb);
       if (idx < 0) return g;
       var target = direction === 'up' ? idx - 1 : idx + 1;
-      if (target < 0 || target >= ids.length) return g;
-      var tmp = ids[idx];
-      ids[idx] = ids[target];
-      ids[target] = tmp;
-      return Object.assign({}, g, { textIds: ids });
+      if (target < 0 || target >= list.length) return g;
+      var tmp = list[idx];
+      list[idx] = list[target];
+      list[target] = tmp;
+      return Object.assign({}, g, { offsets: list });
     });
     _set({ groups: next });
   }
@@ -279,18 +360,16 @@
   function sortTextsInGroup(groupId) {
     var next = _state.groups.map(function (g) {
       if (g.id !== groupId) return g;
-      var ids = (g.textIds || []).slice().sort(function (a, b) {
-        return Number(a) - Number(b);
-      });
-      return Object.assign({}, g, { textIds: ids });
+      var list = (g.offsets || []).slice().sort(function (a, b) { return a - b; });
+      return Object.assign({}, g, { offsets: list });
     });
-    _set({ groups: next, status: 'Group texts sorted by ID.' });
+    _set({ groups: next, status: 'Group sorted by offset.' });
   }
 
   function assignMarkedToGroup(groupId) {
     if (!groupId) { _set({ status: 'Select or create a group first.' }); return; }
-    var markedIds = getMarkedIds();
-    if (!markedIds.length) { _set({ status: 'No texts marked.' }); return; }
+    var markedOffsets = getMarkedOffsets();
+    if (!markedOffsets.length) { _set({ status: 'No texts marked.' }); return; }
 
     var targetGroup = null;
     _state.groups.forEach(function (g) { if (g.id === groupId) targetGroup = g; });
@@ -299,15 +378,16 @@
     var alreadyAssigned = {};
     _state.groups.forEach(function (g) {
       if (g.id === groupId) return;
-      (g.textIds || []).forEach(function (tid) { alreadyAssigned[tid] = true; });
+      (g.offsets || []).forEach(function (off) { alreadyAssigned[off] = true; });
     });
 
     var toAdd = [];
     var skipped = 0;
-    markedIds.forEach(function (tid) {
-      if (alreadyAssigned[tid]) { skipped++; return; }
-      if (targetGroup.textIds.indexOf(tid) !== -1) return;
-      toAdd.push(tid);
+    var existing = targetGroup.offsets || [];
+    markedOffsets.forEach(function (off) {
+      if (alreadyAssigned[off]) { skipped++; return; }
+      if (existing.indexOf(off) !== -1) return;
+      toAdd.push(off);
     });
 
     if (!toAdd.length && skipped === 0) {
@@ -315,13 +395,13 @@
       return;
     }
 
-    // Sort new additions by ID before appending, so groups stay
-    // human-readable by default.
     toAdd.sort(function (a, b) { return a - b; });
 
     var next = _state.groups.map(function (g) {
       if (g.id !== groupId) return g;
-      return Object.assign({}, g, { textIds: g.textIds.concat(toAdd) });
+      var merged = (g.offsets || []).concat(toAdd);
+      merged.sort(function (a, b) { return a - b; });
+      return Object.assign({}, g, { offsets: merged });
     });
 
     var msg = 'Added ' + toAdd.length + ' text(s) to "' + targetGroup.name + '".';
@@ -334,37 +414,76 @@
     });
   }
 
-  function removeFromGroup(groupId, textId) {
-    var tid = Number(textId);
+  function removeFromGroup(groupId, offset) {
+    var sb = Number(offset);
     var next = _state.groups.map(function (g) {
       if (g.id !== groupId) return g;
       return Object.assign({}, g, {
-        textIds: g.textIds.filter(function (t) { return t !== tid; })
+        offsets: (g.offsets || []).filter(function (o) { return o !== sb; })
       });
     });
-    _set({ groups: next, status: 'Removed text ' + tid + ' from group.' });
+    _set({ groups: next, status: 'Removed ' + _offsetHex(sb) + ' from group.' });
   }
 
-  function getGroupForText(textId) {
-    var tid = Number(textId);
+  function getGroupForText(startByte) {
+    var sb = Number(startByte);
     for (var i = 0; i < _state.groups.length; i++) {
       var g = _state.groups[i];
-      if (g.textIds && g.textIds.indexOf(tid) !== -1) return g;
+      if (g.offsets && g.offsets.indexOf(sb) !== -1) return g;
     }
     return null;
   }
 
-  function getFilteredTexts() {
+  // Derived: set of all startBytes currently assigned to any group.
+  function getAssignedOffsets() {
+    var set = new Set();
+    (_state.groups || []).forEach(function (g) {
+      (g.offsets || []).forEach(function (off) { set.add(off); });
+    });
+    return set;
+  }
+
+  // Returns entries belonging to a specific group, sorted by startByte.
+  function getTextsByGroup(groupId) {
+    var g = null;
+    for (var i = 0; i < _state.groups.length; i++) {
+      if (_state.groups[i].id === groupId) { g = _state.groups[i]; break; }
+    }
+    if (!g) return [];
+    var offsetSet = {};
+    (g.offsets || []).forEach(function (off) { offsetSet[off] = true; });
     var texts = _state.texts || [];
+    var out = texts.filter(function (t) { return offsetSet[t.startByte] === true; });
+    out.sort(function (a, b) { return a.startByte - b.startByte; });
+    return out;
+  }
+
+  // Returns all texts sorted by startByte (physical ROM order).
+  function getSortedTexts() {
+    var texts = (_state.texts || []).slice();
+    texts.sort(function (a, b) {
+      var aBuild = a.buildable === false ? 1 : 0;
+      var bBuild = b.buildable === false ? 1 : 0;
+      if (aBuild !== bBuild) return aBuild - bBuild;
+      var aS = Number.isFinite(a.startByte) ? a.startByte : Number.MAX_SAFE_INTEGER;
+      var bS = Number.isFinite(b.startByte) ? b.startByte : Number.MAX_SAFE_INTEGER;
+      return aS - bS;
+    });
+    return texts;
+  }
+
+  function getFilteredTexts() {
+    var texts = getSortedTexts();
     var f = _state.filter || {};
     var term = String(f.search || '').trim().toLowerCase();
+    var assignedSet = getAssignedOffsets();
 
     return texts.filter(function (t) {
       if (f.type && f.type !== 'all') {
         if ((t.textType || '') !== f.type) return false;
       }
       if (f.assigned && f.assigned !== 'all') {
-        var inGroup = getGroupForText(t.id) !== null;
+        var inGroup = assignedSet.has(t.startByte);
         if (f.assigned === 'assigned' && !inGroup) return false;
         if (f.assigned === 'unassigned' && inGroup) return false;
       }
@@ -381,6 +500,83 @@
       }
       return true;
     });
+  }
+
+  function _normalizeEntry(e) {
+    var copy = Object.assign({}, e);
+    delete copy.id;
+    if (copy.translatedText === undefined) copy.translatedText = '';
+    if (copy.comment === undefined) copy.comment = '';
+    if (copy.source === undefined) copy.source = 'extract';
+    return copy;
+  }
+
+  function addManualEntry(payload) {
+    var sb = Number(payload && payload.startByte);
+    if (!Number.isFinite(sb) || sb < 0) return null;
+    var text = String((payload && payload.originalText) || '').trim();
+    if (!text) return null;
+    var bl = Math.max(1, Number((payload && payload.byteLength) || 0));
+
+    var texts = _state.texts || [];
+    for (var i = 0; i < texts.length; i++) {
+      if (Number(texts[i].startByte) === sb) {
+        _set({ status: 'Entry at ' + _offsetHex(sb) + ' already exists.' });
+        return sb;
+      }
+    }
+
+    var entry = {
+      startByte: sb,
+      offset: _offsetHex(sb),
+      byteLength: bl,
+      originalText: text,
+      translatedText: '',
+      comment: '',
+      textType: 'dialogue',
+      buildable: true,
+      sourceType: 'hex-manual',
+      sourceTag: 'HexEditor',
+      compressed: false,
+      source: 'manual'
+    };
+
+    var next = texts.concat([entry]);
+    next.sort(function (a, b) { return Number(a.startByte) - Number(b.startByte); });
+
+    _set({
+      texts: next,
+      status: 'Added manual entry at ' + _offsetHex(sb) + '.'
+    });
+    return sb;
+  }
+
+  function setTranslatedText(startByte, value) {
+    var sb = Number(startByte);
+    var val = String(value == null ? '' : value);
+    var texts = _state.texts || [];
+    var changed = false;
+    var next = texts.map(function (t) {
+      if (Number(t.startByte) !== sb) return t;
+      if ((t.translatedText || '') === val) return t;
+      changed = true;
+      return Object.assign({}, t, { translatedText: val });
+    });
+    if (changed) _set({ texts: next });
+  }
+
+  function setComment(startByte, value) {
+    var sb = Number(startByte);
+    var val = String(value == null ? '' : value);
+    var texts = _state.texts || [];
+    var changed = false;
+    var next = texts.map(function (t) {
+      if (Number(t.startByte) !== sb) return t;
+      if ((t.comment || '') === val) return t;
+      changed = true;
+      return Object.assign({}, t, { comment: val });
+    });
+    if (changed) _set({ texts: next });
   }
 
   function extractTexts() {
@@ -422,7 +618,15 @@
           buffer = buffer.concat(d.texts);
         }
         if (d.done) {
-          var final = buffer.slice();
+          var final = buffer.map(_normalizeEntry);
+          final.sort(function (a, b) {
+            var aBuild = a.buildable === false ? 1 : 0;
+            var bBuild = b.buildable === false ? 1 : 0;
+            if (aBuild !== bBuild) return aBuild - bBuild;
+            var aS = Number.isFinite(a.startByte) ? a.startByte : Number.MAX_SAFE_INTEGER;
+            var bS = Number.isFinite(b.startByte) ? b.startByte : Number.MAX_SAFE_INTEGER;
+            return aS - bS;
+          });
           buffer = [];
           _set({
             texts: final,
@@ -435,11 +639,17 @@
         return;
       }
       if (d.type === 'result' && Array.isArray(d.texts)) {
+        var arr = d.texts.map(_normalizeEntry);
+        arr.sort(function (a, b) {
+          var aS = Number.isFinite(a.startByte) ? a.startByte : Number.MAX_SAFE_INTEGER;
+          var bS = Number.isFinite(b.startByte) ? b.startByte : Number.MAX_SAFE_INTEGER;
+          return aS - bS;
+        });
         _set({
-          texts: d.texts,
+          texts: arr,
           isExtracting: false,
           progress: 0,
-          status: 'Extracted ' + d.texts.length + ' text(s).'
+          status: 'Extracted ' + arr.length + ' text(s).'
         });
         try { worker.terminate(); } catch (_) { }
         return;
@@ -495,12 +705,15 @@
     }, [romBuffer]);
   }
 
+  function refresh() { _notify(); }
+
   function reset() {
     _set({
       romBytes: null, romName: '', romSystem: '', romSize: 0,
       tableData: null,
       texts: [], isExtracting: false, progress: 0,
-      marked: {}, groups: [], selectedGroupId: null, page: 1, listScrollTop: 0,
+      marked: {}, groups: [], selectedGroupId: null,
+      expandedGroups: {}, page: 1, listScrollTop: 0,
       status: ''
     });
   }
@@ -516,10 +729,13 @@
   K.search.setFilter = setFilter;
   K.search.setPage = setPage;
   K.search.setListScrollTop = setListScrollTop;
+  K.search.setExpandedGroups = setExpandedGroups;
+  K.search.toggleGroupExpand = toggleGroupExpand;
+  K.search.expandGroup = expandGroup;
   K.search.toggleMark = toggleMark;
   K.search.markAll = markAll;
   K.search.unmarkAll = unmarkAll;
-  K.search.getMarkedIds = getMarkedIds;
+  K.search.getMarkedOffsets = getMarkedOffsets;
   K.search.createGroup = createGroup;
   K.search.renameGroup = renameGroup;
   K.search.deleteGroup = deleteGroup;
@@ -532,8 +748,15 @@
   K.search.assignMarkedToGroup = assignMarkedToGroup;
   K.search.removeFromGroup = removeFromGroup;
   K.search.getGroupForText = getGroupForText;
+  K.search.getAssignedOffsets = getAssignedOffsets;
+  K.search.getTextsByGroup = getTextsByGroup;
+  K.search.getSortedTexts = getSortedTexts;
   K.search.getFilteredTexts = getFilteredTexts;
+  K.search.addManualEntry = addManualEntry;
+  K.search.setTranslatedText = setTranslatedText;
+  K.search.setComment = setComment;
   K.search.extractTexts = extractTexts;
+  K.search.refresh = refresh;
   K.search.reset = reset;
   K.search.COLOR_PALETTE = COLOR_PALETTE;
 

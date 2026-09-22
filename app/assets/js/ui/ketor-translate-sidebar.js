@@ -1,10 +1,10 @@
 /* Ketor Translate Sidebar - registers provider for 'translate' activity */
 /* ============================================================
-   Ketor - Translate Sidebar (v2)
+   Ketor - Translate Sidebar (v3)
    ------------------------------------------------------------
-   Adds a Group Manager accordion (Kruptar7-style) directly in
-   the sidebar so users can see their groups while translating
-   without switching to Search Text activity.
+   Batch 16: adapted to offset-keyed registry. Groups and texts
+   now read from K.search with global expandedGroups, and
+   clicking a group sets selectedGroupId for the main tab.
    ============================================================ */
 
 (function (global) {
@@ -15,7 +15,6 @@
   if (!R) return;
   var e = R.createElement;
   var uC = R.useCallback;
-  var uS = R.useState;
 
   function Section(props) {
     return e('div', { className: 'kt-sidebar-section' },
@@ -51,18 +50,6 @@
     var t = K.translate.useTranslate();
     var s = K.search ? K.search.useSearch() : null;
 
-    var expandedSt = uS({});
-    var expandedGroups = expandedSt[0];
-    var setExpandedGroups = expandedSt[1];
-
-    var onToggleExpand = uC(function (id) {
-      setExpandedGroups(function (prev) {
-        var next = Object.assign({}, prev);
-        next[id] = !next[id];
-        return next;
-      });
-    }, []);
-
     var onLoadTable = uC(function () {
       var inp = document.getElementById('kt-input-table');
       if (inp) inp.click();
@@ -86,6 +73,15 @@
 
     var groups = (s && s.groups) ? s.groups : [];
     var texts = (s && s.texts) ? s.texts : [];
+    var expandedGroups = (s && s.expandedGroups) ? s.expandedGroups : {};
+
+    var onToggleExpand = uC(function (id) {
+      if (K.search) K.search.toggleGroupExpand(id);
+    }, []);
+
+    var onSelectGroup = uC(function (id) {
+      if (K.search) K.search.selectGroup(id);
+    }, []);
 
     var onRenameGroup = uC(function (id, name) {
       if (K.search) K.search.renameGroup(id, name);
@@ -95,21 +91,23 @@
       if (K.search) K.search.deleteGroup(id);
     }, []);
 
-    var onRemoveText = uC(function (groupId, textId) {
-      if (K.search) K.search.removeFromGroup(groupId, textId);
+    var onRemoveText = uC(function (groupId, startByte) {
+      if (K.search) K.search.removeFromGroup(groupId, startByte);
     }, []);
 
     var onMoveGroup = uC(function (id, direction) {
       if (K.search) K.search.moveGroup(id, direction);
     }, []);
 
-    var onMoveText = uC(function (groupId, textId, direction) {
-      if (K.search) K.search.moveTextInGroup(groupId, textId, direction);
+    var onMoveText = uC(function (groupId, startByte, direction) {
+      if (K.search) K.search.moveTextInGroup(groupId, startByte, direction);
     }, []);
 
     var onSortTexts = uC(function (groupId) {
       if (K.search) K.search.sortTextsInGroup(groupId);
     }, []);
+
+    var hasTexts = texts.length > 0;
 
     return e('div', { style: { paddingBottom: 12 } },
       e(Section, { title: 'ROM' },
@@ -176,6 +174,7 @@
                   texts: texts,
                   expanded: expandedGroups,
                   onToggleExpand: onToggleExpand,
+                  onSelect: onSelectGroup,
                   onRename: onRenameGroup,
                   onDelete: onDeleteGroup,
                   onRemoveText: onRemoveText,
@@ -194,7 +193,7 @@
             )
       ),
 
-      t.texts.length > 0 ? e(Section, { title: 'Build' },
+      hasTexts ? e(Section, { title: 'Build' },
         e('button', {
           type: 'button', className: 'kt-btn small',
           style: { width: '100%' },
@@ -208,7 +207,7 @@
         }, 'Download ROM (' + formatBytes(t.modifiedRom.length) + ')') : null
       ) : null,
 
-      t.texts.length > 0 ? e(Section, { title: 'Translation I/O' },
+      hasTexts ? e(Section, { title: 'Translation I/O' },
         e('button', {
           type: 'button', className: 'kt-btn small',
           style: { width: '100%' },
@@ -234,5 +233,5 @@
     );
   }
 
-  K.ui.registerSidebarProvider('translate', TranslateSidebar);
+  K.ui.registerSidebarProvider('translation', TranslateSidebar);
 })(window);

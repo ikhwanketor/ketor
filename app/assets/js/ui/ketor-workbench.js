@@ -770,26 +770,33 @@
       if (!isCompact && kebabOpen) setKebabOpen(false);
     }, [isCompact, kebabOpen]);
 
-        // ---- Drain runtime error queue into Problems panel ----
+    // ---- Drain runtime error queue into Problems panel ----
     useEffect(function () {
       function drain() {
         var q = window.__ktErrorQueue;
         if (!Array.isArray(q) || q.length === 0) return;
         var items = q.splice(0, q.length);
+        var hasError = false;
         items.forEach(function (err) {
+          var lvl = String(err.level || 'error').toLowerCase();
+          if (lvl !== 'error' && lvl !== 'warning' && lvl !== 'info') lvl = 'error';
+          if (lvl === 'error') hasError = true;
           try {
             actionsRef.current.addProblem({
               id: err.id,
-              severity: 'error',
+              severity: lvl,
               message: '[' + String(err.source || 'runtime') + '] ' + String(err.message || ''),
               source: String(err.source || 'runtime'),
               location: err.detail ? String(err.detail).slice(0, 240) : null
             });
           } catch (_) { }
         });
-        try {
-          actionsRef.current.setPanelVisible(true);
-        } catch (_) { }
+        if (hasError) {
+          try {
+            actionsRef.current.setPanelVisible(true);
+            actionsRef.current.setPanelActiveTab('problems');
+          } catch (_) { }
+        }
       }
 
       window.__ktOnError = drain;

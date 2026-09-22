@@ -1,4 +1,12 @@
 /* Ketor Translate Tab - registers tab provider for 'translate' kind */
+/* ============================================================
+   Ketor - Translate Tab (v2)
+   ------------------------------------------------------------
+   Batch 16: reads entries from K.search (selected group),
+   writes translatedText back to K.search. Does not own text
+   state anymore.
+   ============================================================ */
+
 (function (global) {
   'use strict';
   var K = global.Ketor = global.Ketor || {};
@@ -12,56 +20,65 @@
   var uE = R.useEffect;
   var uR = R.useRef;
 
-  // ---- Text item row ----
   function TextRow(props) {
     var row = props.row;
-    var isSelected = props.isSelected;
-    var [local, setLocal] = uS(row.translatedText || '');
+    var isActive = props.isActive;
+    var tableData = props.tableData;
+    var onActivate = props.onActivate;
+
+    var st = uS(row.translatedText || '');
+    var local = st[0];
+    var setLocal = st[1];
     var editingRef = uR(false);
-    var rowRef = uR(null);
 
     uE(function () {
       if (!editingRef.current) setLocal(row.translatedText || '');
-    }, [row.translatedText, row.id]);
+    }, [row.translatedText, row.startByte]);
 
-    // Byte length estimation
     var byteLen = uM(function () {
       var text = local || '';
       if (!text) return 0;
-      // Simple: table has single-byte, +1 per char (overestimate for 2-byte)
-      var hasMulti = props.tableData && props.tableData.hasMultiByte;
+      var hasMulti = tableData && tableData.hasMultiByte;
       if (hasMulti) return text.length * 2;
       return text.length;
-    }, [local, props.tableData]);
+    }, [local, tableData]);
 
     var originalLen = row.byteLength || 0;
     var overflow = byteLen > originalLen && originalLen > 0;
 
-    var onBlur = uC(function () {
+    var commit = uC(function () {
       editingRef.current = false;
       if ((row.translatedText || '') !== local) {
-        K.translate.updateTranslation(row.id, local);
+        K.search.setTranslatedText(row.startByte, local);
       }
-    }, [local, row.id, row.translatedText]);
+    }, [local, row.startByte, row.translatedText]);
 
     var onFocus = uC(function () {
       editingRef.current = true;
-      if (props.onSelect) props.onSelect(row.id);
-    }, [row.id, props.onSelect]);
+      if (onActivate) onActivate(row.startByte);
+    }, [row.startByte, onActivate]);
 
     var onAuto = uC(function () {
-      K.translate.autoTranslateText(row.id);
-    }, [row.id]);
+      K.translate.autoTranslateText(row.startByte);
+    }, [row.startByte]);
 
     var onOpenHex = uC(function () {
-      if (props.onOpenHex) props.onOpenHex(row);
-    }, [row, props.onOpenHex]);
+      try {
+        global.dispatchEvent(new CustomEvent('ketor:navigate-hex', {
+          detail: {
+            offset: row.startByte,
+            label: String(row.originalText || '').slice(0, 30),
+            source: 'translation'
+          }
+        }));
+      } catch (_) { }
+    }, [row]);
 
     return e('div', {
-      ref: rowRef,
-      className: 'kt-text-item' + (isSelected ? ' selected' : ''),
+      className: 'kt-text-item' + (isActive ? ' selected' : ''),
+      onClick: function () { if (onActivate) onActivate(row.startByte); },
       style: {
-        border: '1px solid ' + (isSelected ? 'var(--kt-focus-border)' : 'var(--kt-widget-border-default)'),
+        border: '1px solid ' + (isActive ? 'var(--kt-focus-border)' : 'var(--kt-widget-border-default)'),
         borderRadius: 4,
         padding: 10,
         marginBottom: 8,
@@ -69,8 +86,22 @@
       }
     },
       e('div', {
-        style: { fontSize: 10, color: 'var(--kt-input-placeholder-fg)', marginBottom: 6 }
-      }, 'ID ' + row.id + ' | ' + (row.offset || '') + ' | ' + (row.textType || 'text')),
+        style: {
+          fontSize: 10,
+          color: 'var(--kt-input-placeholder-fg)',
+          marginBottom: 6,
+          display: 'flex',
+          gap: 12
+        }
+      },
+        e('span', null, 'Offset: ', e('strong', {
+          style: { color: 'var(--kt-info-fg, #75beff)', fontFamily: 'var(--kt-font-mono)' }
+        }, row.offset || ('0x' + Number(row.startByte).toString(16).toUpperCase()))),
+        e('span', null, 'Type: ' + (row.textType || 'text')),
+        row.source === 'manual'
+          ? e('span', { style: { color: '#c586c0' } }, '· manual')
+          : null
+      ),
 
       e('div', {
         style: {
@@ -88,7 +119,9 @@
             background: 'var(--kt-editor-bg)'
           }
         },
-          e('div', { style: { fontSize: 9, textTransform: 'uppercase', opacity: 0.5, marginBottom: 4 } }, 'Original'),
+          e('div', {
+            style: { fontSize: 9, textTransform: 'uppercase', opacity: 0.5, marginBottom: 4 }
+          }, 'Original'),
           e('pre', {
             style: {
               margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
@@ -105,12 +138,14 @@
             background: 'var(--kt-editor-bg)'
           }
         },
-          e('div', { style: { fontSize: 9, textTransform: 'uppercase', opacity: 0.5, marginBottom: 4 } }, 'Translation'),
+          e('div', {
+            style: { fontSize: 9, textTransform: 'uppercase', opacity: 0.5, marginBottom: 4 }
+          }, 'Translation'),
           e('textarea', {
             value: local,
             onChange: function (ev) { setLocal(ev.target.value); },
             onFocus: onFocus,
-            onBlur: onBlur,
+            onBlur: commit,
             placeholder: 'Enter translation...',
             style: {
               width: '100%', minHeight: 60, background: 'var(--kt-input-bg)',
@@ -140,8 +175,7 @@
         e('div', { style: { display: 'flex', gap: 4 } },
           e('button', {
             type: 'button', className: 'kt-btn small',
-            onClick: onAuto,
-            disabled: !row.originalText
+            onClick: onAuto, disabled: !row.originalText
           }, 'Auto'),
           e('button', {
             type: 'button', className: 'kt-btn small',
@@ -152,50 +186,87 @@
     );
   }
 
-  // ---- Main tab ----
   function TranslateTab() {
     var t = K.translate.useTranslate();
+    var s = K.search ? K.search.useSearch() : null;
+
+    var activeGroupId = s ? s.selectedGroupId : null;
+    var activeGroup = null;
+    if (s && activeGroupId) {
+      for (var i = 0; i < s.groups.length; i++) {
+        if (s.groups[i].id === activeGroupId) { activeGroup = s.groups[i]; break; }
+      }
+    }
+
+    var entries = uM(function () {
+      if (!s || !activeGroupId) return [];
+      return K.search.getTextsByGroup(activeGroupId);
+    }, [s ? s.texts : null, s ? s.groups : null, activeGroupId]);
 
     var filtered = uM(function () {
       var f = (t.filter || '').trim().toLowerCase();
-      if (!f) return t.texts;
-      return t.texts.filter(function (row) {
+      if (!f) return entries;
+      return entries.filter(function (row) {
         var o = (row.originalText || '').toLowerCase();
         var tr = (row.translatedText || '').toLowerCase();
         var off = (row.offset || '').toLowerCase();
-        var id = String(row.id);
-        return o.indexOf(f) >= 0 || tr.indexOf(f) >= 0
-          || off.indexOf(f) >= 0 || id.indexOf(f) >= 0;
+        return o.indexOf(f) >= 0 || tr.indexOf(f) >= 0 || off.indexOf(f) >= 0;
       });
-    }, [t.texts, t.filter]);
+    }, [entries, t.filter]);
 
     var total = filtered.length;
-    var totalPages = Math.max(1, Math.ceil(total / t.perPage));
+    var perPage = t.perPage || 20;
+    var totalPages = Math.max(1, Math.ceil(total / perPage));
     var page = Math.min(t.page, totalPages);
-    var slice = filtered.slice((page - 1) * t.perPage, page * t.perPage);
+    var slice = filtered.slice((page - 1) * perPage, page * perPage);
 
     var stats = uM(function () {
       var done = 0;
-      for (var i = 0; i < t.texts.length; i++) {
-        if ((t.texts[i].translatedText || '').trim()) done++;
+      for (var j = 0; j < entries.length; j++) {
+        if ((entries[j].translatedText || '').trim()) done++;
       }
-      return { total: t.texts.length, done: done };
-    }, [t.texts]);
+      return { total: entries.length, done: done };
+    }, [entries]);
 
-    var onOpenHex = uC(function (row) {
-      // Future: focus hex editor. For now just select.
-      K.translate.selectText(row.id);
+    var onOpenSearch = uC(function () {
+      try {
+        global.dispatchEvent(new CustomEvent('ketor:navigate-activity', {
+          detail: { activity: 'search', source: 'translation-empty' }
+        }));
+      } catch (_) { }
     }, []);
 
-    if (t.texts.length === 0) {
+    var onOpenHex = uC(function () {
+      try {
+        global.dispatchEvent(new CustomEvent('ketor:navigate-activity', {
+          detail: { activity: 'hex', source: 'translation-empty' }
+        }));
+      } catch (_) { }
+    }, []);
+
+    if (!t.romName) {
+      return e('div', { className: 'kt-activity-placeholder' },
+        e('div', { className: 'ap-title' }, 'Translation'),
+        e('div', { className: 'ap-hint' }, 'Load a ROM first from File menu.')
+      );
+    }
+
+    if (!s || s.groups.length === 0) {
       return e('div', { className: 'kt-activity-placeholder' },
         e('div', { className: 'ap-title' }, 'Translation'),
         e('div', { className: 'ap-hint' },
-          t.romName
-            ? (t.tableData
-                ? 'Click "Extract Texts" in the sidebar to begin.'
-                : 'Load a .tbl table in the sidebar to enable extraction.')
-            : 'Load a ROM first from File menu.')
+          'No groups yet. Extract texts and create a group in Search Text (or mark a byte range in Hex Editor).'),
+        e('div', { style: { display: 'flex', gap: 8, marginTop: 16, justifyContent: 'center' } },
+          e('button', { type: 'button', className: 'kt-btn', onClick: onOpenSearch }, 'Open Search Text'),
+          e('button', { type: 'button', className: 'kt-btn secondary', onClick: onOpenHex }, 'Open Hex Editor')
+        )
+      );
+    }
+
+    if (!activeGroupId) {
+      return e('div', { className: 'kt-activity-placeholder' },
+        e('div', { className: 'ap-title' }, 'Translation'),
+        e('div', { className: 'ap-hint' }, 'Select a group in the sidebar to start translating.')
       );
     }
 
@@ -213,10 +284,17 @@
           flex: '0 0 auto'
         }
       },
+        e('span', {
+          style: {
+            fontSize: 12, fontWeight: 600,
+            color: activeGroup ? activeGroup.color : 'inherit',
+            whiteSpace: 'nowrap'
+          }
+        }, activeGroup ? activeGroup.name : '—'),
         e('input', {
           type: 'text',
           className: 'kt-input',
-          placeholder: 'Search original, translation, offset, or ID...',
+          placeholder: 'Filter by original, translation, or offset...',
           value: t.filter,
           onChange: function (ev) { K.translate.setFilter(ev.target.value); },
           style: { flex: '1 1 220px', minWidth: 180 }
@@ -234,23 +312,22 @@
         )
       ),
 
-      e('div', {
-        style: {
-          flex: '1 1 auto', minHeight: 0, overflowY: 'auto',
-          padding: 12
-        }
-      }, slice.map(function (row) {
-        return e(TextRow, {
-          key: row.id,
-          row: row,
-          isSelected: t.selectedTextId === row.id,
-          tableData: t.tableData,
-          onSelect: K.translate.selectText,
-          onOpenHex: onOpenHex
-        });
-      })),
+      entries.length === 0
+        ? e('div', { style: { padding: 32, textAlign: 'center', color: 'var(--kt-input-placeholder-fg)', fontStyle: 'italic' } },
+            'This group has no texts yet. Add some via Search Text or Hex Editor.')
+        : e('div', {
+            style: { flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: 12 }
+          }, slice.map(function (row) {
+            return e(TextRow, {
+              key: 'tr-' + row.startByte,
+              row: row,
+              isActive: t.selectedOffset === row.startByte,
+              tableData: s.tableData,
+              onActivate: K.translate.selectOffset
+            });
+          })),
 
-      e('div', {
+      totalPages > 1 ? e('div', {
         style: {
           flex: '0 0 auto',
           padding: '8px 12px',
@@ -271,8 +348,7 @@
           onClick: function () { K.translate.setPage(page - 1); },
           disabled: page <= 1
         }, '<'),
-        e('span', { style: { fontSize: 11, padding: '0 8px' } },
-          page + ' / ' + totalPages),
+        e('span', { style: { fontSize: 11, padding: '0 8px' } }, page + ' / ' + totalPages),
         e('button', {
           type: 'button', className: 'kt-btn small',
           onClick: function () { K.translate.setPage(page + 1); },
@@ -283,9 +359,9 @@
           onClick: function () { K.translate.setPage(totalPages); },
           disabled: page >= totalPages
         }, '>>')
-      )
+      ) : null
     );
   }
 
-  K.ui.registerTabProvider('translate', TranslateTab);
+  K.ui.registerTabProvider('translation', TranslateTab);
 })(window);

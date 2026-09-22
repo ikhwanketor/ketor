@@ -25,6 +25,14 @@
      so users can jump directly to a page (e.g. 290)
    ============================================================ */
 
+/* ============================================================
+   Ketor - Search Text Editor Tab (v4)
+   ------------------------------------------------------------
+   Batch 16: id removed. Identity is startByte (offset).
+   Display order is physical ROM order (by offset ascending).
+   Column "ID" dropped, offset is the primary identifier.
+   ============================================================ */
+
 (function (global) {
   'use strict';
   var K = global.Ketor = global.Ketor || {};
@@ -63,7 +71,6 @@
     };
   }
 
-  // ---- Filter bar ----
   function FilterBar(props) {
     var filter = props.filter;
     var setFilter = props.setFilter;
@@ -161,7 +168,6 @@
     );
   }
 
-  // ---- Text row ----
   function TextRow(props) {
     var t = props.text;
     var checked = props.checked;
@@ -210,15 +216,17 @@
         e('input', {
           type: 'checkbox',
           checked: checked === true,
-          onChange: function () { onToggle(t.id); },
+          onChange: function () { onToggle(t.startByte); },
           style: { cursor: 'pointer' }
         })
       ),
-      e('td', { style: Object.assign(tdStyle('left'), { width: 50, opacity: 0.6, fontFamily: 'var(--kt-font-mono)', fontSize: 10 }) },
-        String(t.id)
-      ),
-      e('td', { style: Object.assign(tdStyle('left'), { width: 90, fontFamily: 'var(--kt-font-mono)', fontSize: 10 }) },
-        t.offset || ''
+      e('td', { style: Object.assign(tdStyle('left'), {
+        width: 100,
+        fontFamily: 'var(--kt-font-mono)',
+        fontSize: 10,
+        color: 'var(--kt-info-fg, #75beff)'
+      }) },
+        t.offset || ('0x' + Number(t.startByte || 0).toString(16).toUpperCase().padStart(6, '0'))
       ),
       e('td', { style: Object.assign(tdStyle('left'), { width: 80, fontSize: 10 }) },
         e('span', {
@@ -242,7 +250,6 @@
     );
   }
 
-  // ---- Assign dropdown ----
   function AssignMenu(props) {
     var groups = props.groups;
     var open = props.open;
@@ -320,7 +327,7 @@
                 }
               }),
               e('span', { style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, g.name),
-              e('span', { style: { fontSize: 10, opacity: 0.6 } }, (g.textIds || []).length)
+              e('span', { style: { fontSize: 10, opacity: 0.6 } }, (g.offsets || []).length)
             );
           })
         : e('div', {
@@ -361,7 +368,6 @@
     );
   }
 
-  // ---- New Group modal ----
   function NewGroupModal(props) {
     var open = props.open;
     var onClose = props.onClose;
@@ -430,7 +436,6 @@
     );
   }
 
-  // ---- Page indicator (editable) ----
   function PageInput(props) {
     var current = props.current;
     var total = props.total;
@@ -439,35 +444,22 @@
     var st = uS(String(current));
     var val = st[0];
     var setVal = st[1];
-    var ref = uR(null);
 
     uE(function () { setVal(String(current)); }, [current]);
 
     var commit = function () {
       var n = parseInt(String(val || '').trim(), 10);
-      if (!Number.isFinite(n) || n < 1) {
-        setVal(String(current));
-        return;
-      }
+      if (!Number.isFinite(n) || n < 1) { setVal(String(current)); return; }
       if (n > total) n = total;
-      if (n === current) {
-        setVal(String(current));
-        return;
-      }
+      if (n === current) { setVal(String(current)); return; }
       onGo(n);
     };
 
     return e('div', {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 4,
-        fontSize: 11
-      }
+      style: { display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 }
     },
       e('span', { style: { opacity: 0.7 } }, 'Page'),
       e('input', {
-        ref: ref,
         type: 'text',
         value: val,
         onChange: function (ev) {
@@ -476,14 +468,8 @@
         },
         onBlur: commit,
         onKeyDown: function (ev) {
-          if (ev.key === 'Enter') {
-            commit();
-            try { ev.target.blur(); } catch (_) { }
-          }
-          if (ev.key === 'Escape') {
-            setVal(String(current));
-            try { ev.target.blur(); } catch (_) { }
-          }
+          if (ev.key === 'Enter') { commit(); try { ev.target.blur(); } catch (_) { } }
+          if (ev.key === 'Escape') { setVal(String(current)); try { ev.target.blur(); } catch (_) { } }
         },
         title: 'Type a page number and press Enter',
         style: {
@@ -502,29 +488,29 @@
     );
   }
 
-  // ---- Main tab ----
   function SearchTab() {
     var t = K.search.useSearch();
 
-    // Local-only UI state (not persisted — reset on purpose)
     var assignMenuSt = uS(false);
     var assignMenuOpen = assignMenuSt[0];
     var setAssignMenuOpen = assignMenuSt[1];
-
-    var expandedGroupsSt = uS({});
-    var expandedGroups = expandedGroupsSt[0];
-    var setExpandedGroups = expandedGroupsSt[1];
 
     var newGroupModalSt = uS(false);
     var newGroupModalOpen = newGroupModalSt[0];
     var setNewGroupModalOpen = newGroupModalSt[1];
 
-    var onToggleExpand = uC(function (id) {
-      setExpandedGroups(function (prev) {
-        var next = Object.assign({}, prev);
-        next[id] = !next[id];
-        return next;
-      });
+    var listContainerRef = uR(null);
+    var restoredRef = uR(false);
+
+    uE(function () {
+      if (restoredRef.current) return;
+      restoredRef.current = true;
+      var el = listContainerRef.current;
+      if (el && t.listScrollTop > 0) el.scrollTop = t.listScrollTop;
+    }, [t.listScrollTop]);
+
+    var onListScroll = uC(function (ev) {
+      K.search.setListScrollTop(ev.currentTarget.scrollTop);
     }, []);
 
     var filtered = uM(function () {
@@ -540,39 +526,18 @@
       return Object.keys(t.marked || {}).length;
     }, [t.marked]);
 
-    var setPage = uC(function (p) {
-      K.search.setPage(p);
-    }, []);
-    
-    var listContainerRef = uR(null);
-    var restoredRef = uR(false);
+    var setPage = uC(function (p) { K.search.setPage(p); }, []);
 
-    uE(function () {
-      if (restoredRef.current) return;
-      restoredRef.current = true;
-      var el = listContainerRef.current;
-      if (el && t.listScrollTop > 0) {
-        el.scrollTop = t.listScrollTop;
-      }
-    }, [t.listScrollTop]);
-
-    var onListScroll = uC(function (ev) {
-      var el = ev.currentTarget;
-      K.search.setListScrollTop(el.scrollTop);
-    }, []);
-
-    var onToggleMark = uC(function (id) {
-      K.search.toggleMark(id);
+    var onToggleMark = uC(function (startByte) {
+      K.search.toggleMark(startByte);
     }, []);
 
     var onSelectAll = uC(function () {
-      var ids = slice.map(function (x) { return x.id; });
-      K.search.markAll(ids);
+      var offsets = slice.map(function (x) { return x.startByte; });
+      K.search.markAll(offsets);
     }, [slice]);
 
-    var onDeselectAll = uC(function () {
-      K.search.unmarkAll();
-    }, []);
+    var onDeselectAll = uC(function () { K.search.unmarkAll(); }, []);
 
     var onAssign = uC(function (groupId) {
       K.search.assignMarkedToGroup(groupId);
@@ -588,42 +553,24 @@
       var id = K.search.createGroup(name);
       if (id) {
         K.search.assignMarkedToGroup(id);
-        setExpandedGroups(function (prev) {
-          var next = Object.assign({}, prev);
-          next[id] = true;
-          return next;
-        });
       }
       setNewGroupModalOpen(false);
     }, []);
 
-    var onNewGroupClose = uC(function () {
-      setNewGroupModalOpen(false);
+    var onNewGroupClose = uC(function () { setNewGroupModalOpen(false); }, []);
+
+    var onRemoveText = uC(function (groupId, startByte) {
+      K.search.removeFromGroup(groupId, startByte);
     }, []);
 
-    var onRemoveText = uC(function (groupId, textId) {
-      K.search.removeFromGroup(groupId, textId);
+    var onRenameGroup = uC(function (id, name) { K.search.renameGroup(id, name); }, []);
+    var onDeleteGroup = uC(function (id) { K.search.deleteGroup(id); }, []);
+    var onMoveGroup = uC(function (id, direction) { K.search.moveGroup(id, direction); }, []);
+    var onMoveText = uC(function (groupId, startByte, direction) {
+      K.search.moveTextInGroup(groupId, startByte, direction);
     }, []);
-
-    var onRenameGroup = uC(function (id, name) {
-      K.search.renameGroup(id, name);
-    }, []);
-
-    var onDeleteGroup = uC(function (id) {
-      K.search.deleteGroup(id);
-    }, []);
-
-    var onMoveGroup = uC(function (id, direction) {
-      K.search.moveGroup(id, direction);
-    }, []);
-
-    var onMoveText = uC(function (groupId, textId, direction) {
-      K.search.moveTextInGroup(groupId, textId, direction);
-    }, []);
-
-    var onSortTexts = uC(function (groupId) {
-      K.search.sortTextsInGroup(groupId);
-    }, []);
+    var onSortTexts = uC(function (groupId) { K.search.sortTextsInGroup(groupId); }, []);
+    var onToggleExpand = uC(function (id) { K.search.toggleGroupExpand(id); }, []);
 
     if (!t.romBytes) {
       return e('div', { className: 'kt-activity-placeholder' },
@@ -669,44 +616,29 @@
           e('div', {
             ref: listContainerRef,
             onScroll: onListScroll,
-            style: {
-              flex: '1 1 auto',
-              minHeight: 0,
-              overflow: 'auto'
-            }
+            style: { flex: '1 1 auto', minHeight: 0, overflow: 'auto' }
           },
             t.texts.length === 0
               ? e('div', {
                   style: {
-                    padding: 24,
-                    textAlign: 'center',
-                    fontStyle: 'italic',
-                    fontSize: 12,
-                    color: 'var(--kt-input-placeholder-fg)'
+                    padding: 24, textAlign: 'center', fontStyle: 'italic',
+                    fontSize: 12, color: 'var(--kt-input-placeholder-fg)'
                   }
                 }, t.isExtracting ? 'Extracting...' : 'No texts yet. Click "Extract Texts" in the sidebar.')
               : slice.length === 0
                 ? e('div', {
                     style: {
-                      padding: 24,
-                      textAlign: 'center',
-                      fontStyle: 'italic',
-                      fontSize: 12,
-                      color: 'var(--kt-input-placeholder-fg)'
+                      padding: 24, textAlign: 'center', fontStyle: 'italic',
+                      fontSize: 12, color: 'var(--kt-input-placeholder-fg)'
                     }
                   }, 'No texts match the current filters.')
                 : e('table', {
-                    style: {
-                      width: '100%',
-                      borderCollapse: 'collapse',
-                      fontSize: 11
-                    }
+                    style: { width: '100%', borderCollapse: 'collapse', fontSize: 11 }
                   },
                     e('thead', null,
                       e('tr', null,
                         e('th', { style: Object.assign(thStyle(28, 'center'), { position: 'sticky', top: 0, background: 'var(--kt-sidebar-bg)', zIndex: 1 }) }, ''),
-                        e('th', { style: Object.assign(thStyle(50), { position: 'sticky', top: 0, background: 'var(--kt-sidebar-bg)', zIndex: 1 }) }, 'ID'),
-                        e('th', { style: Object.assign(thStyle(90), { position: 'sticky', top: 0, background: 'var(--kt-sidebar-bg)', zIndex: 1 }) }, 'Offset'),
+                        e('th', { style: Object.assign(thStyle(100), { position: 'sticky', top: 0, background: 'var(--kt-sidebar-bg)', zIndex: 1 }) }, 'Offset'),
                         e('th', { style: Object.assign(thStyle(80), { position: 'sticky', top: 0, background: 'var(--kt-sidebar-bg)', zIndex: 1 }) }, 'Type'),
                         e('th', { style: Object.assign(thStyle(null), { position: 'sticky', top: 0, background: 'var(--kt-sidebar-bg)', zIndex: 1 }) }, 'Original'),
                         e('th', { style: Object.assign(thStyle(120), { position: 'sticky', top: 0, background: 'var(--kt-sidebar-bg)', zIndex: 1 }) }, 'Group')
@@ -714,11 +646,11 @@
                     ),
                     e('tbody', null,
                       slice.map(function (tx) {
-                        var g = K.search.getGroupForText(tx.id);
+                        var g = K.search.getGroupForText(tx.startByte);
                         return e(TextRow, {
-                          key: 'tx-' + tx.id,
+                          key: 'tx-' + tx.startByte,
                           text: tx,
-                          checked: !!t.marked[String(tx.id)],
+                          checked: !!t.marked[String(tx.startByte)],
                           group: g,
                           onToggle: onToggleMark
                         });
@@ -741,47 +673,31 @@
         },
           e('div', { style: { display: 'flex', gap: 4, alignItems: 'center' } },
             e('button', {
-              type: 'button',
-              className: 'kt-btn small',
-              onClick: onSelectAll,
-              disabled: slice.length === 0
+              type: 'button', className: 'kt-btn small',
+              onClick: onSelectAll, disabled: slice.length === 0
             }, 'Select page'),
             e('button', {
-              type: 'button',
-              className: 'kt-btn small',
-              onClick: onDeselectAll,
-              disabled: markedCount === 0
+              type: 'button', className: 'kt-btn small',
+              onClick: onDeselectAll, disabled: markedCount === 0
             }, 'Clear marks')
           ),
           totalPages > 1 ? e('div', { style: { display: 'flex', gap: 4, alignItems: 'center' } },
             e('button', {
-              type: 'button',
-              className: 'kt-btn small',
-              onClick: function () { setPage(1); },
-              disabled: safePage <= 1
+              type: 'button', className: 'kt-btn small',
+              onClick: function () { setPage(1); }, disabled: safePage <= 1
             }, '<<'),
             e('button', {
-              type: 'button',
-              className: 'kt-btn small',
-              onClick: function () { setPage(safePage - 1); },
-              disabled: safePage <= 1
+              type: 'button', className: 'kt-btn small',
+              onClick: function () { setPage(safePage - 1); }, disabled: safePage <= 1
             }, '<'),
-            e(PageInput, {
-              current: safePage,
-              total: totalPages,
-              onGo: setPage
-            }),
+            e(PageInput, { current: safePage, total: totalPages, onGo: setPage }),
             e('button', {
-              type: 'button',
-              className: 'kt-btn small',
-              onClick: function () { setPage(safePage + 1); },
-              disabled: safePage >= totalPages
+              type: 'button', className: 'kt-btn small',
+              onClick: function () { setPage(safePage + 1); }, disabled: safePage >= totalPages
             }, '>'),
             e('button', {
-              type: 'button',
-              className: 'kt-btn small',
-              onClick: function () { setPage(totalPages); },
-              disabled: safePage >= totalPages
+              type: 'button', className: 'kt-btn small',
+              onClick: function () { setPage(totalPages); }, disabled: safePage >= totalPages
             }, '>>')
           ) : null,
           e('div', { style: { position: 'relative' } },
@@ -816,7 +732,7 @@
           e(K.ui.KetorGroupsPanel, {
             groups: t.groups,
             texts: t.texts,
-            expanded: expandedGroups,
+            expanded: t.expandedGroups || {},
             onToggleExpand: onToggleExpand,
             onRename: onRenameGroup,
             onDelete: onDeleteGroup,
@@ -824,6 +740,7 @@
             onMoveGroup: onMoveGroup,
             onMoveText: onMoveText,
             onSortTexts: onSortTexts,
+            onSelect: K.search.selectGroup,
             selectedGroupId: t.selectedGroupId
           })
         )

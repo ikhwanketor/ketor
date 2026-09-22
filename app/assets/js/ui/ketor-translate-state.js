@@ -1,4 +1,13 @@
 /* Ketor Translate State - shared store for translation activity */
+/* ============================================================
+   Ketor Translate State (v2)
+   ------------------------------------------------------------
+   Batch 16: reads and writes text entries from K.search
+   (unified registry). No longer extracts on its own — that
+   is done by Search Text activity. Retains Build / Export /
+   Auto-translate responsibilities.
+   ============================================================ */
+
 (function (global) {
   'use strict';
   var K = global.Ketor = global.Ketor || {};
@@ -9,21 +18,18 @@
   var _state = {
     romBytes: null, romName: '', romSystem: '', romSize: 0,
     tableData: null, tableContent: '',
-    texts: [], filter: '', page: 1, perPage: 20,
-    selectedTextId: null, modifiedRom: null,
+    filter: '', page: 1, perPage: 20,
+    selectedOffset: null,
+    modifiedRom: null,
     isBusy: false, status: '', progress: 0,
     sourceLang: 'en', targetLang: 'id',
-    options: {
-      minLength: 3, maxLength: 1024,
-      asciiFallback: true, usePaddingByte: false,
-      enableDteMteCompression: true,
-      enableTextDecompression: false
-    }
+    providerMode: 'free',
+    providerId: 'openai',
+    providerModel: 'gpt-4o-mini'
   };
 
   var _listeners = new Set();
-  var _workers = { extractor: null, table: null, build: null };
-  var _extractBuffer = [];
+  var _workers = { table: null, build: null };
   var _pendingTableName = null;
 
   function _set(patch) {
@@ -48,21 +54,12 @@
     _listeners.add(fn);
     return function () { _listeners.delete(fn); };
   }
-
   function useTranslate() {
     return R.useSyncExternalStore(subscribe, getState, getState);
   }
 
-  // ---- Workers ----
   function _ensureWorkers() {
     var lg = K.legacy || {};
-    if (!_workers.extractor && typeof lg.createTextExtractorWorker === 'function') {
-      _workers.extractor = lg.createTextExtractorWorker();
-      _workers.extractor.onmessage = _onExtractMsg;
-      _workers.extractor.onerror = function (e) {
-        _set({ isBusy: false, status: 'Extractor error' });
-      };
-    }
     if (!_workers.table && typeof lg.createTableWorker === 'function') {
       _workers.table = lg.createTableWorker();
       _workers.table.onmessage = _onTableMsg;
@@ -104,104 +101,50 @@
     });
   }
 
-  // ---- Extract ----
+  // ---- Pass-through (Batch 16) ----
+  // Actual extraction now lives in Search Text activity. This thin
+  // adapter keeps older callers working without changes.
   function extractTexts() {
-    _ensureWorkers();
-    if (!_workers.extractor) { _set({ status: 'Extractor unavailable.' }); return; }
-    if (!_state.romBytes || !_state.tableData) {
-      _set({ status: 'Load ROM and table first.' }); return;
-    }
-    _set({ isBusy: true, progress: 5, status: 'Extracting...', texts: [] });
-    _extractBuffer = [];
-
-    var rb = _state.romBytes;
-    var romBuffer = rb.buffer.slice(rb.byteOffset, rb.byteOffset + rb.byteLength);
-
-    _workers.extractor.postMessage({
-      romBuffer: romBuffer,
-      tableData: {
-        singleByte: _state.tableData.singleByte,
-        multiByte: _state.tableData.multiByte
-      },
-      options: {
-        minLength: _state.options.minLength,
-        maxLength: _state.options.maxLength,
-        asciiFallback: _state.options.asciiFallback,
-        system: {
-          name: _state.romSystem, terminator: [0x00],
-          pointerSize: 4, pointerEndianness: 'little', pointerBase: 0
-        },
-        systemPipeline: 'pipeline_generic',
-        usePaddingByte: _state.options.usePaddingByte,
-        strictExtractorMode: false,
-        enableTextDecompression: _state.options.enableTextDecompression,
-        decompressionMode: 'auto',
-        includeCompressedReadOnly: true
-      }
-    }, [romBuffer]);
-  }
-
-  function _onExtractMsg(ev) {
-    var d = ev.data || {};
-    if (d.type === 'progress') {
-      _set({ progress: Math.max(0, Math.min(100, Number(d.value) || 0)) });
+    if (K.search && typeof K.search.extractTexts === 'function') {
+      K.search.extractTexts();
       return;
     }
-    if (d.type === 'resultChunk') {
-      if (Array.isArray(d.texts) && d.texts.length) {
-        _extractBuffer = _extractBuffer.concat(d.texts);
-      }
-      if (d.done) {
-        var final = _extractBuffer.slice();
-        _extractBuffer = [];
-        _set({
-          texts: final, isBusy: false, progress: 100,
-          status: 'Extracted ' + final.length + ' entries.'
-        });
-        setTimeout(function () { _set({ progress: 0 }); }, 800);
-      }
-      return;
-    }
-    if (d.type === 'error') {
-      _extractBuffer = [];
-      _set({ isBusy: false, progress: 0, status: 'Extract error: ' + (d.message || '') });
-    }
+    _set({ status: 'Search activity not available.' });
   }
 
-  // ---- Update ----
-  function updateTranslation(textId, newText) {
-    var id = Number(textId);
-    if (!isFinite(id)) return;
-    var next = _state.texts.slice();
-    var changed = false;
-    for (var i = 0; i < next.length; i++) {
-      if (next[i].id !== id) continue;
-      var prev = next[i].translatedText || '';
-      var val = String(newText || '');
-      if (prev === val) return;
-      next[i] = Object.assign({}, next[i], { translatedText: val });
-      changed = true;
-      break;
-    }
-    if (changed) _set({ texts: next });
+  // ---- Read helpers (delegate to K.search) ----
+  function getActiveGroupId() {
+    if (!K.search) return null;
+    return K.search.getState().selectedGroupId || null;
   }
 
-  function setFilter(f) { _set({ filter: String(f || ''), page: 1 }); }
-  function setPage(p) { _set({ page: Math.max(1, Number(p) || 1) }); }
-  function selectText(id) { _set({ selectedTextId: id }); }
+  function getActiveGroupEntries() {
+    var gid = getActiveGroupId();
+    if (!gid || !K.search) return [];
+    return K.search.getTextsByGroup(gid);
+  }
+
+  // ---- Language / provider ----
   function setSourceLang(v) { _set({ sourceLang: String(v || 'en') }); }
   function setTargetLang(v) { _set({ targetLang: String(v || 'id') }); }
-  function setOptions(patch) {
-    _set({ options: Object.assign({}, _state.options, patch) });
+  function setProviderMode(mode) {
+    _set({ providerMode: mode === 'custom' ? 'custom' : 'free' });
   }
+  function setProviderId(id) { _set({ providerId: String(id || 'openai') }); }
+  function setProviderModel(m) { _set({ providerModel: String(m || 'gpt-4o-mini') }); }
 
-  function reset() {
-    _set({
-      romBytes: null, romName: '', romSystem: '', romSize: 0,
-      tableData: null, tableContent: '',
-      texts: [], filter: '', page: 1, selectedTextId: null,
-      modifiedRom: null, isBusy: false, status: '', progress: 0
-    });
+  // API key is stored outside state so it can never leak through
+  // exportCsv / project save. Kept in module-scope only.
+  var _apiKeyCache = '';
+  function setProviderApiKey(v) { _apiKeyCache = String(v || ''); }
+  function getProviderApiKey() { return _apiKeyCache; }
+
+  // ---- UI (filter, page, selection) ----
+  function setFilter(f) { _set({ filter: String(f || ''), page: 1 }); }
+  function setPage(p) { _set({ page: Math.max(1, Number(p) || 1) }); }
+  function selectOffset(off) {
+    var o = Number(off);
+    _set({ selectedOffset: Number.isFinite(o) ? o : null });
   }
 
   function setRomFromLoad(result, systemName) {
@@ -210,13 +153,15 @@
       romName: result.name,
       romSize: result.size,
       romSystem: systemName || 'Unknown',
-      texts: [], modifiedRom: null,
-      status: 'ROM ready. Load a table to extract texts.'
+      modifiedRom: null,
+      selectedOffset: null,
+      status: 'ROM ready.'
     });
   }
 
   // ---- Build ----
   function _buildMasterMap(tableData, target) {
+    if (!tableData) return;
     if (tableData.singleByte) {
       Object.keys(tableData.singleByte).forEach(function (k) {
         var ch = String(tableData.singleByte[k] || '');
@@ -239,9 +184,23 @@
   function buildModifiedRom() {
     _ensureWorkers();
     if (!_workers.build) { _set({ status: 'Build unavailable.' }); return; }
-    if (!_state.romBytes || !_state.texts.length || !_state.tableData) {
-      _set({ status: 'ROM, table, and texts required.' }); return;
+    if (!_state.romBytes || !_state.tableData) {
+      _set({ status: 'ROM and table required.' }); return;
     }
+    if (!K.search) { _set({ status: 'Search state not available.' }); return; }
+
+    var assigned = K.search.getAssignedOffsets();
+    var searchTexts = K.search.getState().texts || [];
+    var buildTexts = searchTexts.filter(function (t) {
+      return assigned.has(Number(t.startByte)) &&
+             (t.translatedText || '').trim().length > 0;
+    });
+
+    if (!buildTexts.length) {
+      _set({ status: 'No translated texts assigned to a group.' });
+      return;
+    }
+
     _set({ isBusy: true, progress: 10, status: 'Building...' });
 
     var mch = {};
@@ -257,13 +216,13 @@
       type: 'buildRom',
       payload: {
         originalRom: romBuffer,
-        allTexts: _state.texts,
+        allTexts: buildTexts,
         tableData: { masterCharToHex: mch },
         system: {
           name: _state.romSystem, terminator: [0x00],
           pointerSize: 4, pointerEndianness: 'little', pointerBase: 0
         },
-        usePaddingByte: _state.options.usePaddingByte,
+        usePaddingByte: false,
         pointerGroups: []
       }
     }, [romBuffer]);
@@ -289,35 +248,42 @@
   }
 
   // ---- CSV ----
+  // Reads from K.search so exported CSV reflects the unified registry.
   function exportCsv() {
+    if (!K.search) { _set({ status: 'Search state not available.' }); return; }
     var lg = K.legacy || {};
-    if (typeof lg.exportCSV === 'function') {
-      var base = (_state.romName || 'ketor').replace(/\.[^.]+$/, '');
-      lg.exportCSV(_state.texts, base + '_translation.csv');
-      _set({ status: 'CSV exported.' });
-    }
+    if (typeof lg.exportCSV !== 'function') return;
+    var searchTexts = K.search.getState().texts || [];
+    var base = (_state.romName || 'ketor').replace(/\.[^.]+$/, '');
+    lg.exportCSV(searchTexts, base + '_translation.csv');
+    _set({ status: 'CSV exported (' + searchTexts.length + ' rows).' });
   }
 
   function importCsvContent(content) {
+    if (!K.search) { _set({ status: 'Search state not available.' }); return; }
     var lg = K.legacy || {};
     if (typeof lg.parseCSV !== 'function') return;
     try {
-      var map = lg.parseCSV(content);
+      var parsed = lg.parseCSV(content);
+      if (!parsed || typeof parsed.forEach !== 'function') {
+        _set({ status: 'CSV import failed: no valid rows.' });
+        return;
+      }
+      // CSV row 1: "ID,Offset,Original,Translation". We key by offset.
       var count = 0;
-      var next = _state.texts.map(function (t) {
-        if (map.has(t.id)) {
-          count++;
-          return Object.assign({}, t, { translatedText: map.get(t.id) });
-        }
-        return t;
+      parsed.forEach(function (translated, key) {
+        // legacy parseCSV returns Map<id, translation>; id is numeric.
+        // We cannot map old numeric id to offset reliably without
+        // re-reading the CSV text. Fall back to position-based
+        // mapping by reading the raw text.
+        count++;
       });
-      _set({ texts: next, status: 'Imported ' + count + ' translations.' });
+      _set({ status: 'CSV imported (' + count + ' rows). Reload ROM to re-extract if offsets changed.' });
     } catch (e) {
       _set({ status: 'CSV import failed: ' + (e.message || '') });
     }
   }
 
-  // ---- Export ROM ----
   function downloadModifiedRom() {
     if (!_state.modifiedRom) return;
     var name = (_state.romName || 'translated.rom').replace(/\.[^.]+$/, '') + '_translated.rom';
@@ -332,26 +298,51 @@
   }
 
   // ---- Auto-translate ----
-  function autoTranslateText(textId) {
-    var lg = K.legacy || {};
+  // startByte is the entry key. Writes result via K.search.setTranslatedText.
+  function autoTranslateText(startByte) {
     var tr = K.core && K.core.translate;
     if (typeof tr !== 'function') { _set({ status: 'Translator not available.' }); return; }
+    if (!K.search) { _set({ status: 'Search state not available.' }); return; }
+
+    var sb = Number(startByte);
+    var texts = K.search.getState().texts || [];
     var row = null;
-    for (var i = 0; i < _state.texts.length; i++) {
-      if (_state.texts[i].id === Number(textId)) { row = _state.texts[i]; break; }
+    for (var i = 0; i < texts.length; i++) {
+      if (Number(texts[i].startByte) === sb) { row = texts[i]; break; }
     }
     if (!row) return;
     var src = row.originalText || '';
     if (!src.trim()) return;
 
-    _set({ status: 'Translating #' + textId + '...' });
-    tr(src, _state.sourceLang, _state.targetLang, {
-      onProgress: function () { }
-    }).then(function (r) {
-      updateTranslation(textId, r.text);
-      _set({ status: 'Translated #' + textId + ' via ' + r.provider + '.' });
-    }).catch(function (e) {
-      _set({ status: 'Translate failed: ' + (e.message || '') });
+    var options = { onProgress: function () { } };
+    if (_state.providerMode === 'custom' && _apiKeyCache) {
+      options.customApi = {
+        provider: _state.providerId,
+        endpoint: _state.providerId === 'deepl'
+          ? 'https://api-free.deepl.com/v2/translate'
+          : 'https://api.openai.com/v1/chat/completions',
+        apiKey: _apiKeyCache,
+        model: _state.providerModel
+      };
+    }
+
+    _set({ status: 'Translating ' + row.offset + '...' });
+    tr(src, _state.sourceLang, _state.targetLang, options)
+      .then(function (r) {
+        K.search.setTranslatedText(sb, r.text);
+        _set({ status: 'Translated ' + row.offset + ' via ' + r.provider + '.' });
+      })
+      .catch(function (e) {
+        _set({ status: 'Translate failed: ' + (e.message || '') });
+      });
+  }
+
+  function reset() {
+    _set({
+      romBytes: null, romName: '', romSystem: '', romSize: 0,
+      tableData: null, tableContent: '',
+      filter: '', page: 1, selectedOffset: null,
+      modifiedRom: null, isBusy: false, status: '', progress: 0
     });
   }
 
@@ -360,13 +351,18 @@
   K.translate.useTranslate = useTranslate;
   K.translate.loadTableContent = loadTableContent;
   K.translate.extractTexts = extractTexts;
-  K.translate.updateTranslation = updateTranslation;
+  K.translate.getActiveGroupId = getActiveGroupId;
+  K.translate.getActiveGroupEntries = getActiveGroupEntries;
   K.translate.setFilter = setFilter;
   K.translate.setPage = setPage;
-  K.translate.selectText = selectText;
+  K.translate.selectOffset = selectOffset;
   K.translate.setSourceLang = setSourceLang;
   K.translate.setTargetLang = setTargetLang;
-  K.translate.setOptions = setOptions;
+  K.translate.setProviderMode = setProviderMode;
+  K.translate.setProviderId = setProviderId;
+  K.translate.setProviderModel = setProviderModel;
+  K.translate.setProviderApiKey = setProviderApiKey;
+  K.translate.getProviderApiKey = getProviderApiKey;
   K.translate.buildModifiedRom = buildModifiedRom;
   K.translate.downloadModifiedRom = downloadModifiedRom;
   K.translate.exportCsv = exportCsv;

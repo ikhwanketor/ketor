@@ -15,6 +15,14 @@
    sit next to existing action buttons.
    ============================================================ */
 
+/* ============================================================
+   Ketor - Groups Panel (shared component) v3
+   ------------------------------------------------------------
+   Batch 16: groups[].offsets replaces groups[].textIds.
+   Entries are keyed by startByte. Display order for entries
+   inside a group follows group.offsets order.
+   ============================================================ */
+
 (function (global) {
   'use strict';
   var K = global.Ketor = global.Ketor || {};
@@ -88,9 +96,9 @@
 
     var groupTexts = uM(function () {
       var map = {};
-      (texts || []).forEach(function (t) { map[t.id] = t; });
-      return (g.textIds || []).map(function (id) { return map[id]; }).filter(Boolean);
-    }, [g.textIds, texts]);
+      (texts || []).forEach(function (t) { map[t.startByte] = t; });
+      return (g.offsets || []).map(function (off) { return map[off]; }).filter(Boolean);
+    }, [g.offsets, texts]);
 
     var canUp = index > 0;
     var canDown = index < total - 1;
@@ -236,7 +244,7 @@
                     ev.stopPropagation();
                     onSortTexts(g.id);
                   },
-                  title: 'Sort texts in this group by ID',
+                  title: 'Sort by offset',
                   style: {
                     background: 'transparent',
                     border: 'none',
@@ -246,13 +254,13 @@
                     padding: '2px 6px',
                     fontFamily: 'inherit'
                   }
-                }, 'Sort by ID')
+                }, 'Sort by offset')
               ),
               groupTexts.map(function (t, tIdx) {
                 var canTextUp = tIdx > 0;
                 var canTextDown = tIdx < groupTexts.length - 1;
                 return e('div', {
-                  key: 'gt-' + g.id + '-' + t.id,
+                  key: 'gt-' + g.id + '-' + t.startByte,
                   style: {
                     display: 'flex',
                     alignItems: 'flex-start',
@@ -266,11 +274,12 @@
                     style: {
                       fontFamily: 'var(--kt-font-mono)',
                       fontSize: 10,
-                      opacity: 0.5,
+                      opacity: 0.7,
                       flex: '0 0 auto',
-                      minWidth: 40
+                      minWidth: 66,
+                      color: 'var(--kt-info-fg, #75beff)'
                     }
-                  }, '#' + t.id),
+                  }, t.offset || ('0x' + Number(t.startByte).toString(16).toUpperCase())),
                   e('span', {
                     style: {
                       flex: 1,
@@ -287,7 +296,7 @@
                     disabled: !canTextUp,
                     onClick: function (ev) {
                       ev.stopPropagation();
-                      if (canTextUp) onMoveText(g.id, t.id, 'up');
+                      if (canTextUp) onMoveText(g.id, t.startByte, 'up');
                     },
                     style: Object.assign(iconButtonStyle(!canTextUp), {
                       width: 16, height: 16
@@ -299,7 +308,7 @@
                     disabled: !canTextDown,
                     onClick: function (ev) {
                       ev.stopPropagation();
-                      if (canTextDown) onMoveText(g.id, t.id, 'down');
+                      if (canTextDown) onMoveText(g.id, t.startByte, 'down');
                     },
                     style: Object.assign(iconButtonStyle(!canTextDown), {
                       width: 16, height: 16
@@ -310,7 +319,7 @@
                     title: 'Remove from group',
                     onClick: function (ev) {
                       ev.stopPropagation();
-                      onRemoveText(g.id, t.id);
+                      onRemoveText(g.id, t.startByte);
                     },
                     style: Object.assign(iconButtonStyle(false), {
                       width: 16, height: 16

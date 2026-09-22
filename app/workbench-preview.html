@@ -16,14 +16,27 @@
     (function () {
       window.__ktErrorQueue = window.__ktErrorQueue || [];
 
-      function pushError(source, message, detail) {
+      // Dedup within 3s so a burst of the same failure doesn't spam.
+      var _lastPush = {};
+
+      function pushError(source, message, detail, level) {
         try {
+          var lvl = String(level || 'error').toLowerCase();
+          if (lvl !== 'error' && lvl !== 'warning' && lvl !== 'info') lvl = 'error';
+          var msg = String(message || 'Unknown');
+          var src = String(source || 'runtime');
+          var key = lvl + '|' + src + '|' + msg;
+          var now = Date.now();
+          if (_lastPush[key] && (now - _lastPush[key]) < 3000) return;
+          _lastPush[key] = now;
+
           window.__ktErrorQueue.push({
-            id: 'err-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8),
-            source: String(source || 'runtime'),
-            message: String(message || 'Unknown error'),
-            detail: String(detail || ''),
-            timestamp: Date.now()
+            id: 'err-' + now + '-' + Math.random().toString(36).slice(2, 8),
+            source: src,
+            message: msg,
+            detail: String(detail || '').slice(0, 600),
+            level: lvl,
+            timestamp: now
           });
           if (window.__ktErrorQueue.length > 200) {
             window.__ktErrorQueue.splice(0, window.__ktErrorQueue.length - 200);
@@ -50,22 +63,83 @@
         }, 3500);
       }
 
+      // Serialize arbitrary console args into a short readable line.
+      function serializeArgs(args) {
+        var parts = [];
+        for (var i = 0; i < args.length; i++) {
+          var a = args[i];
+          if (a == null) { parts.push(String(a)); continue; }
+          if (typeof a === 'string') { parts.push(a); continue; }
+          if (a instanceof Error) {
+            parts.push(a.message + (a.stack ? ' :: ' + a.stack.split('\n')[1] : ''));
+            continue;
+          }
+          try {
+            var s = JSON.stringify(a);
+            if (s && s.length > 240) s = s.slice(0, 240) + '…';
+            parts.push(s);
+          } catch (_) {
+            parts.push(String(a));
+          }
+        }
+        return parts.join(' ');
+      }
+
+      // Wrap console.error / console.warn / console.info so that
+      // runtime and network failures reach the Problems panel.
+      // Guarded so we only wrap once even if script runs twice.
+      if (!window.__ktConsoleHooked) {
+        window.__ktConsoleHooked = true;
+        var _origError = console.error.bind(console);
+        var _origWarn = console.warn.bind(console);
+        var _origInfo = console.info.bind(console);
+
+        console.error = function () {
+          try {
+            var args = Array.prototype.slice.call(arguments);
+            var msg = serializeArgs(args);
+            var stack = '';
+            for (var i = 0; i < args.length; i++) {
+              if (args[i] instanceof Error && args[i].stack) { stack = args[i].stack; break; }
+            }
+            pushError('console', msg, stack, 'error');
+          } catch (_) { }
+          return _origError.apply(null, arguments);
+        };
+
+        console.warn = function () {
+          try {
+            var msg = serializeArgs(Array.prototype.slice.call(arguments));
+            pushError('console', msg, '', 'warning');
+          } catch (_) { }
+          return _origWarn.apply(null, arguments);
+        };
+
+        console.info = function () {
+          try {
+            var msg = serializeArgs(Array.prototype.slice.call(arguments));
+            pushError('console', msg, '', 'info');
+          } catch (_) { }
+          return _origInfo.apply(null, arguments);
+        };
+      }
+
       window.addEventListener('error', function (ev) {
         var src = (ev.filename || '?') + ':' + (ev.lineno || 0) + ':' + (ev.colno || 0);
         var msg = ev.message || 'Unknown';
         var stack = ev.error && ev.error.stack ? ev.error.stack : '';
-        pushError('js', msg, src + '\n' + stack);
+        pushError('js', msg, src + '\n' + stack, 'error');
       });
 
       window.addEventListener('unhandledrejection', function (ev) {
         var r = ev.reason;
         var msg = (r && r.message) ? r.message : String(r);
         var stack = (r && r.stack) ? r.stack : '';
-        pushError('promise', msg, stack);
+        pushError('promise', msg, stack, 'error');
       });
 
       window.__ktShowError = function (title, detail) {
-        pushError('app', title, detail);
+        pushError('app', title, detail, 'error');
         showToast(title);
       };
     })();
