@@ -66,7 +66,7 @@
         next[k] = patch[k];
       }
     });
-    if (changed) { _state = next; _notify(); }
+    if (changed) { _liveCache = null; _state = next; _notify(); }
   }
 
   function _notify() {
@@ -350,6 +350,183 @@
     });
   }
 
+  // ---- Live data from the owning activity stores -------------------
+  // This sidebar used to render whatever was copied into it when the
+  // ROM loaded, so tables applied later, groups created in Search
+  // Text and session outputs never appeared. Rather than mirroring
+  // those values here and keeping two copies in sync, the sidebar
+  // subscribes to the stores that own them and rebuilds a cached
+  // snapshot whenever any of them notifies. The cache keeps
+  // useSyncExternalStore's getSnapshot referentially stable.
+  var _liveListeners = new Set();
+  var _liveCache = null;
+  var _liveAttached = false;
+
+  function _invalidateLive() {
+    _liveCache = null;
+    _liveListeners.forEach(function (fn) { try { fn(); } catch (_) { } });
+  }
+
+  function _attachLiveSources() {
+    if (_liveAttached) return;
+    _liveAttached = true;
+    ['search', 'table', 'translate', 'workflow'].forEach(function (name) {
+      var mod = K[name];
+      if (!mod || typeof mod.subscribe !== 'function') return;
+      try { mod.subscribe(_invalidateLive); } catch (_) { }
+    });
+  }
+
+  function subscribeLive(fn) {
+    if (typeof fn !== 'function') return function () { };
+    _liveListeners.add(fn);
+    _attachLiveSources();
+    return function () { _liveListeners.delete(fn); };
+  }
+
+  function _searchState() {
+    return (K.search && typeof K.search.getState === 'function') ? K.search.getState() : null;
+  }
+
+  function _tableState() {
+    return (K.table && typeof K.table.getState === 'function') ? K.table.getState() : null;
+  }
+
+  function _translateState() {
+    return (K.translate && typeof K.translate.getState === 'function') ? K.translate.getState() : null;
+  }
+
+  // Tables currently in play: the one applied for this ROM, a compare
+  // table loaded for cross checking, and edits that are not applied yet.
+  function _tableEntries() {
+    var out = [];
+    var s = _searchState();
+    var ts = _tableState();
+    var applied = s && s.tableData;
+
+    if (applied && applied.entryCount) {
+      out.push({
+        id: 'table:applied',
+        name: applied.name || 'table.tbl',
+        meta: applied.entryCount + ' entries',
+        tag: 'applied',
+        activity: 'table'
+      });
+    }
+    if (ts && ts.compareFileName) {
+      out.push({
+        id: 'table:compare',
+        name: ts.compareFileName,
+        meta: 'compare',
+        tag: 'reference',
+        activity: 'table'
+      });
+    }
+    if (ts && !ts.isApplied && ts.editEntries && ts.editEntries.length) {
+      out.push({
+        id: 'table:edits',
+        name: 'Table edits',
+        meta: ts.editEntries.length + ' entries',
+        tag: 'not applied',
+        activity: 'table'
+      });
+    }
+    return out;
+  }
+
+  function _groupEntries() {
+    var s = _searchState();
+    var groups = (s && Array.isArray(s.groups)) ? s.groups : [];
+    var texts = (s && Array.isArray(s.texts)) ? s.texts : [];
+
+    var byOffset = {};
+    texts.forEach(function (t) { byOffset[Number(t.startByte)] = t; });
+
+    return groups.map(function (g) {
+      var offsets = Array.isArray(g.offsets) ? g.offsets : [];
+      var done = 0;
+      offsets.forEach(function (off) {
+        var t = byOffset[Number(off)];
+        if (t && String(t.translatedText || '').trim()) done++;
+      });
+      return {
+        id: g.id,
+        name: g.name,
+        color: g.color,
+        count: offsets.length,
+        done: done,
+        meta: offsets.length + (offsets.length === 1 ? ' text' : ' texts') +
+          (done > 0 ? ' \u00b7 ' + done + ' done' : ''),
+        activity: 'translation'
+      };
+    });
+  }
+
+  // Files this session actually produced, named the same way the
+  // download actions name them.
+  function _fileEntries() {
+    var out = [];
+    var s = _searchState();
+    var ts = _tableState();
+    var tr = _translateState();
+    var applied = s && s.tableData;
+
+    if (_state.romName) {
+      out.push({
+        id: 'file:rom',
+        name: _state.romName,
+        meta: formatBytes(_state.romSize),
+        tag: 'ROM',
+        activity: null
+      });
+    }
+    if (applied && applied.entryCount) {
+      out.push({
+        id: 'file:table',
+        name: applied.name || 'table.tbl',
+        meta: applied.entryCount + ' entries',
+        tag: 'TBL',
+        activity: 'table'
+      });
+    }
+    if (ts && ts.compareFileName) {
+      out.push({
+        id: 'file:compare',
+        name: ts.compareFileName,
+        meta: 'compare',
+        tag: 'TBL',
+        activity: 'table'
+      });
+    }
+    if (tr && tr.modifiedRom) {
+      out.push({
+        id: 'file:build',
+        name: (_state.romName || 'translated.rom').replace(/\.[^.]+$/, '') + '_translated.rom',
+        meta: formatBytes(tr.modifiedRom.length),
+        tag: 'built',
+        activity: 'translation'
+      });
+    }
+    return out;
+  }
+
+  function _buildLiveSnapshot() {
+    return {
+      tables: _tableEntries(),
+      groups: _groupEntries(),
+      files: _fileEntries()
+    };
+  }
+
+  function getLiveSnapshot() {
+    if (!_liveCache) _liveCache = _buildLiveSnapshot();
+    return _liveCache;
+  }
+
+  function useLiveData() {
+    return R.useSyncExternalStore(subscribeLive, getLiveSnapshot, getLiveSnapshot);
+  }
+
   // ---- Navigation event helpers -----------------------------------
   function dispatchNavigateActivity(activityId, source, label) {
     try {
@@ -469,6 +646,7 @@
 
   function ProjectSidebar() {
     var p = useProject();
+    var live = useLiveData();
 
     var onGoTable = uC(function () {
       dispatchNavigateActivity('table', 'project-tree', 'Tables');
@@ -480,6 +658,21 @@
 
     var onGoSearch = uC(function () {
       dispatchNavigateActivity('search', 'project-tree', 'Groups');
+    }, []);
+
+    // Selecting the group first means the Translation tab opens on
+    // the group the user double-clicked instead of whatever was
+    // selected before.
+    var onGoGroup = uC(function (groupId, groupName) {
+      if (K.search && typeof K.search.selectGroup === 'function') {
+        K.search.selectGroup(groupId);
+      }
+      onGoTranslation(groupName);
+    }, [onGoTranslation]);
+
+    var onOpenLive = uC(function (entry) {
+      if (!entry || !entry.activity) return;
+      dispatchNavigateActivity(entry.activity, 'project-tree', entry.name || '');
     }, []);
 
     var onGoHex = uC(function (offset, label) {
@@ -579,15 +772,28 @@
         expanded: p.expanded.tables,
         onToggle: function () { toggleExpanded('tables'); }
       },
-        e(TreeLeaf, {
-          label: p.tables.length === 0 ? 'Load or generate table' : p.tables.length + ' table(s)',
-          icon: 'file-code',
-          meta: p.tables.length === 0 ? 'Open Table' : '',
-          selected: p.selectedNode === 'tables-open',
-          tooltip: 'Double-click opens Table activity',
-          onClick: function () { selectNode('tables-open'); },
-          onDoubleClick: onGoTable
-        })
+        live.tables.length === 0
+          ? e(TreeLeaf, {
+              label: 'Load or generate table',
+              icon: 'file-code',
+              meta: 'Open Table',
+              selected: p.selectedNode === 'tables-open',
+              tooltip: 'Double-click opens Table activity',
+              onClick: function () { selectNode('tables-open'); },
+              onDoubleClick: onGoTable
+            })
+          : live.tables.map(function (t) {
+              return e(TreeLeaf, {
+                key: t.id,
+                label: t.name,
+                icon: 'file-code',
+                meta: t.meta + ' \u00b7 ' + t.tag,
+                selected: p.selectedNode === t.id,
+                tooltip: 'Double-click opens Table activity',
+                onClick: function () { selectNode(t.id); },
+                onDoubleClick: function () { onOpenLive(t); }
+              });
+            })
       ),
 
       e(TreeSection, {
@@ -595,7 +801,7 @@
         expanded: p.expanded.groups,
         onToggle: function () { toggleExpanded('groups'); }
       },
-        p.groups.length === 0
+        live.groups.length === 0
           ? e(TreeLeaf, {
               label: 'No groups yet',
               icon: 'folder',
@@ -605,16 +811,16 @@
               onClick: function () { selectNode('groups-empty'); },
               onDoubleClick: onGoSearch
             })
-          : p.groups.map(function (g) {
+          : live.groups.map(function (g) {
               return e(TreeLeaf, {
                 key: g.id,
                 label: g.name,
                 icon: 'folder',
-                meta: (g.textIds ? g.textIds.length + ' items' : ''),
+                meta: g.meta,
                 selected: p.selectedNode === ('group:' + g.id),
-                tooltip: 'Double-click opens Translation activity',
+                tooltip: 'Double-click opens this group in Translation',
                 onClick: function () { selectNode('group:' + g.id); },
-                onDoubleClick: function () { onGoTranslation(g.name); }
+                onDoubleClick: function () { onGoGroup(g.id, g.name); }
               });
             })
       ),
@@ -624,13 +830,25 @@
         expanded: p.expanded.projectFiles,
         onToggle: function () { toggleExpanded('projectFiles'); }
       },
-        e(TreeLeaf, {
-          label: 'project.ketor',
-          icon: 'file',
-          meta: 'Not saved',
-          selected: p.selectedNode === 'project-file',
-          onClick: function () { selectNode('project-file'); }
-        })
+        live.files.length === 0
+          ? e('div', {
+              style: {
+                padding: '4px 8px 4px 24px', fontSize: 11,
+                color: 'var(--kt-input-placeholder-fg)', opacity: 0.7
+              }
+            }, 'Nothing loaded yet.')
+          : live.files.map(function (f) {
+              return e(TreeLeaf, {
+                key: f.id,
+                label: f.name,
+                icon: 'file',
+                meta: f.meta + ' \u00b7 ' + f.tag,
+                selected: p.selectedNode === f.id,
+                tooltip: f.activity ? 'Double-click opens ' + f.activity : f.name,
+                onClick: function () { selectNode(f.id); },
+                onDoubleClick: function () { onOpenLive(f); }
+              });
+            })
       ),
 
       p.recent.length > 0 ? e(TreeSection, {
@@ -670,6 +888,7 @@
     getState: getState,
     subscribe: subscribe,
     useProject: useProject,
+    useLiveData: useLiveData,
     setRomFromLoad: setRomFromLoad,
     toggleShowAllHeader: toggleShowAllHeader,
     toggleExpanded: toggleExpanded,

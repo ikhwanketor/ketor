@@ -205,6 +205,10 @@
       // Cleared here so a stale profile can never leak into the next
       // ROM; K.workflow pushes the new one right after the event.
       systemProfile: null,
+      // A .tbl belongs to one game, so keeping the previous ROM's
+      // table would silently extract the new ROM with the wrong
+      // character map. Status already tells the user to load one.
+      tableData: null,
       texts: [],
       marked: {},
       groups: [],
