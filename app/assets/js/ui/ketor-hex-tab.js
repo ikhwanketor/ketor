@@ -48,28 +48,32 @@
   // exact for ROMs up to ~12 MB, covering NES through GBA precisely.
   var MAX_VIRTUAL_HEIGHT = 16000000;
 
-  /* Palette.
-     Rule 1: a background is either solid and dark or saturated enough for
-     white text, or a low alpha tint that any theme background shows
-     through. Mid alpha over a light theme is what made the old colours
-     unreadable.
-     Rule 2: one meaning, one treatment. Two meanings never share a
-     treatment, so they stay apart even where their hues are close. */
+  /* Palette, modelled on how ImHex paints a hex grid: every layer owns a
+     saturated background of its own hue, so a byte's meaning is readable at
+     a glance instead of having to be decoded from a shade.
+     Rule 1: each hue is dark enough for white text, or bright enough for
+     near black text, so it stays legible on the dark and on the light
+     workbench theme. Mid alpha over a light theme is what made an earlier
+     version unreadable.
+     Rule 2: one hue per meaning. Sections keep the offset gutter to
+     themselves so they never compete with a byte level layer. */
   var C = {
     cursorBg: 'var(--kt-editor-fg)',
     cursorFg: 'var(--kt-editor-bg)',
     selBg: '#1d4ed8',
     selFg: '#ffffff',
-    changedBg: '#b45309',
+    changedBg: '#a8341a',
     changedFg: '#ffffff',
-    hitBg: 'rgba(255,210,74,0.32)',
+    groupBg: '#1f6b3a',
+    groupFg: '#ffffff',
+    controlBg: '#6b2f8f',
+    controlFg: '#ffffff',
+    hitBg: '#8a6a12',
+    hitFg: '#ffe9a8',
     hitCurrentBg: '#ffd24a',
     hitCurrentFg: '#101418',
-    groupRule: '#2aa889',
-    controlFg: '#b46fbd',
-    controlRule: '#8a4f94',
-    bookmarkBg: 'rgba(255,105,180,0.30)',
-    bookmarkRule: '#ff69b4',
+    bookmarkBg: '#a82f66',
+    bookmarkFg: '#ffffff',
     flashBg: 'var(--kt-editor-fg)',
     flashFg: 'var(--kt-editor-bg)'
   };
@@ -113,7 +117,7 @@
       title: spec.title,
       onMouseDown: function (ev) {
         ev.preventDefault();
-        spec.onDown(spec.offset, ev.shiftKey);
+        spec.onDown(spec.offset, ev.shiftKey, spec.mode);
       },
       onMouseEnter: function (ev) {
         if (ev.buttons & 1) spec.onEnter(spec.offset);
@@ -164,16 +168,22 @@
       var weight = 400;
       var rule = null;
 
-      // Text level signals first, then backgrounds, strongest last.
-      if (inGroup) { fg = 'var(--kt-info-fg, #75beff)'; rule = C.groupRule; }
-      if (hint) { fg = C.controlFg; rule = C.controlRule; }
-      if (props.layers.bookmarks && bookmark) bg = C.bookmarkBg;
-      if (props.layers.searchHits && isHit) bg = C.hitBg;
-      if (props.layers.searchHits && isCurrentHit) { bg = C.hitCurrentBg; fg = C.hitCurrentFg; weight = 700; }
+      // Weakest meaning first, strongest last; the last one to paint wins.
+      if (inGroup) { bg = C.groupBg; fg = C.groupFg; weight = 500; }
+      if (hint) { bg = C.controlBg; fg = C.controlFg; weight = 500; }
+      if (props.layers.bookmarks && bookmark) {
+        bg = C.bookmarkBg;
+        fg = C.bookmarkFg;
+        // The rule keeps the bookmark's own colour visible on top of the
+        // shared bookmark background.
+        rule = bookmark.color;
+      }
+      if (props.layers.searchHits && isHit && !isCurrentHit) { bg = C.hitBg; fg = C.hitFg; }
+      if (props.layers.searchHits && isCurrentHit) { bg = C.hitCurrentBg; fg = C.hitCurrentFg; weight = 700; rule = null; }
       if (props.layers.changed && patched) { bg = C.changedBg; fg = C.changedFg; weight = 700; rule = null; }
       if (inSel) { bg = C.selBg; fg = C.selFg; rule = null; }
       if (isCursor) { bg = C.cursorBg; fg = C.cursorFg; weight = 700; rule = null; }
-      if (isFlash) { bg = C.flashBg; fg = C.flashFg; rule = null; }
+      if (isFlash) { bg = C.flashBg; fg = C.flashFg; weight = 700; rule = null; }
 
       var text = hex2(value);
       if (editing && props.edit.mode === 'hex') {
@@ -198,8 +208,7 @@
         cursor: 'pointer',
         userSelect: 'none'
       };
-      var marker = rule ? { boxShadow: 'inset 0 -2px 0 0 ' + rule }
-        : ((props.layers.bookmarks && bookmark) ? { boxShadow: 'inset 0 -2px 0 0 ' + bookmark.color } : {});
+      var marker = rule ? { boxShadow: 'inset 0 -2px 0 0 ' + rule } : {};
 
       cells.push(byteCell({
         key: 'b' + i,
@@ -278,11 +287,11 @@
 
   function LayerLegend(props) {
     var items = [
-      { key: 'sections', label: 'Sections', bg: 'rgba(86,156,214,0.45)' },
+      { key: 'sections', label: 'Section (gutter)', bg: 'rgba(86,156,214,0.45)' },
       { key: 'changed', label: 'Changed byte', bg: C.changedBg },
-      { key: 'groups', label: 'Group text', bg: 'transparent', rule: C.groupRule },
-      { key: 'controlCodes', label: 'Control code', bg: 'transparent', rule: C.controlRule },
-      { key: 'bookmarks', label: 'Bookmark', bg: C.bookmarkBg, rule: C.bookmarkRule },
+      { key: 'groups', label: 'Group text', bg: C.groupBg },
+      { key: 'controlCodes', label: 'Control code', bg: C.controlBg },
+      { key: 'bookmarks', label: 'Bookmark', bg: C.bookmarkBg },
       { key: 'searchHits', label: 'Search hit', bg: C.hitBg }
     ];
 
@@ -374,9 +383,11 @@
     var edit = editSt[0];
     var setEdit = editSt[1];
 
-    var typingSt = uS('hex');
-    var typingMode = typingSt[0];
-    var setTypingMode = typingSt[1];
+    // Which column the user is working in. Clicking or editing a byte sets
+    // it, so typing does the obvious thing without a mode selector.
+    var columnSt = uS('hex');
+    var activeColumn = columnSt[0];
+    var setActiveColumn = columnSt[1];
 
     var assignSt = uS(false);
     var assignOpen = assignSt[0];
@@ -501,7 +512,8 @@
       setEdit(null);
     }, [edit, totalBytes]);
 
-    var onByteDown = uC(function (offset, shiftKey) {
+    var onByteDown = uC(function (offset, shiftKey, mode) {
+      if (mode === 'ascii' || mode === 'hex') setActiveColumn(mode);
       if (edit) setEdit(null);
       if (shiftKey) {
         K.hex.setSelection(t.cursorOffset, offset);
@@ -521,7 +533,9 @@
 
     var onByteEdit = uC(function (offset, mode) {
       K.hex.setCursor(offset);
-      setEdit({ offset: offset, digits: '', char: '', mode: mode === 'ascii' ? 'ascii' : 'hex' });
+      var m = mode === 'ascii' ? 'ascii' : 'hex';
+      setActiveColumn(m);
+      setEdit({ offset: offset, digits: '', char: '', mode: m });
     }, []);
 
     var writeByte = uC(function (offset, value) {
@@ -608,7 +622,7 @@
 
       if (key.length < 1) return;
 
-      if (typingMode === 'ascii') {
+      if (activeColumn === 'ascii') {
         // ASCII typing writes straight through, like the text pane of a hex editor.
         if (key.length === 1 && key >= ' ' && key <= '~') {
           ev.preventDefault();
@@ -621,7 +635,7 @@
         ev.preventDefault();
         setEdit({ offset: t.cursorOffset, digits: key, char: '', mode: 'hex' });
       }
-    }, [t.romBytes, t.cursorOffset, edit, commitEdit, perRow, totalBytes, typingMode, writeByte]);
+    }, [t.romBytes, t.cursorOffset, edit, commitEdit, perRow, totalBytes, activeColumn, writeByte]);
 
     if (!t.romBytes) {
       return e('div', { className: 'kt-activity-placeholder' },
@@ -707,70 +721,49 @@
         e('div', {
           style: {
             flex: '0 0 auto',
-            display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
-            padding: '6px 10px',
+            display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap',
+            padding: '5px 10px',
             borderBottom: '1px solid var(--kt-widget-border-default)',
-            background: 'var(--kt-sidebar-bg)'
+            background: 'var(--kt-sidebar-bg)',
+            overflowX: 'auto'
           }
         },
           e('button', {
-            type: 'button', className: 'kt-btn small',
+            type: 'button', className: 'kt-btn small icon-only',
             title: 'Undo (Ctrl+Z)',
             onClick: function () { K.hex.undo(); },
             disabled: !(t.undoStack || []).length,
             style: toolbarBtn
-          }, K.ui.icon('undo', { size: 14 }), 'Undo'),
+          }, K.ui.icon('undo', { size: 15 })),
           e('button', {
-            type: 'button', className: 'kt-btn small',
+            type: 'button', className: 'kt-btn small icon-only',
             title: 'Redo (Ctrl+Y)',
             onClick: function () { K.hex.redo(); },
             disabled: !(t.redoStack || []).length,
             style: toolbarBtn
-          }, K.ui.icon('redo', { size: 14 }), 'Redo'),
+          }, K.ui.icon('redo', { size: 15 })),
 
           e('span', { style: { opacity: 0.25 } }, '|'),
 
-          e('label', { style: { display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 } },
-            'Bytes/row',
-            e('select', {
-              className: 'kt-select',
-              value: perRow,
-              onChange: function (ev) { K.hex.setBytesPerRow(parseInt(ev.target.value, 10)); },
-              style: { width: 56, fontSize: 11 }
-            }, [8, 16, 24, 32].map(function (n) {
-              return e('option', { key: 'bpr' + n, value: n }, String(n));
-            }))
-          ),
+          e('select', {
+            className: 'kt-select',
+            value: perRow,
+            title: 'Bytes per row',
+            onChange: function (ev) { K.hex.setBytesPerRow(parseInt(ev.target.value, 10)); },
+            style: { width: 54, fontSize: 11, flex: '0 0 auto' }
+          }, [8, 16, 24, 32].map(function (n) {
+            return e('option', { key: 'bpr' + n, value: n }, n + '/row');
+          })),
 
-          e('label', { style: { display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 } },
-            'View',
-            e('select', {
-              className: 'kt-select',
-              value: t.viewMode,
-              onChange: function (ev) { K.hex.setViewMode(ev.target.value); },
-              style: { width: 96, fontSize: 11 }
-            },
-              e('option', { value: 'hex+ascii' }, 'Hex + ASCII'),
-              e('option', { value: 'hex' }, 'Hex only')
-            )
-          ),
-
-          e('label', {
-            style: { display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 },
-            title: typingMode === 'ascii'
-              ? 'Typing writes ASCII characters at the cursor'
-              : 'Typing a hex digit starts a nibble edit'
+          e('select', {
+            className: 'kt-select',
+            value: t.viewMode,
+            title: 'View mode',
+            onChange: function (ev) { K.hex.setViewMode(ev.target.value); },
+            style: { width: 92, fontSize: 11, flex: '0 0 auto' }
           },
-            'Typing',
-            e('select', {
-              className: 'kt-select',
-              value: typingMode,
-              onChange: function (ev) { setTypingMode(ev.target.value); },
-              style: { width: 72, fontSize: 11 }
-            },
-              e('option', { value: 'hex' }, 'Hex'),
-              e('option', { value: 'ascii' }, 'ASCII')
-            )
+            e('option', { value: 'hex+ascii' }, 'Hex + ASCII'),
+            e('option', { value: 'hex' }, 'Hex only')
           ),
 
           e('button', {
@@ -896,6 +889,10 @@
             '  Bin ' + cursorValue.toString(2).padStart(8, '0') +
             '  ' + (isAsciiPrintable(cursorValue) ? "'" + String.fromCharCode(cursorValue) + "'" : '.')),
           e('span', null, 'Patches: ' + patchCount),
+          e('span', {
+            title: 'Typing follows the column you last clicked: hex digits edit the byte, characters edit the ASCII column',
+            style: { opacity: 0.75 }
+          }, 'Typing ' + (activeColumn === 'ascii' ? 'ASCII' : 'hex')),
           e('span', { style: { flex: 1 } }),
           e('span', { style: { opacity: 0.7 } }, t.romSystem || '')
         )
