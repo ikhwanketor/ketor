@@ -278,13 +278,17 @@
 
     var hasGroups = groups && groups.length > 0;
 
+    var downward = props.direction === 'down';
+
     return e('div', {
       ref: menuRef,
       style: {
         position: 'absolute',
-        bottom: '100%',
+        bottom: downward ? 'auto' : '100%',
+        top: downward ? '100%' : 'auto',
         left: 0,
-        marginBottom: 4,
+        marginBottom: downward ? 0 : 4,
+        marginTop: downward ? 4 : 0,
         minWidth: 220,
         maxHeight: 260,
         overflowY: 'auto',
@@ -753,6 +757,11 @@
       })
     );
   }
+
+  // Shared with the Hex Editor toolbar so both activities offer the
+  // exact same "pick a group / create one" flow.
+  K.ui.AssignMenu = AssignMenu;
+  K.ui.NewGroupModal = NewGroupModal;
 
   K.ui.registerTabProvider('search', SearchTab);
 

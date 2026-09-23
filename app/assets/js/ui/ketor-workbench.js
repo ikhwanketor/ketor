@@ -149,14 +149,10 @@
       placeholderHint: 'Generate, load, and edit .tbl character tables.'
     },
     search: {
-      icon: 'search', title: 'Search Text',
-      placeholderTitle: 'Search Text',
-      placeholderHint: 'Extract texts, search in-game strings, and assign them to groups. Coming in the next batch.'
+      icon: 'search', title: 'Search Text'
     },
     hex: {
-      icon: 'hex', title: 'Hex Editor',
-      placeholderTitle: 'Hex Editor',
-      placeholderHint: 'Byte inspector with sections, pointers, categories, and Monkey-Moore relative search.'
+      icon: 'hex', title: 'Hex Editor'
     },
     translation: {
       icon: 'globe', title: 'Translation',
@@ -619,7 +615,9 @@
             Ketor.search.setRomFromLoad(res, sys);
           }
           window.dispatchEvent(new CustomEvent('ketor:rom-loaded', {
-            detail: { name: res.name, size: res.size, system: sys }
+            // data is the same buffer the state modules were handed
+            // above; Hex Editor keeps its own reference to it.
+            detail: { name: res.name, size: res.size, system: sys, data: res.data }
           }));
           A.setActiveActivity('project');
           A.setSidebarVisible(true);
