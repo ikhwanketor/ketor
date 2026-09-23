@@ -17,6 +17,10 @@
    unknown" and keep every control available, so the UI falls
    back to its pre-Batch-17 behaviour instead of hiding options
    based on a guess.
+
+   The resolved system profile is also handed to Search Text state
+   so the extractor runs with the console's real terminator bytes
+   and pipeline instead of a generic profile.
    ============================================================ */
 
 (function (global) {
@@ -114,7 +118,7 @@
   // Console-recommended extraction defaults are applied as initial
   // values only. K.search.applyExtractionDefaults() skips any key
   // the user has already changed by hand in this session.
-  function _applyExtractionDefaults(uiConfig) {
+  function _applyExtractionDefaults(uiConfig, workflowName) {
     if (!uiConfig) return;
     if (!K.search || typeof K.search.applyExtractionDefaults !== 'function') return;
 
@@ -126,6 +130,15 @@
     // recommendedExtraction: 'strict' enables the extractor strict
     // pass; 'standard' and 'engine-aware' leave it off.
     patch.strictExtractorMode = uiConfig.recommendedExtraction === 'strict';
+
+    // Systems with game specific character tables mostly get noise
+    // out of the ASCII fallback, so it starts off there and is
+    // explicitly switched back on for every other console, otherwise
+    // a value seeded for one ROM would follow the user to the next.
+    // This is a seed, not an override: the checkbox in the sidebar
+    // keeps showing the real value and the user can change it.
+    var asciiOff = (K.workflows && K.workflows.ASCII_FALLBACK_OFF_SYSTEMS) || [];
+    patch.asciiFallback = asciiOff.indexOf(workflowName) === -1;
 
     K.search.applyExtractionDefaults(patch);
   }
@@ -162,7 +175,14 @@
       ready: !!wf
     });
 
-    _applyExtractionDefaults(uiConfig);
+    // The extractor needs the real profile: system.terminator decides
+    // where a string ends (0x50 on GB/GBC, 0xFF on GBA, 0xFC on PCE,
+    // three bytes on NDS) and pipelineId turns on the retro filter.
+    if (K.search && typeof K.search.setSystemProfile === 'function') {
+      K.search.setSystemProfile(systemProfile);
+    }
+
+    _applyExtractionDefaults(uiConfig, wf ? wf.name : '');
   }
 
   global.addEventListener('ketor:rom-loaded', onRomLoaded);

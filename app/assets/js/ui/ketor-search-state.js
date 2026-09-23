@@ -51,6 +51,18 @@
    in this session are never overwritten by a console default.
    ============================================================ */
 
+/* ============================================================
+   Ketor - Search Text State (v5)
+   ------------------------------------------------------------
+   Batch 17b: the extractor now runs with the console's real
+   system profile and pipeline. Previously every ROM was
+   extracted with a generic profile, which meant the terminator
+   set was always {0x00} (wrong for GB/GBC 0x50, GBA 0xFF,
+   PCE 0xFC, NDS 0x00/0xFF/0xFE) and the retro quality filter
+   never engaged for NES/SNES/GB/GBC/PCE. The profile is pushed
+   by K.workflow right after ketor:rom-loaded.
+   ============================================================ */
+
 (function (global) {
   'use strict';
   var K = global.Ketor = global.Ketor || {};
@@ -67,6 +79,7 @@
   var _state = {
     romBytes: null, romName: '', romSystem: '', romSize: 0,
     tableData: null,
+    systemProfile: null,
     extractionOptions: {
       minLength: 3,
       maxLength: 1024,
@@ -189,6 +202,9 @@
       romName: result.name || '',
       romSystem: systemName || 'Unknown',
       romSize: result.size || 0,
+      // Cleared here so a stale profile can never leak into the next
+      // ROM; K.workflow pushes the new one right after the event.
+      systemProfile: null,
       texts: [],
       marked: {},
       groups: [],
@@ -200,6 +216,11 @@
       listScrollTop: 0,
       status: 'ROM ready. Load a table to extract texts.'
     });
+  }
+
+  function setSystemProfile(profile) {
+    if (!profile || typeof profile !== 'object') { _set({ systemProfile: null }); return; }
+    _set({ systemProfile: profile });
   }
 
   function setTableData(tableData) {
@@ -707,6 +728,21 @@
     var romBuffer = rb.buffer.slice(rb.byteOffset, rb.byteOffset + rb.byteLength);
     var opts = _state.extractionOptions || {};
 
+    // The extractor reads system.terminator to decide where a string
+    // ends and systemPipeline to enable the retro quality filter, so
+    // both have to come from the workflow that matched this ROM.
+    var profile = _state.systemProfile;
+    var system = {
+      name: (profile && profile.name) || _state.romSystem || 'Unknown',
+      terminator: (profile && Array.isArray(profile.terminator) && profile.terminator.length)
+        ? profile.terminator.slice()
+        : [0x00],
+      pointerSize: (profile && Number(profile.pointerSize)) || 4,
+      pointerEndianness: (profile && profile.pointerEndianness) || 'little',
+      pointerBase: (profile && Number(profile.pointerBase)) || 0
+    };
+    var systemPipeline = (profile && profile.pipelineId) || 'pipeline_generic';
+
     worker.postMessage({
       romBuffer: romBuffer,
       tableData: {
@@ -724,14 +760,8 @@
         decompressionMode: 'auto',
         includeCompressedReadOnly: opts.includeCompressedReadOnly === true,
         strictExtractorMode: opts.strictExtractorMode === true,
-        system: {
-          name: _state.romSystem || 'Unknown',
-          terminator: [0x00],
-          pointerSize: 4,
-          pointerEndianness: 'little',
-          pointerBase: 0
-        },
-        systemPipeline: 'pipeline_generic'
+        system: system,
+        systemPipeline: systemPipeline
       }
     }, [romBuffer]);
   }
@@ -741,7 +771,7 @@
   function reset() {
     _set({
       romBytes: null, romName: '', romSystem: '', romSize: 0,
-      tableData: null,
+      tableData: null, systemProfile: null,
       texts: [], isExtracting: false, progress: 0,
       marked: {}, groups: [], selectedGroupId: null,
       expandedGroups: {}, page: 1, listScrollTop: 0,
@@ -756,6 +786,7 @@
   K.search.useSearch = useSearch;
   K.search.setRomFromLoad = setRomFromLoad;
   K.search.setTableData = setTableData;
+  K.search.setSystemProfile = setSystemProfile;
   K.search.setExtractionOptions = setExtractionOptions;
   K.search.applyExtractionDefaults = applyExtractionDefaults;
   K.search.setFilter = setFilter;

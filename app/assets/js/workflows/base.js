@@ -138,6 +138,16 @@
     return overflow;
   };
 
+  /**
+   * Systems whose text lives in a game specific character table
+   * instead of ASCII. The extractor falls back to plain ASCII runs
+   * when its table lookup finds nothing, which on these systems
+   * mostly adds noise, so their extraction defaults turn it off.
+   * Mirrors the strictTableSystems guard used by the production
+   * entry point (app-ui.js). The user can still switch it back on.
+   */
+  Ketor.workflows.ASCII_FALLBACK_OFF_SYSTEMS = ['NES', 'SNES', 'Game Boy', 'GBC'];
+
   Ketor.workflows.BaseWorkflow = BaseWorkflow;
 
 })(window);

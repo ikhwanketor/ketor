@@ -70,12 +70,12 @@
   GenesisWorkflow.prototype.getUIConfig = function () {
     return {
       showPaddingByte: false,
-      showStrictMode: false,
+      showStrictMode: true,
       showCompression: false,
       showDecompression: false,
       defaultMinLength: 3,
       defaultMaxLength: 900,
-      recommendedExtraction: 'standard',
+      recommendedExtraction: 'strict',
       extractionLabel: 'Extract Genesis Texts',
       showFontEditor: true,
       fontInfo: {

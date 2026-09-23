@@ -2269,7 +2269,7 @@
               } = options;
               const PADDING_BYTE = 0x00;
               const useAsciiFallback = !!asciiFallback;
-              const isRetroPipeline = systemPipeline === 'pipeline_nes' || systemPipeline === 'pipeline_snes' || systemPipeline === 'pipeline_gb' || systemPipeline === 'pipeline_gbc';
+              const isRetroPipeline = systemPipeline === 'pipeline_nes' || systemPipeline === 'pipeline_snes' || systemPipeline === 'pipeline_gb' || systemPipeline === 'pipeline_gbc' || systemPipeline === 'pipeline_pce';
               const effectiveMinLength = isRetroPipeline ? Math.max(3, minLength || 0) : minLength;
               const strictMode = !!strictExtractorMode;
               const strictSceneProfileMode = String(strictSceneProfile || 'default').toLowerCase();

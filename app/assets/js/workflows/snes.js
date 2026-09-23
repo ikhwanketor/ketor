@@ -91,12 +91,12 @@
   SNESWorkflow.prototype.getUIConfig = function () {
     return {
       showPaddingByte: false,
-      showStrictMode: false,
+      showStrictMode: true,
       showCompression: true,
       showDecompression: true,
       defaultMinLength: 3,
       defaultMaxLength: 768,
-      recommendedExtraction: 'standard',
+      recommendedExtraction: 'strict',
       extractionLabel: 'Extract SNES Texts',
       showFontEditor: true,
       fontInfo: {
