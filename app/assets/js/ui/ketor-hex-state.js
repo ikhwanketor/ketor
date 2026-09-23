@@ -612,20 +612,44 @@
     return decodeRange(range.start, range.end).text;
   }
 
-  // Marks the selected range as one manual entry and hands it to the
-  // existing group assignment, so "one text lives in one group" keeps
-  // being enforced in a single place.
+  // Selection to group. The registry is the single source of text rows, so
+  // when the selection already sits on extracted text this groups those
+  // entries instead of writing a second, overlapping row: that duplicate
+  // (with its own copy of the control codes) is what made the Search Text
+  // list disagree with what the Hex Editor showed. A manual entry is only
+  // created for bytes no existing entry describes.
+  function selectionTexts() {
+    var range = selectionRange();
+    if (!range || !K.search || typeof K.search.getTextsInRange !== 'function') return [];
+    return K.search.getTextsInRange(range.start, range.end);
+  }
+
   function addSelectionToGroup(groupId) {
     var range = selectionRange();
     if (!range) { _set({ status: 'Select a byte range first.' }); return null; }
-    if (!activeTable()) {
-      _set({ status: 'Load a table first: a byte range is decoded through the active table.' });
-      return null;
-    }
     if (!K.search || typeof K.search.addManualEntry !== 'function') {
       _set({ status: 'Search Text state is not available.' });
       return null;
     }
+
+    var existing = selectionTexts();
+    if (existing.length) {
+      var offsets = existing.map(function (t) { return Number(t.startByte); });
+      K.search.markAll(offsets);
+      if (groupId) K.search.assignMarkedToGroup(groupId);
+      _set({
+        status: 'Selection covers ' + existing.length + ' existing text(s) (' +
+          offsets.map(function (o) { return _hex(o); }).join(', ') +
+          '). Grouped those instead of adding a duplicate entry.'
+      });
+      return offsets[0];
+    }
+
+    if (!activeTable()) {
+      _set({ status: 'Load a table first: a byte range is decoded through the active table.' });
+      return null;
+    }
+
     var decoded = decodeRange(range.start, range.end);
     var startByte = K.search.addManualEntry({
       startByte: range.start,
@@ -640,8 +664,8 @@
     K.search.markAll([startByte]);
     K.search.assignMarkedToGroup(groupId);
     _set({
-      status: 'Added ' + _hex(startByte) + ' (' + decoded.total + ' byte(s), ' +
-        decoded.mapped + ' mapped) to a group.'
+      status: 'New entry at ' + _hex(startByte) + ' (' + decoded.total + ' byte(s), ' +
+        decoded.mapped + ' mapped) added to a group.'
     });
     return startByte;
   }
@@ -820,6 +844,7 @@
   K.hex.activeTable = activeTable;
   K.hex.decodeRange = decodeRange;
   K.hex.addSelectionToGroup = addSelectionToGroup;
+  K.hex.selectionTexts = selectionTexts;
   K.hex.setSearchMode = setSearchMode;
   K.hex.setSearchQuery = setSearchQuery;
   K.hex.runSearch = runSearch;

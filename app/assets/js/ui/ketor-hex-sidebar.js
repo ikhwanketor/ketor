@@ -1,8 +1,10 @@
 /* ============================================================
    Ketor - Hex Editor Sidebar (v1)
    ------------------------------------------------------------
-   Batch 18: ROM readout, goto, byte/text search, bookmarks and
-   the console help text.
+   Batch 18: ROM readout, goto, byte/text search and bookmarks.
+   Console help lives in the Search Text sidebar, and the group
+   manager and section legend live in the editor's right column,
+   so nothing is duplicated here.
 
    The group manager and the section legend live in the editor's
    right column, not here, so there is exactly one place to manage
@@ -70,7 +72,6 @@
 
   function HexSidebar() {
     var t = K.hex.useHex();
-    var wf = K.workflow ? K.workflow.useWorkflowConfig() : null;
 
     var gotoSt = uS('');
     var gotoValue = gotoSt[0];
@@ -362,15 +363,6 @@
           onClick: function () { K.hex.clearBookmarks(); }
         }, 'Clear Bookmarks') : null
       ),
-
-      wf && wf.helpText ? e(Section, { title: 'Help' },
-        e('div', {
-          style: {
-            fontSize: 11, lineHeight: 1.55,
-            color: 'var(--kt-sidebar-fg)', opacity: 0.9
-          }
-        }, wf.helpText)
-      ) : null,
 
       t.status ? e('div', {
         style: {

@@ -768,6 +768,90 @@
       if (!isCompact && kebabOpen) setKebabOpen(false);
     }, [isCompact, kebabOpen]);
 
+    // ---- Live activity feed -----------------------------------------
+    // The Log tab only ever saw the handful of events logged by hand, so it
+    // looked frozen while work continued in other activities. Watch the
+    // stores that describe the project and write one line per real change.
+    useEffect(function () {
+      var last = null;
+
+      function snapshot() {
+        var s = Ketor.search ? Ketor.search.getState() : null;
+        var x = Ketor.hex ? Ketor.hex.getState() : null;
+        var tr = Ketor.translate ? Ketor.translate.getState() : null;
+        var tb = Ketor.table ? Ketor.table.getState() : null;
+        var texts = (s && Array.isArray(s.texts)) ? s.texts : [];
+        var groups = (s && Array.isArray(s.groups)) ? s.groups : [];
+        var assigned = 0;
+        groups.forEach(function (g) { assigned += (g.offsets || []).length; });
+        return {
+          rom: s ? String(s.romName || '') : '',
+          table: (s && s.tableData) ? (String(s.tableData.name || 'table') + '|' + (s.tableData.entryCount || 0)) : '',
+          compare: tb ? String(tb.compareFileName || '') : '',
+          texts: texts.length,
+          groups: groups.length,
+          assigned: assigned,
+          translated: texts.filter(function (t) {
+            return t.translatedText && String(t.translatedText).trim();
+          }).length,
+          patches: x ? Object.keys(x.patches || {}).length : 0,
+          build: (tr && tr.modifiedRom) ? tr.modifiedRom.length : 0
+        };
+      }
+
+      function report(prev, now) {
+        var A = actionsRef.current;
+        if (now.rom !== prev.rom) {
+          A.appendLog('info', now.rom ? 'Project ROM: ' + now.rom : 'ROM cleared', 'session');
+        }
+        if (now.table !== prev.table && now.table) {
+          var parts = now.table.split('|');
+          A.appendLog('success', 'Table ready: ' + parts[0] + ' (' + parts[1] + ' entries)', 'session');
+        }
+        if (now.compare !== prev.compare && now.compare) {
+          A.appendLog('info', 'Compare table loaded: ' + now.compare, 'session');
+        }
+        if (now.texts !== prev.texts) {
+          A.appendLog('info', 'Extracted texts: ' + now.texts + ' (' + (now.texts - prev.texts >= 0 ? '+' : '') +
+            (now.texts - prev.texts) + ')', 'session');
+        }
+        if (now.groups !== prev.groups) {
+          A.appendLog('info', 'Groups: ' + now.groups + ' · texts assigned: ' + now.assigned, 'session');
+        } else if (now.assigned !== prev.assigned) {
+          A.appendLog('info', 'Texts assigned to groups: ' + now.assigned, 'session');
+        }
+        if (now.translated !== prev.translated) {
+          A.appendLog('success', 'Translation progress: ' + now.translated + '/' + now.texts +
+            (now.texts ? ' (' + Math.round((now.translated / now.texts) * 100) + '%)' : ''), 'session');
+        }
+        if (now.patches !== prev.patches) {
+          A.appendLog('info', 'Hex patches: ' + now.patches, 'session');
+        }
+        if (now.build !== prev.build && now.build) {
+          A.appendLog('success', 'Modified ROM built: ' + Ketor.core.formatSize(now.build), 'session');
+        }
+      }
+
+      function tick() {
+        var now = snapshot();
+        if (last) {
+          try { report(last, now); } catch (_) { }
+        }
+        last = now;
+      }
+
+      var unsubs = [];
+      [Ketor.search, Ketor.hex, Ketor.translate, Ketor.table].forEach(function (store) {
+        if (store && typeof store.subscribe === 'function') {
+          try { unsubs.push(store.subscribe(tick)); } catch (_) { }
+        }
+      });
+      last = snapshot();
+      return function () {
+        unsubs.forEach(function (u) { try { u(); } catch (_) { } });
+      };
+    }, []);
+
     // ---- Drain runtime error queue into Problems panel ----
     useEffect(function () {
       function drain() {

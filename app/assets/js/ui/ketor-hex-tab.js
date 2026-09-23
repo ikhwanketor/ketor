@@ -1,25 +1,24 @@
 /* ============================================================
-   Ketor - Hex Editor Tab (v2)
+   Ketor - Hex Editor Tab (v3)
    ------------------------------------------------------------
-   Batch 18b: fixes and polish after testing against a real
-   8 MB GBA ROM.
+   Batch 18c, after testing against a real 8 MB GBA ROM.
 
-   - Clicking a byte used to move the cursor to the last byte of
-     the row: the cell handlers closed over a single var declared
-     inside the loop. Cells are now built through a factory so
-     every handler owns its offset. Regression covered by test.
-   - The grid is colour coded: each section gets its own accent
-     used for the row band and the legend, changed bytes, group
-     ranges, control codes, bookmarks and search hits each have
-     a distinct treatment, and the legend explains all of them.
-   - Mouse navigation: press and drag selects a range live,
-     shift+click extends, double click starts an edit. Keyboard
-     navigation is unchanged.
-   - Bookmarks and search hits are now visible in the grid, and
-     the bytes-per-row, view mode, clear search, clear patches and
-     bookmark rename controls are all reachable.
-   - The group manager moved out of the sidebar into its own
-     column on the right, matching the Search Text activity.
+   - Selection to group now reuses the registry (see
+     ketor-hex-state.js): bytes an extracted entry already
+     describes are grouped, never duplicated into a second row.
+   - Colours were rebuilt so every meaning has its own treatment
+     rather than its own shade of the same background: sections
+     moved to the offset gutter, changed bytes and the selection
+     are solid, the cursor is inverted, group ranges and control
+     codes are underlines, bookmarks are a tint plus a rule, and
+     search hits are the only yellow. Every pair was checked on a
+     dark and on a light workbench theme, because the light theme
+     selection token is a pale blue that white text cannot sit on.
+   - The ASCII column is editable: double click it and type the
+     character, or switch the toolbar to ASCII typing and type
+     straight into the grid. Double clicking a hex cell still
+     edits nibbles.
+   - Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z undo and redo.
    ============================================================ */
 
 (function (global) {
@@ -37,39 +36,42 @@
 
   var ROW_HEIGHT = 21;
   var OVERSCAN = 4;
-  // Browsers cap how tall an element may be: Chrome allows about 33.5M px,
-  // Firefox about 17.9M px. Below the cap every row keeps its exact pixel
-  // position, which is what makes one wheel notch feel like one wheel notch.
-  // Above it the scroll position is mapped proportionally to a row, so the
-  // grid still works for the large NDS and Switch images. 16M px sits under
-  // the smallest of the two limits and stays exact for ROMs up to ~12 MB,
-  // which covers NES through GBA without any loss of precision.
-  var MAX_VIRTUAL_HEIGHT = 16000000;
   var HEX_DIGITS = '0123456789abcdefABCDEF';
   var GUTTER = 82;
   var CELL = 22;
   var ASCII_CELL = 10;
+  // Browsers cap how tall an element may be: Chrome about 33.5M px, Firefox
+  // about 17.9M px. Below the cap every row keeps its exact pixel position,
+  // which is what makes one wheel notch feel like one wheel notch. Above it
+  // the scroll position maps proportionally to a row so the big NDS and
+  // Switch images still work. 16M px sits under the smaller limit and stays
+  // exact for ROMs up to ~12 MB, covering NES through GBA precisely.
+  var MAX_VIRTUAL_HEIGHT = 16000000;
 
-  /* Palette. Accents are mid tone so they stay readable on both the
-     dark and the light workbench themes, and every meaning has exactly
-     one colour so the legend never lies. */
+  /* Palette.
+     Rule 1: a background is either solid and dark or saturated enough for
+     white text, or a low alpha tint that any theme background shows
+     through. Mid alpha over a light theme is what made the old colours
+     unreadable.
+     Rule 2: one meaning, one treatment. Two meanings never share a
+     treatment, so they stay apart even where their hues are close. */
   var C = {
-    cursorBg: 'var(--kt-focus-border, #007fd4)',
-    cursorFg: '#ffffff',
-    selBg: 'var(--kt-editor-selection, #264f78)',
-    selFg: 'var(--kt-list-active-selection-fg, #ffffff)',
-    changedBg: 'rgba(229,166,99,0.26)',
-    changedFg: 'var(--kt-warning-fg, #cca700)',
-    groupBg: 'rgba(86,156,214,0.20)',
-    groupFg: 'var(--kt-info-fg, #75beff)',
-    controlBg: 'rgba(197,134,192,0.20)',
-    controlFg: '#c586c0',
-    bookmarkBg: 'rgba(78,201,176,0.18)',
-    hitBg: 'rgba(255,214,102,0.20)',
-    hitCurrentBg: 'rgba(255,214,102,0.50)',
-    hitFg: 'var(--kt-editor-fg)',
-    flashBg: 'rgba(255,255,255,0.55)',
-    flashFg: '#101418'
+    cursorBg: 'var(--kt-editor-fg)',
+    cursorFg: 'var(--kt-editor-bg)',
+    selBg: '#1d4ed8',
+    selFg: '#ffffff',
+    changedBg: '#b45309',
+    changedFg: '#ffffff',
+    hitBg: 'rgba(255,210,74,0.32)',
+    hitCurrentBg: '#ffd24a',
+    hitCurrentFg: '#101418',
+    groupRule: '#2aa889',
+    controlFg: '#b46fbd',
+    controlRule: '#8a4f94',
+    bookmarkBg: 'rgba(255,105,180,0.30)',
+    bookmarkRule: '#ff69b4',
+    flashBg: 'var(--kt-editor-fg)',
+    flashFg: 'var(--kt-editor-bg)'
   };
 
   function hex2(v) { return (Number(v) & 0xFF).toString(16).toUpperCase().padStart(2, '0'); }
@@ -83,7 +85,6 @@
     return 'rgba(' + ((n >> 16) & 0xFF) + ',' + ((n >> 8) & 0xFF) + ',' + (n & 0xFF) + ',' + alpha + ')';
   }
 
-  // Ranges are sorted by start; find whether an offset falls inside one.
   function inRanges(ranges, offset) {
     if (!ranges || !ranges.length) return null;
     var lo = 0, hi = ranges.length - 1, found = -1;
@@ -102,8 +103,10 @@
     return list.slice().sort(function (a, b) { return a.start - b.start; });
   }
 
-  /* Cell factory. Every handler closes over its own arguments instead of
-     a loop variable, which is what broke click targeting before. */
+  /* Cell factory. Every handler reads its offset and mode from the spec
+     object, which is built fresh per byte, so no handler can close over a
+     loop variable. That was the bug that made every click land on the last
+     byte of the row. */
   function byteCell(spec) {
     return e('span', {
       key: spec.key,
@@ -115,7 +118,7 @@
       onMouseEnter: function (ev) {
         if (ev.buttons & 1) spec.onEnter(spec.offset);
       },
-      onDoubleClick: function () { spec.onEdit(spec.offset); },
+      onDoubleClick: function () { spec.onEdit(spec.offset, spec.mode); },
       style: spec.style
     }, spec.text);
   }
@@ -159,20 +162,23 @@
       var bg = 'transparent';
       var fg = 'var(--kt-editor-fg)';
       var weight = 400;
+      var rule = null;
 
-      if (props.layers.sections && section) bg = tint(section.color, 0.07);
+      // Text level signals first, then backgrounds, strongest last.
+      if (inGroup) { fg = 'var(--kt-info-fg, #75beff)'; rule = C.groupRule; }
+      if (hint) { fg = C.controlFg; rule = C.controlRule; }
       if (props.layers.bookmarks && bookmark) bg = C.bookmarkBg;
-      if (inGroup) { bg = C.groupBg; fg = C.groupFg; }
-      if (hint) { bg = C.controlBg; fg = C.controlFg; }
       if (props.layers.searchHits && isHit) bg = C.hitBg;
-      if (props.layers.searchHits && isCurrentHit) bg = C.hitCurrentBg;
-      if (props.layers.changed && patched) { bg = C.changedBg; fg = C.changedFg; weight = 700; }
-      if (inSel) { bg = C.selBg; fg = C.selFg; }
-      if (isCursor) { bg = C.cursorBg; fg = C.cursorFg; weight = 700; }
-      if (isFlash) { bg = C.flashBg; fg = C.flashFg; }
+      if (props.layers.searchHits && isCurrentHit) { bg = C.hitCurrentBg; fg = C.hitCurrentFg; weight = 700; }
+      if (props.layers.changed && patched) { bg = C.changedBg; fg = C.changedFg; weight = 700; rule = null; }
+      if (inSel) { bg = C.selBg; fg = C.selFg; rule = null; }
+      if (isCursor) { bg = C.cursorBg; fg = C.cursorFg; weight = 700; rule = null; }
+      if (isFlash) { bg = C.flashBg; fg = C.flashFg; rule = null; }
 
       var text = hex2(value);
-      if (editing) text = props.edit.digits.length ? props.edit.digits + '_' : '__';
+      if (editing && props.edit.mode === 'hex') {
+        text = props.edit.digits.length ? props.edit.digits + '_' : '__';
+      }
 
       var title = '0x' + hex8(off) + '   dec ' + value + '   bin ' + value.toString(2).padStart(8, '0') +
         (isAsciiPrintable(value) ? "   '" + String.fromCharCode(value) + "'" : '') +
@@ -182,48 +188,44 @@
         (hint ? '\n' + hint : '') +
         (section ? '\n' + section.label : '');
 
+      var baseStyle = {
+        display: 'inline-block',
+        textAlign: 'center',
+        background: bg,
+        color: fg,
+        fontWeight: weight,
+        fontFamily: 'var(--kt-font-mono)',
+        cursor: 'pointer',
+        userSelect: 'none'
+      };
+      var marker = rule ? { boxShadow: 'inset 0 -2px 0 0 ' + rule }
+        : ((props.layers.bookmarks && bookmark) ? { boxShadow: 'inset 0 -2px 0 0 ' + bookmark.color } : {});
+
       cells.push(byteCell({
         key: 'b' + i,
         offset: off,
+        mode: 'hex',
         text: text,
         title: title,
         onDown: props.onByteDown,
         onEnter: props.onByteEnter,
         onEdit: props.onByteEdit,
-        style: {
-          display: 'inline-block',
-          width: CELL,
-          textAlign: 'center',
-          background: bg,
-          color: fg,
-          fontWeight: weight,
-          fontFamily: 'var(--kt-font-mono)',
-          borderBottom: (props.layers.bookmarks && bookmark) ? ('2px solid ' + bookmark.color) : '2px solid transparent',
-          cursor: 'pointer',
-          userSelect: 'none'
-        }
+        style: Object.assign({ width: CELL }, baseStyle, marker)
       }));
 
       if (showAscii) {
+        var asciiText = isAsciiPrintable(value) ? String.fromCharCode(value) : '.';
+        if (editing && props.edit.mode === 'ascii') asciiText = props.edit.char || '_';
         asciiCells.push(byteCell({
           key: 'a' + i,
           offset: off,
-          text: isAsciiPrintable(value) ? String.fromCharCode(value) : '.',
-          title: title,
+          mode: 'ascii',
+          text: asciiText,
+          title: title + '\ndouble-click to edit this character',
           onDown: props.onByteDown,
           onEnter: props.onByteEnter,
           onEdit: props.onByteEdit,
-          style: {
-            display: 'inline-block',
-            width: ASCII_CELL,
-            textAlign: 'center',
-            background: bg,
-            color: fg,
-            fontWeight: weight,
-            fontFamily: 'var(--kt-font-mono)',
-            cursor: 'pointer',
-            userSelect: 'none'
-          }
+          style: Object.assign({ width: ASCII_CELL }, baseStyle, marker)
         }));
       }
     }
@@ -238,7 +240,6 @@
         lineHeight: ROW_HEIGHT + 'px',
         whiteSpace: 'pre',
         fontSize: 12,
-        borderLeft: section ? ('3px solid ' + section.color) : '3px solid transparent',
         paddingLeft: 6
       }
     },
@@ -246,10 +247,17 @@
         style: {
           display: 'inline-block',
           width: GUTTER - 9,
-          color: 'var(--kt-input-placeholder-fg)',
+          paddingLeft: 4,
+          boxSizing: 'border-box',
+          color: 'var(--kt-editor-fg)',
           fontFamily: 'var(--kt-font-mono)',
-          userSelect: 'none'
-        }
+          userSelect: 'none',
+          // The section lives in the gutter so the byte cells stay free for
+          // the layers the user is actually working with.
+          background: section ? tint(section.color, props.rowTint) : 'transparent',
+          borderLeft: section ? ('3px solid ' + section.color) : '3px solid transparent'
+        },
+        title: section ? section.label : ''
       }, hex8(base)),
       cells,
       showAscii ? e('span', { style: { display: 'inline-block', width: 12 } }, ' ') : null,
@@ -263,19 +271,19 @@
         width: 12, height: 12, borderRadius: 2, flex: '0 0 auto',
         background: props.bg,
         border: '1px solid var(--kt-widget-border-default)',
-        borderBottom: props.border || undefined
+        boxShadow: props.rule ? ('inset 0 -3px 0 0 ' + props.rule) : undefined
       }
     });
   }
 
   function LayerLegend(props) {
     var items = [
-      { key: 'sections', label: 'Sections', bg: 'rgba(86,156,214,0.35)' },
-      { key: 'changed', label: 'Changed byte', bg: C.changedBg, border: '2px solid ' + C.changedFg },
-      { key: 'groups', label: 'Group text', bg: C.groupBg, border: '2px solid ' + C.groupFg },
-      { key: 'controlCodes', label: 'Control code', bg: C.controlBg, border: '2px solid ' + C.controlFg },
-      { key: 'bookmarks', label: 'Bookmark', bg: C.bookmarkBg, border: '2px solid #4ec9b0' },
-      { key: 'searchHits', label: 'Search hit', bg: C.hitBg, border: '2px solid rgba(255,214,102,0.9)' }
+      { key: 'sections', label: 'Sections', bg: 'rgba(86,156,214,0.45)' },
+      { key: 'changed', label: 'Changed byte', bg: C.changedBg },
+      { key: 'groups', label: 'Group text', bg: 'transparent', rule: C.groupRule },
+      { key: 'controlCodes', label: 'Control code', bg: 'transparent', rule: C.controlRule },
+      { key: 'bookmarks', label: 'Bookmark', bg: C.bookmarkBg, rule: C.bookmarkRule },
+      { key: 'searchHits', label: 'Search hit', bg: C.hitBg }
     ];
 
     return e('div', null,
@@ -293,7 +301,7 @@
               checked: props.layers[it.key] === true,
               onChange: function () { props.onToggle(it.key); }
             }),
-            e(LegendSwatch, { bg: it.bg, border: it.border }),
+            e(LegendSwatch, { bg: it.bg, rule: it.rule }),
             e('span', null, it.label)
           );
         }),
@@ -303,8 +311,12 @@
           e('span', { style: { opacity: 0.8 } }, 'Selection')
         ),
         e('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, padding: '1px 0' } },
-          e(LegendSwatch, { bg: C.cursorBg }),
+          e(LegendSwatch, { bg: 'var(--kt-editor-fg)' }),
           e('span', { style: { opacity: 0.8 } }, 'Cursor')
+        ),
+        e('div', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, padding: '1px 0' } },
+          e(LegendSwatch, { bg: C.hitCurrentBg }),
+          e('span', { style: { opacity: 0.8 } }, 'Current hit')
         )
       ),
 
@@ -329,7 +341,7 @@
                 background: active ? tint(sec.color, 0.22) : 'transparent'
               }
             },
-              e(LegendSwatch, { bg: tint(sec.color, 0.75) }),
+              e(LegendSwatch, { bg: tint(sec.color, 0.55) }),
               e('span', {
                 style: {
                   flex: 1, minWidth: 0, overflow: 'hidden',
@@ -362,6 +374,10 @@
     var edit = editSt[0];
     var setEdit = editSt[1];
 
+    var typingSt = uS('hex');
+    var typingMode = typingSt[0];
+    var setTypingMode = typingSt[1];
+
     var assignSt = uS(false);
     var assignOpen = assignSt[0];
     var setAssignOpen = assignSt[1];
@@ -384,7 +400,6 @@
     var proportional = virtualHeight < fullHeight;
     var visibleRows = Math.max(1, Math.ceil((view.height || 400) / ROW_HEIGHT));
 
-    // Scroll position for a byte offset, in whichever mode is active.
     function scrollTopForRow(row) {
       var el = scrollRef.current;
       var height = el ? el.clientHeight : (view.height || 400);
@@ -407,7 +422,6 @@
       return function () { window.removeEventListener('resize', measure); };
     }, [t.romBytes]);
 
-    // Releasing the mouse outside the grid must still end the drag.
     uE(function () {
       function stop() { dragRef.current = null; }
       document.addEventListener('mouseup', stop);
@@ -505,28 +519,60 @@
       K.hex.setCursor(offset);
     }, []);
 
-    var onByteEdit = uC(function (offset) {
+    var onByteEdit = uC(function (offset, mode) {
       K.hex.setCursor(offset);
-      setEdit({ offset: offset, digits: '' });
+      setEdit({ offset: offset, digits: '', char: '', mode: mode === 'ascii' ? 'ascii' : 'hex' });
     }, []);
+
+    var writeByte = uC(function (offset, value) {
+      K.hex.setByte(offset, value);
+      K.hex.setCursor(Math.min(totalBytes - 1, offset + 1));
+      setEdit(null);
+    }, [totalBytes]);
 
     var onKeyDown = uC(function (ev) {
       if (!t.romBytes) return;
       var key = ev.key;
+
+      if ((ev.ctrlKey || ev.metaKey) && (key === 'z' || key === 'Z')) {
+        ev.preventDefault();
+        if (ev.shiftKey) K.hex.redo(); else K.hex.undo();
+        return;
+      }
+      if ((ev.ctrlKey || ev.metaKey) && (key === 'y' || key === 'Y')) {
+        ev.preventDefault();
+        K.hex.redo();
+        return;
+      }
+
+      if (edit && edit.mode === 'ascii') {
+        if (key === 'Escape' || key === 'Enter') { ev.preventDefault(); setEdit(null); return; }
+        if (key === 'Backspace') { ev.preventDefault(); return; }
+        if (key.length === 1 && key >= ' ' && key <= '~') {
+          ev.preventDefault();
+          K.hex.setByte(edit.offset, key.charCodeAt(0));
+          // Stay in the character editor and move on, so a whole word can be
+          // typed in one go instead of one double click per letter.
+          var nextAscii = Math.min(totalBytes - 1, edit.offset + 1);
+          K.hex.setCursor(nextAscii);
+          setEdit({ offset: nextAscii, digits: '', char: '', mode: 'ascii' });
+        }
+        return;
+      }
 
       if (edit) {
         if (key === 'Escape') { ev.preventDefault(); setEdit(null); return; }
         if (key === 'Enter') { ev.preventDefault(); commitEdit(edit.digits); return; }
         if (key === 'Backspace') {
           ev.preventDefault();
-          setEdit({ offset: edit.offset, digits: edit.digits.slice(0, -1) });
+          setEdit({ offset: edit.offset, digits: edit.digits.slice(0, -1), char: '', mode: 'hex' });
           return;
         }
         if (key.length === 1 && HEX_DIGITS.indexOf(key) !== -1) {
           ev.preventDefault();
           var digits = edit.digits + key;
           if (digits.length >= 2) commitEdit(digits.slice(0, 2));
-          else setEdit({ offset: edit.offset, digits: digits });
+          else setEdit({ offset: edit.offset, digits: digits, char: '', mode: 'hex' });
         }
         return;
       }
@@ -560,11 +606,22 @@
         return;
       }
 
+      if (key.length < 1) return;
+
+      if (typingMode === 'ascii') {
+        // ASCII typing writes straight through, like the text pane of a hex editor.
+        if (key.length === 1 && key >= ' ' && key <= '~') {
+          ev.preventDefault();
+          writeByte(t.cursorOffset, key.charCodeAt(0));
+        }
+        return;
+      }
+
       if (key.length === 1 && HEX_DIGITS.indexOf(key) !== -1) {
         ev.preventDefault();
-        setEdit({ offset: t.cursorOffset, digits: key });
+        setEdit({ offset: t.cursorOffset, digits: key, char: '', mode: 'hex' });
       }
-    }, [t.romBytes, t.cursorOffset, edit, commitEdit, perRow, totalBytes]);
+    }, [t.romBytes, t.cursorOffset, edit, commitEdit, perRow, totalBytes, typingMode, writeByte]);
 
     if (!t.romBytes) {
       return e('div', { className: 'kt-activity-placeholder' },
@@ -576,7 +633,7 @@
     var firstRow, lastRow, rowOffset;
     if (proportional) {
       var maxFirst = Math.max(0, totalRows - visibleRows);
-      var frac = virtualHeight > view.height
+      var frac = view.height && virtualHeight > view.height
         ? view.scrollTop / (virtualHeight - view.height)
         : 0;
       firstRow = Math.max(0, Math.min(maxFirst, Math.round(frac * maxFirst)));
@@ -590,6 +647,12 @@
 
     var rows = [];
     for (var r = firstRow; r <= lastRow; r++) {
+      var sec = null;
+      var secTint = 0.15;
+      if (t.highlightLayers.sections) {
+        sec = inRanges(sectionRanges, r * perRow);
+        if (sec) secTint = (sectionRanges.indexOf(sec) % 2 === 0) ? 0.30 : 0.15;
+      }
       rows.push(e(HexRow, {
         key: 'row-' + r,
         row: r,
@@ -607,7 +670,8 @@
         bookmarkMap: bookmarkMap,
         hitMap: hitMap,
         currentHitIndex: t.searchIndex,
-        section: t.highlightLayers.sections ? inRanges(sectionRanges, r * perRow) : null,
+        section: sec,
+        rowTint: secTint,
         controlHints: controlHints,
         edit: edit,
         onByteDown: onByteDown,
@@ -621,16 +685,15 @@
     var patchCount = Object.keys(t.patches || {}).length;
     var groups = (s && s.groups) ? s.groups : [];
     var selText = t.selection ? K.hex.selectionText() : '';
+    var coveredBySelection = t.selection ? K.hex.selectionTexts() : [];
     var currentSection = null;
     for (var si = 0; si < sections.length; si++) {
-      var sec = sections[si];
-      var secEnd = sec.end === null ? totalBytes - 1 : sec.end;
-      if (t.cursorOffset >= sec.start && t.cursorOffset <= secEnd) { currentSection = sec; break; }
+      var sc = sections[si];
+      var scEnd = sc.end === null ? totalBytes - 1 : sc.end;
+      if (t.cursorOffset >= sc.start && t.cursorOffset <= scEnd) { currentSection = sc; break; }
     }
 
-    var toolbarBtn = {
-      display: 'inline-flex', alignItems: 'center', gap: 4
-    };
+    var toolbarBtn = { display: 'inline-flex', alignItems: 'center', gap: 4 };
 
     return e('div', {
       style: { display: 'flex', height: '100%', minHeight: 0, overflow: 'hidden' }
@@ -652,18 +715,18 @@
         },
           e('button', {
             type: 'button', className: 'kt-btn small',
-            title: 'Undo (or press a hex digit to start editing)',
+            title: 'Undo (Ctrl+Z)',
             onClick: function () { K.hex.undo(); },
             disabled: !(t.undoStack || []).length,
             style: toolbarBtn
-          }, K.ui.icon('undo', { size: 13 }), 'Undo'),
+          }, K.ui.icon('undo', { size: 14 }), 'Undo'),
           e('button', {
             type: 'button', className: 'kt-btn small',
-            title: 'Redo',
+            title: 'Redo (Ctrl+Y)',
             onClick: function () { K.hex.redo(); },
             disabled: !(t.redoStack || []).length,
             style: toolbarBtn
-          }, K.ui.icon('redo', { size: 13 }), 'Redo'),
+          }, K.ui.icon('redo', { size: 14 }), 'Redo'),
 
           e('span', { style: { opacity: 0.25 } }, '|'),
 
@@ -692,6 +755,24 @@
             )
           ),
 
+          e('label', {
+            style: { display: 'flex', alignItems: 'center', gap: 4, fontSize: 11 },
+            title: typingMode === 'ascii'
+              ? 'Typing writes ASCII characters at the cursor'
+              : 'Typing a hex digit starts a nibble edit'
+          },
+            'Typing',
+            e('select', {
+              className: 'kt-select',
+              value: typingMode,
+              onChange: function (ev) { setTypingMode(ev.target.value); },
+              style: { width: 72, fontSize: 11 }
+            },
+              e('option', { value: 'hex' }, 'Hex'),
+              e('option', { value: 'ascii' }, 'ASCII')
+            )
+          ),
+
           e('button', {
             type: 'button', className: 'kt-btn small',
             onClick: function () { setGroupsOpen(!groupsOpen); },
@@ -707,7 +788,11 @@
               'data-kt-assign-trigger': '1',
               disabled: !t.selection,
               onClick: function () { setAssignOpen(!assignOpen); },
-              title: t.selection ? 'Add the selected bytes as a text entry' : 'Select a byte range first'
+              title: !t.selection
+                ? 'Select a byte range first'
+                : (coveredBySelection.length
+                    ? 'Selection covers ' + coveredBySelection.length + ' existing text(s); those will be grouped'
+                    : 'Selection covers no known text; a new entry will be created')
             }, 'Mark Selection (' + selLength + ')'),
             K.ui.AssignMenu ? e(K.ui.AssignMenu, {
               groups: groups,
@@ -798,10 +883,14 @@
           selText ? e('span', {
             title: selText,
             style: {
-              maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis',
+              maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis',
               whiteSpace: 'nowrap', opacity: 0.85
             }
-          }, '"' + selText.slice(0, 40) + (selText.length > 40 ? '\u2026' : '') + '"') : null,
+          }, '"' + selText.slice(0, 36) + (selText.length > 36 ? '\u2026' : '') + '"') : null,
+          coveredBySelection.length ? e('span', {
+            style: { color: 'var(--kt-color-success, #4ec9b0)' },
+            title: 'These registry entries sit under the selection; Mark Selection groups them'
+          }, coveredBySelection.length + ' known text(s)') : null,
           e('span', null, cursorValue === null ? '-' :
             'Dec ' + cursorValue + '  Hex ' + hex2(cursorValue) +
             '  Bin ' + cursorValue.toString(2).padStart(8, '0') +
@@ -827,7 +916,7 @@
           id: 'hex-layers',
           title: 'Layers',
           bodyStyle: { padding: 8, overflow: 'auto' },
-          style: { flex: '0 0 auto', maxHeight: '55%' }
+          style: { flex: '0 0 auto', maxHeight: '58%' }
         },
           e(LayerLegend, {
             layers: t.highlightLayers,

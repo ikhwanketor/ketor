@@ -79,7 +79,9 @@
         force(function (v) { return v + 1; });
       }
       var unsubs = [];
-      var stores = [K.project, K.search, K.table, K.translate];
+      // Every store the Session dashboard reads from has to be here,
+      // otherwise its numbers freeze at whatever they were on mount.
+      var stores = [K.project, K.search, K.table, K.translate, K.hex, K.workflow];
       for (var i = 0; i < stores.length; i++) {
         var s = stores[i];
         if (s && typeof s.subscribe === 'function') {
@@ -137,21 +139,48 @@
       tableSource = 'table';
     }
 
-    var textsCount = (search && search.texts) ? search.texts.length : 0;
-    var translatedCount = (translate && translate.texts)
-      ? translate.texts.filter(function (x) { return x.translatedText && x.translatedText.trim(); }).length
-      : 0;
+    // Text rows live in the Search Text registry since Batch 16; reading
+    // translate.texts here is what made this panel report 0 translated and
+    // 0 per group no matter what the user did.
+    var texts = (search && Array.isArray(search.texts)) ? search.texts : [];
+    var textsCount = texts.length;
+    var translatedCount = texts.filter(function (x) {
+      return x.translatedText && String(x.translatedText).trim();
+    }).length;
     var pendingCount = Math.max(0, textsCount - translatedCount);
     var translatedPercent = textsCount > 0 ? Math.round((translatedCount / textsCount) * 100) : 0;
 
-    var groups = (search && search.groups) ? search.groups : [];
+    var groups = (search && Array.isArray(search.groups)) ? search.groups : [];
+    var assignedCount = 0;
     var groupSummary = groups.map(function (g) {
-      return g.name + ' (' + ((g.textIds || []).length) + ')';
+      var n = (g.offsets || []).length;
+      assignedCount += n;
+      return g.name + ' (' + n + ')';
     }).join(', ');
+
+    var hex = K.hex ? K.hex.getState() : null;
+    var patchCount = hex ? Object.keys(hex.patches || {}).length : 0;
+    var bookmarkCount = hex && hex.bookmarks ? hex.bookmarks.length : 0;
+    var hexSearchHits = hex && hex.searchResults ? hex.searchResults.length : 0;
+    var workflow = K.workflow ? K.workflow.getState() : null;
+    var consoleName = (workflow && workflow.workflowName) || romSystem || '';
 
     var hasBuild = translate && translate.modifiedRom && translate.modifiedRom.length > 0;
     var buildSize = hasBuild ? translate.modifiedRom.length : 0;
     var errorCount = problems.filter(function (p) { return p.severity === 'error'; }).length;
+
+    // One concrete next action, derived from the live state, so the panel
+    // tells the user where the project stands instead of only listing facts.
+    var nextStep;
+    if (!romName) nextStep = 'Load a ROM from File > Load ROM to start a session.';
+    else if (!tableName) nextStep = 'Load a .tbl table (Table activity, or File > Load Table) so text can be decoded.';
+    else if (textsCount === 0) nextStep = 'Run Extract in the Search Text sidebar to find candidate strings.';
+    else if (groups.length === 0) nextStep = 'Mark texts in Search Text, or drag a range in the Hex Editor, then add them to a group.';
+    else if (translatedCount === 0) nextStep = 'Open the Translation activity and translate the active group.';
+    else if (pendingCount > 0) nextStep = pendingCount.toLocaleString() + ' text(s) still untranslated in the groups you built.';
+    else if (patchCount > 0 && !hasBuild) nextStep = patchCount + ' hex patch(es) pending; export or build the patched ROM.';
+    else if (!hasBuild) nextStep = 'Build the modified ROM from the Translation sidebar when the translation is ready.';
+    else nextStep = 'Modified ROM ready (' + formatBytes(buildSize) + '). Download it from the Translation sidebar.';
 
     if (!romName && running.length === 0) {
       return e('div', {
@@ -160,7 +189,10 @@
       },
         'No ROM loaded.',
         e('br'),
-        'Use File > Load ROM to start a session.'
+        'Use File > Load ROM to start a session.',
+        e('br'),
+        e('br'),
+        e('span', { style: { opacity: 0.75 } }, 'This panel tracks the session live: ROM, table, extraction, groups, translation progress, hex patches and build output.')
       );
     }
 
@@ -239,10 +271,12 @@
       ));
     }
 
+    blocks.push(e(Row, { key: 'next', label: 'Next Step', value: nextStep }));
+
     if (romName) {
       var romLine = romName + '\n' +
         formatBytes(romSize) +
-        (romSystem ? ', ' + romSystem : '') +
+        (consoleName ? ', ' + consoleName : '') +
         (romCrc ? ', CRC32=' + romCrc : '');
       blocks.push(e(Row, { key: 'rom', label: 'ROM', value: romLine }));
     }
@@ -266,10 +300,20 @@
         key: 'texts',
         label: 'Texts',
         value: textsCount.toLocaleString() + ' extracted\n' +
+               assignedCount.toLocaleString() + ' assigned to a group\n' +
                translatedCount.toLocaleString() + ' translated (' + translatedPercent + '%)\n' +
                pendingCount.toLocaleString() + ' pending'
       }));
     }
+
+    blocks.push(e(Row, {
+      key: 'hex',
+      label: 'Hex Editor',
+      value: patchCount + ' patch(es)' +
+        (bookmarkCount ? ', ' + bookmarkCount + ' bookmark(s)' : '') +
+        (hexSearchHits ? ', ' + hexSearchHits + ' search hit(s)' : '') +
+        (hex && hex.romBytes ? '\ncursor 0x' + Number(hex.cursorOffset).toString(16).toUpperCase().padStart(6, '0') : '')
+    }));
 
     if (groups.length > 0) {
       blocks.push(e(Row, {

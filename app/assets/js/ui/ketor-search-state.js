@@ -558,6 +558,30 @@
     });
   }
 
+  // Every text row in the app lives in this registry, so anything that
+  // wants to add one has to check what already covers those bytes first.
+  // Without this the Hex Editor produced a second row for bytes an
+  // extracted entry already described, complete with its own copy of the
+  // control codes.
+  function _overlaps(t, start, end) {
+    var s = Number(t.startByte);
+    if (!Number.isFinite(s)) return false;
+    var len = Math.max(1, Number(t.byteLength) || 1);
+    return s <= end && (s + len - 1) >= start;
+  }
+
+  // Entries whose byte span intersects [start, end], ordered by offset.
+  function getTextsInRange(start, end) {
+    var a = Number(start);
+    var b = Number(end);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return [];
+    var lo = Math.min(a, b);
+    var hi = Math.max(a, b);
+    var out = (_state.texts || []).filter(function (t) { return _overlaps(t, lo, hi); });
+    out.sort(function (x, y) { return Number(x.startByte) - Number(y.startByte); });
+    return out;
+  }
+
   function _normalizeEntry(e) {
     var copy = Object.assign({}, e);
     delete copy.id;
@@ -580,6 +604,15 @@
         _set({ status: 'Entry at ' + _offsetHex(sb) + ' already exists.' });
         return sb;
       }
+    }
+
+    var covering = getTextsInRange(sb, sb + bl - 1);
+    if (covering.length) {
+      _set({
+        status: 'Bytes ' + _offsetHex(sb) + '-' + _offsetHex(sb + bl - 1) +
+          ' are already described by ' + covering.length + ' existing text(s); using those.'
+      });
+      return Number(covering[0].startByte);
     }
 
     var entry = {
@@ -819,6 +852,7 @@
   K.search.getTextsByGroup = getTextsByGroup;
   K.search.getSortedTexts = getSortedTexts;
   K.search.getFilteredTexts = getFilteredTexts;
+  K.search.getTextsInRange = getTextsInRange;
   K.search.addManualEntry = addManualEntry;
   K.search.setTranslatedText = setTranslatedText;
   K.search.setComment = setComment;
