@@ -42,8 +42,6 @@
     run: '<path d="M4 3l9 5-9 5V3z"/>',
     stop: '<rect x="4" y="4" width="8" height="8" rx="1"/>',
     refresh: '<path d="M13.5 8A5.5 5.5 0 0 1 8 13.5 5.5 5.5 0 0 1 2.5 8 5.5 5.5 0 0 1 8 2.5c1.8 0 3.4.9 4.4 2.2"/><path d="M12.5 2.5v2.5H10"/>',
-    undo: '<path d="M5 5.4h5.2a3.1 3.1 0 0 1 0 6.2H7.6" stroke-width="2.1"/><path d="M2.4 5.4L7 2.2v6.4z" fill="currentColor" stroke="none"/>',
-    redo: '<path d="M11 5.4H5.8a3.1 3.1 0 0 0 0 6.2h2.6" stroke-width="2.1"/><path d="M13.6 5.4L9 2.2v6.4z" fill="currentColor" stroke="none"/>',
     save: '<path d="M3 3.5v9a.5.5 0 0 0 .5.5h9a.5.5 0 0 0 .5-.5V5.5L10 3H3.5a.5.5 0 0 0-.5.5z"/><path d="M5 3v3h5V3M5 13v-4h6v4"/>',
     trash: '<path d="M2.5 4h11M6 4V2.5h4V4M4 4l.8 9.2a.5.5 0 0 0 .5.3h5.4a.5.5 0 0 0 .5-.3L12 4"/>',
     copy: '<rect x="5" y="5" width="9" height="9" rx="1"/><path d="M3 11V3.5a.5.5 0 0 1 .5-.5H11"/>',

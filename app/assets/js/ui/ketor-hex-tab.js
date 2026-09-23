@@ -117,11 +117,16 @@
       title: spec.title,
       onMouseDown: function (ev) {
         ev.preventDefault();
+        // The second press of a double click opens the editor immediately.
+        // Waiting for the dblclick event was unreliable: the grid re-renders
+        // between the two presses, and dblclick then does not always arrive.
+        if (ev.detail >= 2) { spec.onEdit(spec.offset, spec.mode); return; }
         spec.onDown(spec.offset, ev.shiftKey, spec.mode);
       },
       onMouseEnter: function (ev) {
         if (ev.buttons & 1) spec.onEnter(spec.offset);
       },
+      // Kept as a fallback for input paths that only deliver dblclick.
       onDoubleClick: function () { spec.onEdit(spec.offset, spec.mode); },
       style: spec.style
     }, spec.text);
@@ -532,6 +537,7 @@
     }, []);
 
     var onByteEdit = uC(function (offset, mode) {
+      dragRef.current = null;
       K.hex.setCursor(offset);
       var m = mode === 'ascii' ? 'ascii' : 'hex';
       setActiveColumn(m);
@@ -721,49 +727,65 @@
         e('div', {
           style: {
             flex: '0 0 auto',
-            display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap',
-            padding: '5px 10px',
+            display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'nowrap',
+            padding: '6px 10px',
             borderBottom: '1px solid var(--kt-widget-border-default)',
-            background: 'var(--kt-sidebar-bg)',
-            overflowX: 'auto'
+            background: 'var(--kt-sidebar-bg)'
+            // Deliberately no overflow value here. The Mark Selection menu is
+            // absolutely positioned inside this row, and any overflow other
+            // than visible clips it away, which makes the button look dead.
           }
         },
           e('button', {
-            type: 'button', className: 'kt-btn small icon-only',
+            type: 'button', className: 'kt-btn small',
             title: 'Undo (Ctrl+Z)',
             onClick: function () { K.hex.undo(); },
             disabled: !(t.undoStack || []).length,
-            style: toolbarBtn
-          }, K.ui.icon('undo', { size: 15 })),
+            style: { flex: '0 0 auto' }
+          }, 'Undo'),
           e('button', {
-            type: 'button', className: 'kt-btn small icon-only',
+            type: 'button', className: 'kt-btn small',
             title: 'Redo (Ctrl+Y)',
             onClick: function () { K.hex.redo(); },
             disabled: !(t.redoStack || []).length,
-            style: toolbarBtn
-          }, K.ui.icon('redo', { size: 15 })),
+            style: { flex: '0 0 auto' }
+          }, 'Redo'),
 
           e('span', { style: { opacity: 0.25 } }, '|'),
 
-          e('select', {
-            className: 'kt-select',
-            value: perRow,
-            title: 'Bytes per row',
-            onChange: function (ev) { K.hex.setBytesPerRow(parseInt(ev.target.value, 10)); },
-            style: { width: 54, fontSize: 11, flex: '0 0 auto' }
-          }, [8, 16, 24, 32].map(function (n) {
-            return e('option', { key: 'bpr' + n, value: n }, n + '/row');
-          })),
-
-          e('select', {
-            className: 'kt-select',
-            value: t.viewMode,
-            title: 'View mode',
-            onChange: function (ev) { K.hex.setViewMode(ev.target.value); },
-            style: { width: 92, fontSize: 11, flex: '0 0 auto' }
+          e('label', {
+            style: {
+              display: 'flex', alignItems: 'center', gap: 4,
+              fontSize: 11, flex: '0 0 auto', whiteSpace: 'nowrap'
+            }
           },
-            e('option', { value: 'hex+ascii' }, 'Hex + ASCII'),
-            e('option', { value: 'hex' }, 'Hex only')
+            'Bytes/row',
+            e('select', {
+              className: 'kt-select',
+              value: perRow,
+              onChange: function (ev) { K.hex.setBytesPerRow(parseInt(ev.target.value, 10)); },
+              style: { width: 58, fontSize: 11 }
+            }, [8, 16, 24, 32].map(function (n) {
+              return e('option', { key: 'bpr' + n, value: n }, String(n));
+            }))
+          ),
+
+          e('label', {
+            style: {
+              display: 'flex', alignItems: 'center', gap: 4,
+              fontSize: 11, flex: '0 0 auto', whiteSpace: 'nowrap'
+            }
+          },
+            'View',
+            e('select', {
+              className: 'kt-select',
+              value: t.viewMode,
+              onChange: function (ev) { K.hex.setViewMode(ev.target.value); },
+              style: { width: 96, fontSize: 11 }
+            },
+              e('option', { value: 'hex+ascii' }, 'Hex + ASCII'),
+              e('option', { value: 'hex' }, 'Hex only')
+            )
           ),
 
           e('button', {
