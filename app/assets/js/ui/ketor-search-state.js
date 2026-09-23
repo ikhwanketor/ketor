@@ -42,6 +42,15 @@
    - source: 'extract' | 'manual'
    ============================================================ */
 
+/* ============================================================
+   Ketor - Search Text State (v4)
+   ------------------------------------------------------------
+   Batch 17: extraction options gain a strictExtractorMode flag
+   and can be seeded from the per-console workflow config via
+   applyExtractionDefaults(). Keys the user has edited by hand
+   in this session are never overwritten by a console default.
+   ============================================================ */
+
 (function (global) {
   'use strict';
   var K = global.Ketor = global.Ketor || {};
@@ -65,7 +74,8 @@
       usePaddingByte: false,
       enableDteMteCompression: true,
       enableTextDecompression: false,
-      includeCompressedReadOnly: false
+      includeCompressedReadOnly: false,
+      strictExtractorMode: false
     },
     texts: [],
     isExtracting: false,
@@ -202,9 +212,30 @@
     });
   }
 
+  // Option keys the user changed by hand this session. Console
+  // defaults from applyExtractionDefaults() must not clobber them.
+  var _optionOverrides = {};
+
   function setExtractionOptions(patch) {
-    var next = Object.assign({}, _state.extractionOptions, patch || {});
+    var p = patch || {};
+    Object.keys(p).forEach(function (k) { _optionOverrides[k] = true; });
+    var next = Object.assign({}, _state.extractionOptions, p);
     _set({ extractionOptions: next });
+  }
+
+  // Seeds console-recommended extraction defaults. Only keys the
+  // user has not touched are filled, so switching ROMs adapts the
+  // defaults without discarding deliberate choices.
+  function applyExtractionDefaults(patch) {
+    var p = patch || {};
+    var next = null;
+    Object.keys(p).forEach(function (k) {
+      if (_optionOverrides[k]) return;
+      if (_state.extractionOptions[k] === p[k]) return;
+      if (!next) next = Object.assign({}, _state.extractionOptions);
+      next[k] = p[k];
+    });
+    if (next) _set({ extractionOptions: next });
   }
 
   function setFilter(patch) {
@@ -692,7 +723,7 @@
         enableTextDecompression: opts.enableTextDecompression === true,
         decompressionMode: 'auto',
         includeCompressedReadOnly: opts.includeCompressedReadOnly === true,
-        strictExtractorMode: false,
+        strictExtractorMode: opts.strictExtractorMode === true,
         system: {
           name: _state.romSystem || 'Unknown',
           terminator: [0x00],
@@ -726,6 +757,7 @@
   K.search.setRomFromLoad = setRomFromLoad;
   K.search.setTableData = setTableData;
   K.search.setExtractionOptions = setExtractionOptions;
+  K.search.applyExtractionDefaults = applyExtractionDefaults;
   K.search.setFilter = setFilter;
   K.search.setPage = setPage;
   K.search.setListScrollTop = setListScrollTop;
