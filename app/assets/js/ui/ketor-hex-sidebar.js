@@ -1,11 +1,12 @@
 /* ============================================================
    Ketor - Hex Editor Sidebar (v1)
    ------------------------------------------------------------
-   Batch 18: ROM readout, goto, byte/text search, bookmarks,
-   the shared group panel, and the console help text.
+   Batch 18: ROM readout, goto, byte/text search, bookmarks and
+   the console help text.
 
-   Sections is a read-only layer in the grid; the sidebar only
-   lists what the console layout implies, it does not edit it.
+   The group manager and the section legend live in the editor's
+   right column, not here, so there is exactly one place to manage
+   groups and one place to read the colour legend.
    ============================================================ */
 
 (function (global) {
@@ -69,7 +70,6 @@
 
   function HexSidebar() {
     var t = K.hex.useHex();
-    var s = K.search ? K.search.useSearch() : null;
     var wf = K.workflow ? K.workflow.useWorkflowConfig() : null;
 
     var gotoSt = uS('');
@@ -88,9 +88,22 @@
       K.hex.gotoOffset(off);
     }, [gotoValue, gotoBase]);
 
+    var renameSt = uS(null);
+    var renaming = renameSt[0];
+    var setRenaming = renameSt[1];
+    var renameValSt = uS('');
+    var renameVal = renameValSt[0];
+    var setRenameVal = renameValSt[1];
+
     var onSearch = uC(function () { K.hex.runSearch(); }, []);
     var onPrev = uC(function () { K.hex.prevResult(); }, []);
     var onNext = uC(function () { K.hex.nextResult(); }, []);
+    var onClearSearch = uC(function () { K.hex.clearSearch(); }, []);
+
+    var commitRename = uC(function (offset) {
+      K.hex.renameBookmark(offset, renameVal);
+      setRenaming(null);
+    }, [renameVal]);
 
     var onAddBookmark = uC(function () {
       K.hex.addBookmark(t.cursorOffset, bookmarkLabel);
@@ -98,10 +111,6 @@
     }, [t.cursorOffset, bookmarkLabel]);
 
     var onJumpBookmark = uC(function (off) { K.hex.gotoOffset(off); }, []);
-
-    var groups = (s && s.groups) ? s.groups : [];
-    var texts = (s && s.texts) ? s.texts : [];
-    var expandedGroups = (s && s.expandedGroups) ? s.expandedGroups : {};
 
     var hasRom = !!t.romBytes;
     var patchCount = Object.keys(t.patches || {}).length;
@@ -204,8 +213,25 @@
           }, 'Next')
         ),
         e('div', {
-          style: { fontSize: 10, opacity: 0.7, marginTop: 4, textAlign: 'center' }
-        }, resultLabel),
+          style: {
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            gap: 6, marginTop: 4, fontSize: 10
+          }
+        },
+          e('span', { style: { opacity: 0.7 } }, resultLabel),
+          (t.searchQuery || resultCount) ? e('button', {
+            type: 'button',
+            title: 'Clear the search and its highlights',
+            onClick: onClearSearch,
+            style: {
+              width: 16, height: 16, padding: 0,
+              background: 'transparent', border: 'none',
+              color: 'var(--kt-sidebar-fg)', cursor: 'pointer',
+              opacity: 0.6, display: 'flex',
+              alignItems: 'center', justifyContent: 'center'
+            }
+          }, K.ui.icon('close', { size: 10 })) : null
+        ),
         t.searchMode === 'text'
           ? e('div', { style: { fontSize: 10, opacity: 0.55, marginTop: 4, lineHeight: 1.5 } },
               'Text is encoded with the applied table, so the bytes searched are the bytes a build would write.')
@@ -256,7 +282,11 @@
                   cursor: 'pointer'
                 },
                 onClick: function () { onJumpBookmark(b.offset); },
-                title: 'Jump to ' + hexLabel(b.offset)
+                onDoubleClick: function () {
+                  setRenameVal(b.label);
+                  setRenaming(b.offset);
+                },
+                title: 'Jump to ' + hexLabel(b.offset) + ' (double-click to rename)'
               },
                 e('span', {
                   style: {
@@ -270,12 +300,44 @@
                     color: 'var(--kt-info-fg, #75beff)', flex: '0 0 auto'
                   }
                 }, hexLabel(b.offset)),
-                e('span', {
+                renaming === b.offset
+                  ? e('input', {
+                      type: 'text',
+                      className: 'kt-input',
+                      value: renameVal,
+                      autoFocus: true,
+                      onClick: function (ev) { ev.stopPropagation(); },
+                      onChange: function (ev) { setRenameVal(ev.target.value); },
+                      onBlur: function () { commitRename(b.offset); },
+                      onKeyDown: function (ev) {
+                        if (ev.key === 'Enter') commitRename(b.offset);
+                        if (ev.key === 'Escape') setRenaming(null);
+                      },
+                      style: { flex: 1, minWidth: 0, fontSize: 11, padding: '0 4px' }
+                    })
+                  : e('span', {
+                      style: {
+                        flex: 1, minWidth: 0, overflow: 'hidden',
+                        textOverflow: 'ellipsis', whiteSpace: 'nowrap'
+                      },
+                      title: 'Double-click to rename'
+                    }, b.label),
+                e('button', {
+                  type: 'button',
+                  title: 'Rename bookmark',
+                  onClick: function (ev) {
+                    ev.stopPropagation();
+                    setRenameVal(b.label);
+                    setRenaming(b.offset);
+                  },
                   style: {
-                    flex: 1, minWidth: 0, overflow: 'hidden',
-                    textOverflow: 'ellipsis', whiteSpace: 'nowrap'
+                    width: 16, height: 16, padding: 0, flex: '0 0 auto',
+                    background: 'transparent', border: 'none',
+                    color: 'var(--kt-sidebar-fg)', cursor: 'pointer',
+                    opacity: 0.6, display: 'flex',
+                    alignItems: 'center', justifyContent: 'center'
                   }
-                }, b.label),
+                }, K.ui.icon('edit', { size: 10 })),
                 e('button', {
                   type: 'button',
                   title: 'Remove bookmark',
@@ -300,66 +362,6 @@
           onClick: function () { K.hex.clearBookmarks(); }
         }, 'Clear Bookmarks') : null
       ),
-
-      e(Section, { title: 'Groups (' + groups.length + ')' },
-        groups.length === 0
-          ? e('div', {
-              style: {
-                fontSize: 11, color: 'var(--kt-sidebar-fg)',
-                opacity: 0.75, lineHeight: 1.5
-              }
-            }, 'No groups yet. Select a byte range and use "Mark Selection" in the editor toolbar.')
-          : e('div', {
-              style: {
-                border: '1px solid var(--kt-widget-border-default)',
-                borderRadius: 3,
-                overflow: 'hidden',
-                background: 'var(--kt-sidebar-bg)'
-              }
-            },
-              e(K.ui.KetorGroupsPanel, {
-                groups: groups,
-                texts: texts,
-                expanded: expandedGroups,
-                onToggleExpand: function (id) { if (K.search) K.search.toggleGroupExpand(id); },
-                onSelect: function (id) { if (K.search) K.search.selectGroup(id); },
-                onRename: function (id, name) { if (K.search) K.search.renameGroup(id, name); },
-                onDelete: function (id) { if (K.search) K.search.deleteGroup(id); },
-                onRemoveText: function (gid, off) { if (K.search) K.search.removeFromGroup(gid, off); },
-                onMoveGroup: function (id, dir) { if (K.search) K.search.moveGroup(id, dir); },
-                onMoveText: function (gid, off, dir) { if (K.search) K.search.moveTextInGroup(gid, off, dir); },
-                onSortTexts: function (gid) { if (K.search) K.search.sortTextsInGroup(gid); },
-                selectedGroupId: s ? s.selectedGroupId : null
-              })
-            )
-      ),
-
-      (t.sections || []).length > 0 ? e(Section, { title: 'Sections' },
-        e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-          t.sections.map(function (sec) {
-            return e('div', {
-              key: sec.id,
-              onClick: function () { K.hex.gotoOffset(sec.start); },
-              title: 'Jump to ' + hexLabel(sec.start),
-              style: {
-                display: 'flex', justifyContent: 'space-between', gap: 6,
-                fontSize: 11, cursor: 'pointer', padding: '2px 0',
-                color: 'var(--kt-sidebar-fg)'
-              }
-            },
-              e('span', {
-                style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
-              }, sec.label),
-              e('span', {
-                style: {
-                  fontFamily: 'var(--kt-font-mono)', fontSize: 10,
-                  opacity: 0.7, flex: '0 0 auto'
-                }
-              }, hexLabel(sec.start) + (sec.end === null ? '+' : '-' + hexLabel(sec.end)))
-            );
-          })
-        )
-      ) : null,
 
       wf && wf.helpText ? e(Section, { title: 'Help' },
         e('div', {

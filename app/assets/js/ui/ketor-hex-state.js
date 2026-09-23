@@ -12,11 +12,13 @@
    bytes), because two ROMs loaded in one session must never
    share patches.
 
-   Layers:
+   Layers (all independently toggleable):
    - sections: derived from the console layout, read only
    - controlCodes: bytes listed in K.core.CONTROL_HINTS
    - groups: ranges already assigned to a group in K.search
    - changed: bytes present in patches
+   - bookmarks: byte carries a bookmark, tinted with its own colour
+   - searchHits: byte starts a search hit
    ============================================================ */
 
 (function (global) {
@@ -44,9 +46,11 @@
     sections: [],
     highlightLayers: {
       sections: true,
-      controlCodes: false,
+      controlCodes: true,
       groups: true,
-      changed: true
+      changed: true,
+      bookmarks: true,
+      searchHits: true
     },
     searchMode: 'hex',
     searchQuery: '',
@@ -155,6 +159,13 @@
   // declares its ROM size at 0x148 (32 KiB << n), GBA has a fixed
   // 0xC0 header, and a SNES copier header only exists when the file
   // is 512 bytes past a 32 KiB boundary.
+  // Section accents are shared with the legend and the grid gutter so a
+  // band on screen can always be traced back to its row in the list.
+  var SECTION_COLORS = [
+    '#569cd6', '#4ec9b0', '#dcdcaa', '#c586c0',
+    '#ce9178', '#4fc1ff', '#b5cea8', '#f44747'
+  ];
+
   function buildSections(profile, bytes) {
     if (!bytes || !bytes.length) return [];
     var name = profile && profile.name ? profile.name : '';
@@ -163,7 +174,13 @@
 
     function push(id, label, start, end) {
       if (start >= total) return;
-      out.push({ id: id, label: label, start: start, end: Math.min(total, end) - 1 });
+      out.push({
+        id: id,
+        label: label,
+        start: start,
+        end: Math.min(total, end) - 1,
+        color: SECTION_COLORS[out.length % SECTION_COLORS.length]
+      });
     }
 
     if (name === 'NES' && total > 16 &&
@@ -810,5 +827,6 @@
   K.hex.prevResult = prevResult;
   K.hex.clearSearch = clearSearch;
   K.hex.buildSections = buildSections;
+  K.hex.SECTION_COLORS = SECTION_COLORS;
 
 })(window);

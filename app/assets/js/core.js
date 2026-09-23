@@ -5007,7 +5007,14 @@
               const trimmed = rawLine.trim();
               if (!trimmed || trimmed.startsWith('//')) return;
               const commentIndex = rawLine.indexOf(';');
-              const line = commentIndex > -1 ? rawLine.substring(0, commentIndex) : rawLine;
+              // ";" starts a comment, except when it *is* the value: tables
+              // that map printable ASCII contain a "3B=;" line and stripping
+              // it there would silently drop the semicolon mapping.
+              const eqIndex = rawLine.indexOf('=');
+              const semicolonIsValue = eqIndex > -1 && commentIndex === eqIndex + 1;
+              const line = (commentIndex > -1 && !semicolonIsValue)
+                ? rawLine.substring(0, commentIndex)
+                : rawLine;
               const splitIndex = line.indexOf('=');
               if (splitIndex <= 0) return;
 
