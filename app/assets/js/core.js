@@ -1554,7 +1554,13 @@ window.__PT_APP_READY__ = false;
             if (typeof textItem.startByte !== 'number') continue;
             const aliases = detectPreTextAliasOffsets(textItem.startByte);
             textAliasMap.set(textItem.startByte, aliases);
-            if (aliases.length > 0) {
+            // An alias is the short prefix in front of a text (a length byte, a
+            // control code). A match far below the text is a coincidence, and
+            // letting it move the block start backwards makes the block look
+            // larger than the text region: an over-long translation then looked
+            // like it still fit, was written in place and was silently cut to
+            // the region. Only a prefix right in front of the text counts.
+            if (aliases.length > 0 && aliases[0] >= Number(textItem.startByte) - 8) {
               effectiveBlockStart = Math.min(effectiveBlockStart, aliases[0]);
             }
           }
