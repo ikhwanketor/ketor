@@ -117,11 +117,10 @@
       title: spec.title,
       onMouseDown: function (ev) {
         ev.preventDefault();
-        // The second press of a double click opens the editor immediately.
-        // Waiting for the dblclick event was unreliable: the grid re-renders
-        // between the two presses, and dblclick then does not always arrive.
-        if (ev.detail >= 2) { spec.onEdit(spec.offset, spec.mode); return; }
-        spec.onDown(spec.offset, ev.shiftKey, spec.mode);
+        // The parent decides what counts as a double press; detail is only
+        // one of the signals it uses, because the browser stops reporting it
+        // reliably once the grid has re-rendered under the pointer.
+        spec.onDown(spec.offset, ev.shiftKey, spec.mode, ev.detail);
       },
       onMouseEnter: function (ev) {
         if (ev.buttons & 1) spec.onEnter(spec.offset);
@@ -517,8 +516,35 @@
       setEdit(null);
     }, [edit, totalBytes]);
 
-    var onByteDown = uC(function (offset, shiftKey, mode) {
+    var onByteEdit = uC(function (offset, mode) {
+      dragRef.current = null;
+      K.hex.setCursor(offset);
+      var m = mode === 'ascii' ? 'ascii' : 'hex';
+      setActiveColumn(m);
+      setEdit({ offset: offset, digits: '', char: '', mode: m });
+    }, []);
+
+    // Double press detection lives here rather than in the browser. The grid
+    // re-renders between the two presses, the DOM node under the pointer can
+    // be replaced, and ev.detail then never reaches 2 again until the pointer
+    // goes somewhere else entirely. Tracking time and offset ourselves is
+    // immune to that, which is what made editing work only after clicking
+    // outside the grid first.
+    var lastPressRef = uR({ offset: -1, time: 0 });
+    var DOUBLE_PRESS_MS = 450;
+
+    var onByteDown = uC(function (offset, shiftKey, mode, detail) {
       if (mode === 'ascii' || mode === 'hex') setActiveColumn(mode);
+      var now = Date.now();
+      var last = lastPressRef.current;
+      var isSecondPress = (Number(detail) >= 2) ||
+        (last.offset === offset && (now - last.time) < DOUBLE_PRESS_MS);
+      lastPressRef.current = { offset: offset, time: now };
+
+      if (isSecondPress && !shiftKey) {
+        onByteEdit(offset, mode);
+        return;
+      }
       if (edit) setEdit(null);
       if (shiftKey) {
         K.hex.setSelection(t.cursorOffset, offset);
@@ -528,20 +554,12 @@
       dragRef.current = offset;
       K.hex.setCursor(offset);
       K.hex.setSelection(offset, offset);
-    }, [edit, t.cursorOffset]);
+    }, [edit, t.cursorOffset, onByteEdit]);
 
     var onByteEnter = uC(function (offset) {
       if (dragRef.current === null || dragRef.current === undefined) return;
       K.hex.setSelection(dragRef.current, offset);
       K.hex.setCursor(offset);
-    }, []);
-
-    var onByteEdit = uC(function (offset, mode) {
-      dragRef.current = null;
-      K.hex.setCursor(offset);
-      var m = mode === 'ascii' ? 'ascii' : 'hex';
-      setActiveColumn(m);
-      setEdit({ offset: offset, digits: '', char: '', mode: m });
     }, []);
 
     var writeByte = uC(function (offset, value) {
@@ -713,6 +731,47 @@
       if (t.cursorOffset >= sc.start && t.cursorOffset <= scEnd) { currentSection = sc; break; }
     }
 
+    // Status information is rendered in the right rail (bottom right of the
+    // grid) instead of taking a full width row under it.
+    var infoRows = [
+      { label: 'Offset', value: hex8(t.cursorOffset) + ' (' + t.cursorOffset + ')' },
+      {
+        label: 'Section',
+        value: currentSection ? currentSection.label : '-',
+        color: currentSection ? currentSection.color : null
+      },
+      {
+        label: 'Select',
+        value: t.selection
+          ? selLength + ' B  ' + hex8(t.selection.start) + ' - ' + hex8(t.selection.end)
+          : '-'
+      },
+      {
+        label: 'Sel text',
+        value: selText ? '"' + selText.slice(0, 28) + (selText.length > 28 ? '\u2026' : '') + '"' : '-',
+        title: selText || ''
+      },
+      {
+        label: 'Known',
+        value: coveredBySelection.length ? coveredBySelection.length + ' text(s)' : '-',
+        title: 'Registry entries that sit under the selection; Mark Selection groups them'
+      },
+      {
+        label: 'Byte',
+        value: cursorValue === null ? '-' :
+          cursorValue + ' / ' + hex2(cursorValue) + ' / ' + cursorValue.toString(2).padStart(8, '0') +
+          (isAsciiPrintable(cursorValue) ? " / '" + String.fromCharCode(cursorValue) + "'" : ''),
+        title: 'Decimal / hex / binary / ASCII'
+      },
+      { label: 'Patches', value: String(patchCount) },
+      {
+        label: 'Typing',
+        value: activeColumn === 'ascii' ? 'ASCII' : 'hex',
+        title: 'Follows the column you last clicked: hex digits edit the byte, characters edit the ASCII column'
+      },
+      { label: 'System', value: t.romSystem || '-' }
+    ];
+
     var toolbarBtn = { display: 'inline-flex', alignItems: 'center', gap: 4 };
 
     return e('div', {
@@ -842,110 +901,123 @@
         ),
 
         e('div', {
-          ref: scrollRef,
-          tabIndex: 0,
-          onScroll: onScroll,
-          onKeyDown: onKeyDown,
-          onMouseUp: function () { dragRef.current = null; },
-          onMouseLeave: function () { dragRef.current = null; },
-          style: {
-            flex: '1 1 auto',
-            minHeight: 0,
-            overflow: 'auto',
-            position: 'relative',
-            background: 'var(--kt-editor-bg)',
-            color: 'var(--kt-editor-fg)',
-            outline: 'none',
-            cursor: 'crosshair'
-          }
+          // Grid on the left, rail on the right: layers at the top of the
+          // rail and the status readout at its bottom, which uses the empty
+          // space beside the ASCII column instead of a full width row.
+          style: { flex: '1 1 auto', minHeight: 0, display: 'flex', overflow: 'hidden' }
         },
           e('div', {
+            ref: scrollRef,
+            tabIndex: 0,
+            onScroll: onScroll,
+            onKeyDown: onKeyDown,
+            onMouseUp: function () { dragRef.current = null; },
+            onMouseLeave: function () { dragRef.current = null; },
             style: {
+              flex: '1 1 auto',
+              minWidth: 0,
+              minHeight: 0,
+              overflow: 'auto',
               position: 'relative',
-              height: virtualHeight,
-              minWidth: 300 + perRow * (CELL + (t.viewMode === 'hex' ? 0 : ASCII_CELL))
+              background: 'var(--kt-editor-bg)',
+              color: 'var(--kt-editor-fg)',
+              outline: 'none',
+              cursor: 'crosshair'
             }
-          }, rows)
-        ),
-
-        e('div', {
-          style: {
-            flex: '0 0 auto',
-            display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
-            padding: '3px 10px',
-            borderTop: '1px solid var(--kt-widget-border-default)',
-            background: 'var(--kt-statusbar-bg)',
-            color: 'var(--kt-statusbar-fg)',
-            fontSize: 11,
-            fontFamily: 'var(--kt-font-mono)'
-          }
-        },
-          e('span', null, hex8(t.cursorOffset) + ' (' + t.cursorOffset + ')'),
-          currentSection ? e('span', {
-            style: { display: 'inline-flex', alignItems: 'center', gap: 5 }
           },
-            e('span', {
+            e('div', {
               style: {
-                width: 9, height: 9, borderRadius: 2,
-                background: tint(currentSection.color, 0.8)
+                position: 'relative',
+                height: virtualHeight,
+                minWidth: 300 + perRow * (CELL + (t.viewMode === 'hex' ? 0 : ASCII_CELL))
               }
-            }),
-            e('span', null, currentSection.label)
-          ) : null,
-          e('span', null, 'Sel: ' + (t.selection
-            ? selLength + ' B  ' + hex8(t.selection.start) + ' - ' + hex8(t.selection.end)
-            : '-')),
-          selText ? e('span', {
-            title: selText,
+            }, rows)
+          ),
+
+          e('div', {
             style: {
-              maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap', opacity: 0.85
+              flex: '0 0 234px',
+              minWidth: 0,
+              display: 'flex', flexDirection: 'column', gap: 8,
+              padding: 8,
+              borderLeft: '1px solid var(--kt-widget-border-default)',
+              background: 'var(--kt-sidebar-bg)',
+              overflow: 'hidden'
             }
-          }, '"' + selText.slice(0, 36) + (selText.length > 36 ? '\u2026' : '') + '"') : null,
-          coveredBySelection.length ? e('span', {
-            style: { color: 'var(--kt-color-success, #4ec9b0)' },
-            title: 'These registry entries sit under the selection; Mark Selection groups them'
-          }, coveredBySelection.length + ' known text(s)') : null,
-          e('span', null, cursorValue === null ? '-' :
-            'Dec ' + cursorValue + '  Hex ' + hex2(cursorValue) +
-            '  Bin ' + cursorValue.toString(2).padStart(8, '0') +
-            '  ' + (isAsciiPrintable(cursorValue) ? "'" + String.fromCharCode(cursorValue) + "'" : '.')),
-          e('span', null, 'Patches: ' + patchCount),
-          e('span', {
-            title: 'Typing follows the column you last clicked: hex digits edit the byte, characters edit the ASCII column',
-            style: { opacity: 0.75 }
-          }, 'Typing ' + (activeColumn === 'ascii' ? 'ASCII' : 'hex')),
-          e('span', { style: { flex: 1 } }),
-          e('span', { style: { opacity: 0.7 } }, t.romSystem || '')
+          },
+            e(K.ui.KtBox, {
+              id: 'hex-layers',
+              title: 'Layers',
+              bodyStyle: { padding: 8, overflow: 'auto' },
+              style: { flex: '1 1 auto', minHeight: 0 }
+            },
+              e(LayerLegend, {
+                layers: t.highlightLayers,
+                onToggle: K.hex.toggleHighlightLayer,
+                sections: sections,
+                onGoto: K.hex.gotoOffset,
+                cursorOffset: t.cursorOffset
+              })
+            ),
+
+            e('div', {
+              style: {
+                flex: '0 0 auto',
+                borderTop: '1px solid var(--kt-widget-border-default)',
+                paddingTop: 6,
+                color: 'var(--kt-statusbar-fg)',
+                fontFamily: 'var(--kt-font-mono)',
+                fontSize: 11,
+                display: 'flex', flexDirection: 'column', gap: 2
+              }
+            },
+              infoRows.map(function (row) {
+                return e('div', {
+                  key: 'info-' + row.label,
+                  style: { display: 'flex', gap: 6, alignItems: 'baseline', lineHeight: 1.45 }
+                },
+                  e('span', {
+                    style: {
+                      flex: '0 0 50px', fontSize: 9, opacity: 0.55,
+                      textTransform: 'uppercase', letterSpacing: '0.04em'
+                    }
+                  }, row.label),
+                  e('span', {
+                    title: row.title || String(row.value),
+                    style: {
+                      flex: '1 1 auto', minWidth: 0, wordBreak: 'break-word',
+                      display: 'inline-flex', alignItems: 'center', gap: 5,
+                      color: row.color ? undefined : 'var(--kt-editor-fg)'
+                    }
+                  },
+                    row.color ? e('span', {
+                      style: {
+                        width: 8, height: 8, borderRadius: 2, flex: '0 0 auto',
+                        background: tint(row.color, 0.8)
+                      }
+                    }) : null,
+                    e('span', null, String(row.value))
+                  )
+                );
+              })
+            )
+          )
         )
       ),
 
       groupsOpen ? e('div', {
+        // Layers moved into the rail beside the grid, so the group manager
+        // owns this whole column and gets the extra width.
         style: {
-          flex: '0 0 268px',
+          flex: '0 0 320px',
           minWidth: 0,
-          display: 'flex', flexDirection: 'column', gap: 8,
+          display: 'flex', flexDirection: 'column',
           padding: 8,
           borderLeft: '1px solid var(--kt-widget-border-default)',
           background: 'var(--kt-sidebar-bg)',
           overflow: 'hidden'
         }
       },
-        e(K.ui.KtBox, {
-          id: 'hex-layers',
-          title: 'Layers',
-          bodyStyle: { padding: 8, overflow: 'auto' },
-          style: { flex: '0 0 auto', maxHeight: '58%' }
-        },
-          e(LayerLegend, {
-            layers: t.highlightLayers,
-            onToggle: K.hex.toggleHighlightLayer,
-            sections: sections,
-            onGoto: K.hex.gotoOffset,
-            cursorOffset: t.cursorOffset
-          })
-        ),
-
         e(K.ui.KtBox, {
           id: 'hex-groups',
           title: 'Groups (' + groups.length + ')',
