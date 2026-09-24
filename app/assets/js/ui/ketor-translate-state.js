@@ -8,6 +8,16 @@
    Auto-translate responsibilities.
    ============================================================ */
 
+/* ============================================================
+   Ketor Translate State (v3)
+   ------------------------------------------------------------
+   Batch 19: measureBytes() reports the exact number of bytes a
+   translation will occupy, using the same master map, token
+   filter and encoder options the build worker uses, so the size
+   shown next to a box can never disagree with the ROM that gets
+   written. isTranslating drives the Auto Translate button.
+   ============================================================ */
+
 (function (global) {
   'use strict';
   var K = global.Ketor = global.Ketor || {};
@@ -22,6 +32,7 @@
     selectedOffset: null,
     modifiedRom: null,
     isBusy: false, status: '', progress: 0,
+    isTranslating: false, translatingOffset: null,
     sourceLang: 'en', targetLang: 'id',
     providerMode: 'free',
     providerId: 'openai',
@@ -138,6 +149,57 @@
   var _apiKeyCache = '';
   function setProviderApiKey(v) { _apiKeyCache = String(v || ''); }
   function getProviderApiKey() { return _apiKeyCache; }
+
+  /* ---- Byte measurement ------------------------------------------
+     The build worker builds its master map from singleByte/multiByte,
+     filters bracket tokens out unless the table has multi byte entries
+     or padding is on, and calls the encoder with no encode options,
+     which leaves DTE/MTE enabled. Mirroring all of that here is the
+     only way the Size readout and the built ROM can agree. */
+  var _measure = { table: null, tokenizer: null, map: null };
+
+  function _measureTools(tableData) {
+    if (_measure.table === tableData && _measure.tokenizer) return _measure;
+    var lg = K.legacy || {};
+    if (typeof lg.createTokenizer !== 'function') return null;
+
+    var target = {};
+    _buildMasterMap(tableData, target);
+    var map = new Map();
+    var hasMultiByte = false;
+    Object.keys(target).forEach(function (k) {
+      var bytes = target[k];
+      map.set(k, bytes);
+      if (bytes && bytes.length > 1) hasMultiByte = true;
+    });
+    if (!map.size) return null;
+
+    var tokens = [];
+    map.forEach(function (val, key) {
+      var upper = String(key).toUpperCase();
+      var isLineToken = upper === '[LINE]' || upper === '[NEWLINE]';
+      var isBracketToken = key.length > 1 &&
+        key.charAt(0) === '[' && key.charAt(key.length - 1) === ']';
+      if (key.length > 0 && (!isBracketToken || hasMultiByte || isLineToken)) tokens.push(key);
+    });
+    if (!tokens.length) return null;
+
+    _measure = { table: tableData, tokenizer: lg.createTokenizer(tokens), map: map };
+    return _measure;
+  }
+
+  function measureBytes(text) {
+    var value = String(text == null ? '' : text);
+    if (!value) return 0;
+    var lg = K.legacy || {};
+    var tools = _measureTools(_state.tableData);
+    if (!tools || typeof lg.getSmartByteLength !== 'function') return value.length;
+    try {
+      return lg.getSmartByteLength(value, tools.tokenizer, tools.map, false, null);
+    } catch (_) {
+      return value.length;
+    }
+  }
 
   // ---- UI (filter, page, selection) ----
   function setFilter(f) { _set({ filter: String(f || ''), page: 1 }); }
@@ -299,6 +361,10 @@
 
   // ---- Auto-translate ----
   // startByte is the entry key. Writes result via K.search.setTranslatedText.
+  function _setTranslating(active, offset) {
+    _set({ isTranslating: !!active, translatingOffset: active ? Number(offset) : null });
+  }
+
   function autoTranslateText(startByte) {
     var tr = K.core && K.core.translate;
     if (typeof tr !== 'function') { _set({ status: 'Translator not available.' }); return; }
@@ -326,13 +392,16 @@
       };
     }
 
+    _setTranslating(true, sb);
     _set({ status: 'Translating ' + row.offset + '...' });
     tr(src, _state.sourceLang, _state.targetLang, options)
       .then(function (r) {
         K.search.setTranslatedText(sb, r.text);
+        _setTranslating(false);
         _set({ status: 'Translated ' + row.offset + ' via ' + r.provider + '.' });
       })
       .catch(function (e) {
+        _setTranslating(false);
         _set({ status: 'Translate failed: ' + (e.message || '') });
       });
   }
@@ -351,6 +420,7 @@
   K.translate.useTranslate = useTranslate;
   K.translate.loadTableContent = loadTableContent;
   K.translate.extractTexts = extractTexts;
+  K.translate.measureBytes = measureBytes;
   K.translate.getActiveGroupId = getActiveGroupId;
   K.translate.getActiveGroupEntries = getActiveGroupEntries;
   K.translate.setFilter = setFilter;
