@@ -113,16 +113,25 @@
     status: ''
   };
 
+  // Keys that survive a reload. A translation edit changes only `texts`,
+  // and writing groups plus filters to sessionStorage on every keystroke is
+  // what made typing in the Translation activity feel heavy.
+  var PERSISTED_KEYS = {
+    extractionOptions: true, filter: true, marked: true,
+    groups: true, selectedGroupId: true, expandedGroups: true, page: true
+  };
+
   var _listeners = new Set();
   function _set(p) {
-    var changed = false, next = _state;
+    var changed = false, next = _state, persistNeeded = false;
     Object.keys(p).forEach(function (k) {
       if (_state[k] !== p[k]) {
         if (!changed) { next = Object.assign({}, _state); changed = true; }
         next[k] = p[k];
+        if (PERSISTED_KEYS[k] === true) persistNeeded = true;
       }
     });
-    if (changed) { _state = next; _notify(); _persist(); }
+    if (changed) { _state = next; _notify(); if (persistNeeded) _persist(); }
   }
   function _notify() { _listeners.forEach(function (f) { try { f(); } catch (_) { } }); }
   function getState() { return _state; }

@@ -18,6 +18,12 @@
    The pointer/table property panel from Kruptar7 is deliberately
    not reproduced: pointers are handled per console through
    getSystemProfile().
+
+   Batch 20: typing no longer writes to the registry on every
+   keystroke, the language pickers are real selects, the provider
+   list comes from core/translator.js (DeepSeek and the rest),
+   and the free text filter became a status filter plus a jump to
+   the next untranslated entry.
    ============================================================ */
 
 (function (global) {
@@ -36,8 +42,8 @@
   var MONO = 'var(--kt-font-mono)';
 
   /* Languages offered by the free chain (MyMemory, Google, LibreTranslate,
-     Apertium) plus a few common ones. The field is a datalist input, so any
-     other ISO code can be typed by hand. */
+     Apertium) plus a few common ones. The select falls back to showing any
+     code that is not listed, so a value loaded from a project still displays. */
   var LANGUAGES = [
     ['en', 'English'], ['id', 'Indonesian'], ['ja', 'Japanese'], ['ko', 'Korean'],
     ['zh', 'Chinese (Simplified)'], ['zh-TW', 'Chinese (Traditional)'],
@@ -186,21 +192,44 @@
     var caretPos = caretSt[0];
     var setCaretPos = caretSt[1];
     var editingRef = uR(false);
+    var pendingRef = uR(null);
+    var latestRef = uR(local);
 
     // Another entry was selected (or Auto Translate landed): take the registry
     // value unless the user is typing in this box right now.
     uE(function () {
-      if (!editingRef.current) setLocal(String(props.value || ''));
+      if (editingRef.current) return;
+      var next = String(props.value || '');
+      latestRef.current = next;
+      setLocal(next);
     }, [props.value, props.offset]);
+
+    var commit = uC(function (value) { props.onChange(value); }, [props.onChange]);
+
+    // Every committed keystroke used to write to the registry, which
+    // re-renders the editor, the sidebar, the session panel and the project
+    // tab, and used to rewrite sessionStorage as well. Typing now stays
+    // local and lands in the registry a moment after the last keystroke.
+    var push = uC(function (value) {
+      latestRef.current = value;
+      setLocal(value);
+      if (pendingRef.current) clearTimeout(pendingRef.current);
+      pendingRef.current = setTimeout(function () {
+        pendingRef.current = null;
+        commit(latestRef.current);
+      }, 350);
+    }, [commit]);
+
+    var flush = uC(function () {
+      if (!pendingRef.current) return;
+      clearTimeout(pendingRef.current);
+      pendingRef.current = null;
+      commit(latestRef.current);
+    }, [commit]);
 
     var caret = caretInfo(local, caretPos);
     var size = props.measure(local);
     var overflow = overflowOf(size, props.originalSize);
-
-    var push = uC(function (value) {
-      setLocal(value);
-      props.onChange(value);
-    }, [props.onChange]);
 
     return e('div', {
       style: {
@@ -229,7 +258,7 @@
         spellCheck: false,
         onChange: function (ev) { push(ev.target.value); },
         onFocus: function () { editingRef.current = true; },
-        onBlur: function () { editingRef.current = false; },
+        onBlur: function () { editingRef.current = false; flush(); },
         onSelect: function (ev) { setCaretPos(ev.target.selectionStart || 0); },
         onKeyUp: function (ev) { setCaretPos(ev.target.selectionStart || 0); },
         onClick: function (ev) { setCaretPos(ev.target.selectionStart || 0); },
@@ -295,24 +324,28 @@
     );
   }
 
-  function LangField(props) {
-    var id = 'kt-lang-' + props.name;
+  /* A real select: the datalist popup rendered detached from the field, which
+     looked like it belonged to the sidebar. A code that is not in the list is
+     still offered as its own option so the control never shows blank. */
+  function LangSelect(props) {
+    var value = String(props.value || '');
+    var known = false;
+    LANGUAGES.forEach(function (l) { if (l[0] === value) known = true; });
     return e('label', {
       style: { display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, whiteSpace: 'nowrap' },
       title: props.title
     },
       props.label,
-      e('input', {
-        list: id,
-        className: 'kt-input',
-        value: props.value,
+      e('select', {
+        className: 'kt-select',
+        value: value,
         onChange: function (ev) { props.onChange(ev.target.value); },
-        style: { width: 96, fontFamily: MONO, fontSize: 11 }
-      }),
-      e('datalist', { id: id },
+        style: { width: 132, fontSize: 11 }
+      },
         LANGUAGES.map(function (l) {
-          return e('option', { key: l[0], value: l[0] }, l[1]);
-        })
+          return e('option', { key: l[0], value: l[0] }, l[0] + '  ' + l[1]);
+        }),
+        known ? null : e('option', { value: value }, value || '(none)')
       )
     );
   }
@@ -337,15 +370,24 @@
       return K.search.getTextsByGroup(activeGroupId);
     }, [s ? s.texts : null, s ? s.groups : null, activeGroupId]);
 
+    /* The old free text filter searched inside one group, where the list is
+       short enough to scan by eye. What a translator actually needs is to see
+       only the work that is left, or only what does not fit, so the field now
+       selects by status and the toolbar carries a jump to the next untranslated
+       entry. */
+    var status = String(t.filter || 'all') || 'all';
     var filtered = uM(function () {
-      var f = String(t.filter || '').trim().toLowerCase();
-      if (!f) return entries;
+      if (status === 'all') return entries;
       return entries.filter(function (row) {
-        return String(row.originalText || '').toLowerCase().indexOf(f) >= 0 ||
-          String(row.translatedText || '').toLowerCase().indexOf(f) >= 0 ||
-          String(row.offset || '').toLowerCase().indexOf(f) >= 0;
+        var done = String(row.translatedText || '').trim().length > 0;
+        if (status === 'untranslated') return !done;
+        if (status === 'translated') return done;
+        if (status === 'overflow') {
+          return done && K.translate.measureBytes(row.translatedText) > (row.byteLength || 0);
+        }
+        return true;
       });
-    }, [entries, t.filter]);
+    }, [entries, status]);
 
     var total = filtered.length;
     var perPage = t.perPage || 40;
@@ -376,6 +418,24 @@
     var onAuto = uC(function () {
       if (active) K.translate.autoTranslateText(active.startByte);
     }, [active]);
+
+    // Walks the whole group, not just the visible page, and wraps.
+    var onNextUntranslated = uC(function () {
+      if (!entries.length) return;
+      var from = 0;
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i] === active) { from = i + 1; break; }
+      }
+      for (var step = 0; step < entries.length; step++) {
+        var row = entries[(from + step) % entries.length];
+        if (!String(row.translatedText || '').trim()) {
+          K.translate.selectOffset(row.startByte);
+          K.translate.setFilter(status);
+          return;
+        }
+      }
+      K.translate.selectOffset(entries[0].startByte);
+    }, [entries, active, status]);
 
     var onGotoHex = uC(function () {
       if (!active) return;
@@ -438,6 +498,10 @@
     }
 
     var freeMode = t.providerMode !== 'custom';
+    var providers = (K.core && K.core.TRANSLATOR_PROVIDERS) || [];
+    var currentProvider = (K.core && typeof K.core.getTranslatorProvider === 'function')
+      ? K.core.getTranslatorProvider(t.providerId) : null;
+    var providerKind = currentProvider ? currentProvider.kind : 'chat';
 
     return e('div', {
       style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden' }
@@ -460,14 +524,24 @@
             paddingBottom: 1
           }
         }, activeGroup ? activeGroup.name : '\u2014'),
-        e('input', {
-          type: 'text',
-          className: 'kt-input',
-          placeholder: 'Filter by original, translation, or offset...',
-          value: t.filter,
+        e('select', {
+          className: 'kt-select',
+          value: status,
+          title: 'Show only part of the group',
           onChange: function (ev) { K.translate.setFilter(ev.target.value); },
-          style: { flex: '1 1 200px', minWidth: 160 }
-        }),
+          style: { fontSize: 11, width: 148 }
+        },
+          e('option', { value: 'all' }, 'All entries'),
+          e('option', { value: 'untranslated' }, 'Untranslated'),
+          e('option', { value: 'translated' }, 'Translated'),
+          e('option', { value: 'overflow' }, 'Longer than original')
+        ),
+        e('button', {
+          type: 'button', className: 'kt-btn small',
+          onClick: onNextUntranslated,
+          disabled: !entries.length,
+          title: 'Jump to the next entry in this group that has no translation'
+        }, 'Next untranslated'),
         e('span', {
           style: { fontSize: 11, color: 'var(--kt-sidebar-fg)', display: 'flex', gap: 12, whiteSpace: 'nowrap' }
         },
@@ -558,14 +632,14 @@
           title: 'Translate this entry with the selected provider'
         }, t.isTranslating ? 'Translating...' : 'Auto Translate'),
 
-        e(LangField, {
+        e(LangSelect, {
           name: 'src', label: 'From', value: t.sourceLang,
-          title: 'Source language code',
+          title: 'Source language',
           onChange: K.translate.setSourceLang
         }),
-        e(LangField, {
+        e(LangSelect, {
           name: 'tgt', label: 'To', value: t.targetLang,
-          title: 'Target language code',
+          title: 'Target language',
           onChange: K.translate.setTargetLang
         }),
 
@@ -586,19 +660,16 @@
           )
         ),
 
-        !freeMode ? e('label', {
-          style: { display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, whiteSpace: 'nowrap' }
+        !freeMode ? e('select', {
+          className: 'kt-select',
+          value: t.providerId,
+          title: 'Translation provider. The list comes from core/translator.js.',
+          onChange: function (ev) { K.translate.setProvider(ev.target.value); },
+          style: { fontSize: 11, width: 186 }
         },
-          'API',
-          e('select', {
-            className: 'kt-select',
-            value: t.providerId,
-            onChange: function (ev) { K.translate.setProviderId(ev.target.value); },
-            style: { fontSize: 11, width: 78 }
-          },
-            e('option', { value: 'openai' }, 'OpenAI'),
-            e('option', { value: 'deepl' }, 'DeepL')
-          )
+          providers.map(function (p) {
+            return e('option', { key: p.id, value: p.id }, p.label);
+          })
         ) : null,
 
         !freeMode ? e('input', {
@@ -611,13 +682,24 @@
           style: { width: 168, fontSize: 11 }
         }) : null,
 
-        !freeMode && t.providerId === 'openai' ? e('input', {
+        !freeMode && providerKind === 'chat' ? e('input', {
           type: 'text',
           className: 'kt-input',
           placeholder: 'model',
           value: t.providerModel,
           onChange: function (ev) { K.translate.setProviderModel(ev.target.value); },
-          style: { width: 120, fontSize: 11, fontFamily: MONO }
+          title: 'Model id. Defaults come from the provider list; model names change, so this stays editable.',
+          style: { width: 150, fontSize: 11, fontFamily: MONO }
+        }) : null,
+
+        !freeMode && t.providerId === 'custom' ? e('input', {
+          type: 'text',
+          className: 'kt-input',
+          placeholder: 'https://endpoint/v1/chat/completions',
+          value: t.providerEndpoint,
+          onChange: function (ev) { K.translate.setProviderEndpoint(ev.target.value); },
+          title: 'Endpoint for the custom provider. Any OpenAI compatible server works.',
+          style: { width: 250, fontSize: 11, fontFamily: MONO }
         }) : null,
 
         e('span', { style: { flex: 1 } }),

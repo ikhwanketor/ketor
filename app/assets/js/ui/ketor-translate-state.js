@@ -37,6 +37,7 @@
     sourceLang: 'en', targetLang: 'id',
     providerMode: 'free',
     providerId: 'openai',
+    providerEndpoint: '',
     providerModel: 'gpt-4o-mini'
   };
 
@@ -143,7 +144,21 @@
     _set({ providerMode: mode === 'custom' ? 'custom' : 'free' });
   }
   function setProviderId(id) { _set({ providerId: String(id || 'openai') }); }
-  function setProviderModel(m) { _set({ providerModel: String(m || 'gpt-4o-mini') }); }
+  function setProviderModel(m) { _set({ providerModel: String(m || '') }); }
+  function setProviderEndpoint(url) { _set({ providerEndpoint: String(url || '') }); }
+
+  /* Switching provider pulls that provider's default endpoint and model so
+     the form is never left pointing at the previous provider. Both stay
+     editable, because model names change faster than this file does. */
+  function setProvider(id) {
+    var p = (K.core && typeof K.core.getTranslatorProvider === 'function')
+      ? K.core.getTranslatorProvider(id) : null;
+    _set({
+      providerId: String(id || 'openai'),
+      providerEndpoint: p ? p.endpoint : '',
+      providerModel: p ? p.model : ''
+    });
+  }
 
   // API key is stored outside state so it can never leak through
   // exportCsv / project save. Kept in module-scope only.
@@ -574,12 +589,16 @@
     if (!src.trim()) return;
 
     var options = { onProgress: function () { } };
-    if (_state.providerMode === 'custom' && _apiKeyCache) {
+    if (_state.providerMode === 'custom') {
+      if (!_apiKeyCache) {
+        _set({ status: 'Set an API key for ' + _state.providerId + ' first.' });
+        return;
+      }
+      // The endpoint comes from the provider registry unless the user is on
+      // the custom entry and supplied one.
       options.customApi = {
         provider: _state.providerId,
-        endpoint: _state.providerId === 'deepl'
-          ? 'https://api-free.deepl.com/v2/translate'
-          : 'https://api.openai.com/v1/chat/completions',
+        endpoint: _state.providerEndpoint || '',
         apiKey: _apiKeyCache,
         model: _state.providerModel
       };
@@ -623,6 +642,8 @@
   K.translate.setTargetLang = setTargetLang;
   K.translate.setProviderMode = setProviderMode;
   K.translate.setProviderId = setProviderId;
+  K.translate.setProvider = setProvider;
+  K.translate.setProviderEndpoint = setProviderEndpoint;
   K.translate.setProviderModel = setProviderModel;
   K.translate.setProviderApiKey = setProviderApiKey;
   K.translate.getProviderApiKey = getProviderApiKey;

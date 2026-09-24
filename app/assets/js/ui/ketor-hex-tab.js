@@ -897,13 +897,7 @@
             }) : null
           ),
 
-          e('button', {
-            type: 'button', className: 'kt-btn small',
-            onClick: function () { K.hex.exportPatchedRom(); },
-            disabled: patchCount === 0,
-            title: 'Download a copy of the ROM with every patch applied'
-          }, 'Export Patched ROM (' + patchCount + ')'),
-
+          // Exporting the patched ROM moves to the Patch & Export activity.
           e('button', {
             type: 'button', className: 'kt-btn small secondary',
             onClick: function () {
