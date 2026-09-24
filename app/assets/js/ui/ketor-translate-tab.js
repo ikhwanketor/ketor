@@ -71,11 +71,11 @@
 
   function pad6(n) { return String(n).padStart(6, '0'); }
 
-  /* The list is one line per entry. A real line break inside a row would give
-     the rows different heights, and the table token would show up as a control
-     code, so a break is drawn as a marker instead. */
-  function oneLine(text) {
-    return K.translate.toDisplay(text).split('\n').join(' \u21b5 ');
+  /* The list shows the text the way the boxes below it do: real line breaks,
+     no table tokens and no marker characters. A row grows with its text, the
+     way Kruptar's list does. */
+  function listText(text) {
+    return K.translate.toDisplay(text);
   }
 
   function overflowOf(byteLen, originalLen) {
@@ -386,8 +386,8 @@
     var row = props.row;
     var active = props.active;
     var overflow = overflowOf(props.size, K.translate.measureOriginal(row));
-    var original = oneLine(row.originalText);
-    var translation = oneLine(row.translatedText);
+    var original = listText(row.originalText);
+    var translation = listText(row.translatedText);
 
     return e('div', {
       onClick: function () { props.onSelect(row.startByte); },
@@ -406,13 +406,13 @@
       e('span', {
         style: {
           flex: '1 1 auto', minWidth: 0,
-          whiteSpace: 'pre', overflow: 'hidden', textOverflow: 'ellipsis'
+          whiteSpace: 'pre-wrap', wordBreak: 'break-word'
         }
       }, original),
       translation ? e('span', {
         style: {
           flex: '0 1 34%', minWidth: 0, opacity: 0.75,
-          whiteSpace: 'pre', overflow: 'hidden', textOverflow: 'ellipsis'
+          whiteSpace: 'pre-wrap', wordBreak: 'break-word'
         }
       }, '\u2192 ' + translation) : null,
       overflow ? e('span', {

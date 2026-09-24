@@ -1515,15 +1515,38 @@ window.__PT_APP_READY__ = false;
         if (isGbaNonPaddingProfile && sortedTexts.length > 0) {
           const container = detectContainerAnchor(sortedTexts[0].startByte);
           if (container && Number.isFinite(container.anchorOffset) && container.anchorOffset < effectiveBlockStart) {
-            effectiveBlockStart = container.anchorOffset;
-            if (Number.isFinite(container.nextTargetOffset)) {
-              const candidateEnd = Math.min(originalRom.length - 1, container.nextTargetOffset - 1);
-              if (candidateEnd > effectiveBlockEnd) effectiveBlockEnd = candidateEnd;
+            // One pointer target can describe a whole run of texts: on this
+            // ROM the pointer aims at 0xEA7C8 while seven texts follow it, and
+            // the next pointer entry aims at 0xEAB54. Taking that anchor for
+            // every one of those texts made each of them rewrite the whole run
+            // from 0xEA7C8, so only the last text of the group survived.
+            // The anchor belongs to the first text of the run only.
+            const anchor = container.anchorOffset;
+            const textStart = Number(sortedTexts[0].startByte);
+            const candidateEnd = Number.isFinite(container.nextTargetOffset)
+              ? Math.min(originalRom.length - 1, container.nextTargetOffset - 1)
+              : effectiveBlockEnd;
+            const earlierTextInside = allTexts.some(t => Number.isFinite(t.startByte) &&
+              Number(t.startByte) !== textStart &&
+              Number(t.startByte) >= anchor && Number(t.startByte) < textStart);
+            if (earlierTextInside) {
+              relocationLog.push(`Block at 0x${textStart.toString(16).toUpperCase()}: Container 0x${anchor.toString(16).toUpperCase()} starts an earlier text; keeping this text's own offset.`);
+            } else {
+              effectiveBlockStart = anchor;
+              // The end may only grow to the container end when this is the
+              // only text in it, otherwise the block would swallow the texts
+              // that follow and the filler would erase them.
+              const laterTextInside = allTexts.some(t => Number.isFinite(t.startByte) &&
+                Number(t.startByte) !== textStart &&
+                Number(t.startByte) > textStart && Number(t.startByte) <= candidateEnd);
+              if (!laterTextInside && candidateEnd > effectiveBlockEnd) {
+                effectiveBlockEnd = candidateEnd;
+              }
+              const nextLabel = Number.isFinite(container.nextTargetOffset)
+                ? `, next 0x${container.nextTargetOffset.toString(16).toUpperCase()}`
+                : '';
+              relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: Container anchor 0x${anchor.toString(16).toUpperCase()} (hits x${container.pointerCount}${nextLabel}${laterTextInside ? ', shared by later texts' : ''}).`);
             }
-            const nextLabel = Number.isFinite(container.nextTargetOffset)
-              ? `, next 0x${container.nextTargetOffset.toString(16).toUpperCase()}`
-              : '';
-            relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: Container anchor 0x${container.anchorOffset.toString(16).toUpperCase()} (hits x${container.pointerCount}${nextLabel}).`);
           }
         }
         if (isGbaNonPaddingProfile) {
