@@ -9,8 +9,9 @@
      - Compile every group at once,
      - Save the whole translation progress as <rom>.ketor,
      - Load it back.
-   Exporting a patched ROM belongs to the Patch & Export activity,
-   so this sidebar only offers the compiled download.
+   Exporting a ROM belongs to the Patch & Export activity, so this
+   sidebar never offers a download: a finished compile is reported and
+   the bytes stay in state for that activity to pick up.
    ============================================================ */
 
 (function (global) {
@@ -72,7 +73,6 @@
       var inp = document.getElementById('kt-input-project');
       if (inp) inp.click();
     }, []);
-    var onDownload = uC(function () { K.translate.downloadModifiedRom(); }, []);
     var onExportCsv = uC(function () { K.translate.exportCsv(); }, []);
     var onImportCsv = uC(function () {
       var inp = document.getElementById('kt-input-csv');
@@ -143,11 +143,16 @@
           title: 'Restores groups and translations from a saved .ketor file.',
           onClick: onLoadProject
         }),
-        t.modifiedRom ? e(Action, {
-          label: 'Download Compiled ROM (' + formatBytes(t.modifiedRom.length) + ')',
-          title: 'Saves the compiled ROM to disk.',
-          onClick: onDownload
-        }) : null,
+        // No download here on purpose: getting a patched ROM out of the app
+        // belongs to the Patch & Export activity. A finished compile is only
+        // reported, so the user knows it is ready for that activity.
+        t.modifiedRom ? e('div', {
+          style: {
+            marginTop: 8, fontSize: 11,
+            color: 'var(--kt-sidebar-fg)', opacity: 0.85, lineHeight: 1.5
+          }
+        }, 'Compiled ROM ready (' + formatBytes(t.modifiedRom.length) +
+           '). Exporting it belongs to the Patch & Export activity.') : null,
         t.isBusy ? e('div', {
           style: {
             marginTop: 8, height: 4,

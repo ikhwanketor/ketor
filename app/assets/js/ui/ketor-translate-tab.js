@@ -420,6 +420,19 @@
     }, [active]);
 
     // Walks the whole group, not just the visible page, and wraps.
+    var untranslatedCount = uM(function () {
+      var n = 0;
+      for (var i = 0; i < entries.length; i++) {
+        if (!String(entries[i].translatedText || '').trim()) n++;
+      }
+      return n;
+    }, [entries]);
+
+    var batch = t.batch || { running: false, done: 0, total: 0 };
+
+    var onBatch = uC(function () { K.translate.autoTranslateGroup(activeGroupId); }, [activeGroupId]);
+    var onStopBatch = uC(function () { K.translate.stopAutoTranslateGroup(); }, []);
+
     var onNextUntranslated = uC(function () {
       if (!entries.length) return;
       var from = 0;
@@ -630,7 +643,28 @@
           onClick: onAuto,
           disabled: !active || t.isTranslating,
           title: 'Translate this entry with the selected provider'
-        }, t.isTranslating ? 'Translating...' : 'Auto Translate'),
+        }, t.isTranslating && !batch.running ? 'Translating...' : 'Auto Translate'),
+
+        // Kruptar works a group at a time, and so does a translator: the
+        // slowest part of the job is feeding entries through one by one.
+        batch.running
+          ? e('span', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+              e('span', { className: 'kt-spinner' }),
+              e('span', {
+                style: { fontSize: 11, fontFamily: MONO, whiteSpace: 'nowrap' }
+              }, 'Group ' + batch.done + '/' + batch.total),
+              e('button', {
+                type: 'button', className: 'kt-btn small',
+                onClick: onStopBatch,
+                title: 'Stop after the request in flight'
+              }, 'Stop')
+            )
+          : e('button', {
+              type: 'button', className: 'kt-btn small',
+              onClick: onBatch,
+              disabled: !entries.length,
+              title: 'Translate every entry of this group that has no translation yet, one request at a time'
+            }, 'Auto Translate Group (' + untranslatedCount + ')'),
 
         e(LangSelect, {
           name: 'src', label: 'From', value: t.sourceLang,

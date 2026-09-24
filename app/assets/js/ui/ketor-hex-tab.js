@@ -958,8 +958,10 @@
             e(K.ui.KtBox, {
               id: 'hex-layers',
               title: 'Layers',
-              bodyStyle: { padding: 8, overflow: 'auto' },
-              style: { flex: '1 1 auto', minHeight: 0 }
+              // Sized to its content: the legend ends exactly at the last ROM
+              // layout row, so no empty box is left above the readout.
+              bodyStyle: { padding: 8, overflow: 'visible' },
+              style: { flex: '0 0 auto', minHeight: 0 }
             },
               e(LayerLegend, {
                 layers: t.highlightLayers,

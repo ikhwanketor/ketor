@@ -34,6 +34,7 @@
     isBusy: false, status: '', progress: 0,
     isTranslating: false, translatingOffset: null,
     compileScope: 'all',
+    batch: { running: false, done: 0, total: 0 },
     sourceLang: 'en', targetLang: 'id',
     providerMode: 'free',
     providerId: 'openai',
@@ -303,6 +304,17 @@
         (appliedPatches ? ' with ' + appliedPatches + ' hex patch(es) applied' : '') + '...'
     });
 
+    var systemProfile = (K.workflow && typeof K.workflow.getSystemProfile === 'function')
+      ? K.workflow.getSystemProfile() : null;
+    var system = {
+      name: (systemProfile && systemProfile.name) || _state.romSystem || 'Unknown',
+      terminator: (systemProfile && Array.isArray(systemProfile.terminator) && systemProfile.terminator.length)
+        ? systemProfile.terminator.slice() : [0x00],
+      pointerSize: (systemProfile && Number(systemProfile.pointerSize)) || 4,
+      pointerEndianness: (systemProfile && systemProfile.pointerEndianness) || 'little',
+      pointerBase: (systemProfile && Number(systemProfile.pointerBase)) || 0
+    };
+
     var mch = {};
     _buildMasterMap(_state.tableData, mch);
     Object.keys(mch).forEach(function (k) {
@@ -335,10 +347,12 @@
         appliedPatches: appliedPatches,
         allTexts: buildTexts,
         tableData: { masterCharToHex: mch },
-        system: {
-          name: _state.romSystem, terminator: [0x00],
-          pointerSize: 4, pointerEndianness: 'little', pointerBase: 0
-        },
+        // The console's own pointer profile, not a generic one. The NES uses
+        // 2 byte pointers based at $8000, the GBA 4 byte pointers based at
+        // $08000000, the Game Boy bank relative pairs, and each console has
+        // its own terminator. A generic profile here writes pointers the game
+        // cannot follow, which is what made a compiled ROM unusable.
+        system: system,
         usePaddingByte: false,
         pointerGroups: []
       }
@@ -593,6 +607,80 @@
     _set({ isTranslating: !!active, translatingOffset: active ? Number(offset) : null });
   }
 
+  /* Batch translation for one group. Requests go out one at a time because
+     the free providers rate limit bursts, and the run can be stopped. */
+  var _batch = { running: false, stop: false, done: 0, total: 0 };
+
+  function _translateEntry(row) {
+    var tr = K.core && K.core.translate;
+    if (typeof tr !== 'function') return Promise.reject(new Error('Translator not available'));
+    var options = { onProgress: function () { } };
+    if (_state.providerMode === 'custom') {
+      if (!_apiKeyCache) return Promise.reject(new Error('No API key set for ' + _state.providerId));
+      options.customApi = {
+        provider: _state.providerId,
+        endpoint: _state.providerEndpoint || '',
+        apiKey: _apiKeyCache,
+        model: _state.providerModel
+      };
+    }
+    return tr(String(row.originalText || ''), _state.sourceLang, _state.targetLang, options)
+      .then(function (r) {
+        K.search.setTranslatedText(row.startByte, r.text);
+        return r;
+      });
+  }
+
+  function autoTranslateGroup(groupId) {
+    if (_batch.running) return;
+    var gid = groupId || (K.search && K.search.getState().selectedGroupId);
+    if (!gid) { _set({ status: 'Select a group first.' }); return; }
+    var entries = K.search.getTextsByGroup(gid).filter(function (t) {
+      return String(t.originalText || '').trim() && !String(t.translatedText || '').trim();
+    });
+    if (!entries.length) {
+      _set({ status: 'Every text in this group already has a translation.' });
+      return;
+    }
+
+    _batch = { running: true, stop: false, done: 0, total: entries.length };
+    _set({ batch: { running: true, done: 0, total: entries.length }, isTranslating: true });
+
+    var index = 0;
+    var failures = 0;
+    function step() {
+      if (_batch.stop || index >= entries.length) {
+        var stopped = _batch.stop;
+        _batch.running = false;
+        _set({
+          batch: { running: false, done: _batch.done, total: _batch.total },
+          isTranslating: false,
+          status: (stopped ? 'Stopped after ' : 'Group translated: ') + _batch.done + ' of ' + _batch.total +
+            (failures ? ', ' + failures + ' failed' : '') + '.'
+        });
+        return;
+      }
+      var row = entries[index++];
+      _translateEntry(row)
+        .then(function () { _batch.done++; })
+        .catch(function () { failures++; })
+        .then(function () {
+          _set({
+            batch: { running: true, done: _batch.done, total: _batch.total },
+            status: 'Translating group: ' + _batch.done + '/' + _batch.total +
+              ' (' + String(row.offset || '') + ')'
+          });
+          step();
+        });
+    }
+    step();
+  }
+
+  function stopAutoTranslateGroup() {
+    if (!_batch.running) return;
+    _batch.stop = true;
+  }
+
   function autoTranslateText(startByte) {
     var tr = K.core && K.core.translate;
     if (typeof tr !== 'function') { _set({ status: 'Translator not available.' }); return; }
@@ -608,27 +696,10 @@
     var src = row.originalText || '';
     if (!src.trim()) return;
 
-    var options = { onProgress: function () { } };
-    if (_state.providerMode === 'custom') {
-      if (!_apiKeyCache) {
-        _set({ status: 'Set an API key for ' + _state.providerId + ' first.' });
-        return;
-      }
-      // The endpoint comes from the provider registry unless the user is on
-      // the custom entry and supplied one.
-      options.customApi = {
-        provider: _state.providerId,
-        endpoint: _state.providerEndpoint || '',
-        apiKey: _apiKeyCache,
-        model: _state.providerModel
-      };
-    }
-
     _setTranslating(true, sb);
     _set({ status: 'Translating ' + row.offset + '...' });
-    tr(src, _state.sourceLang, _state.targetLang, options)
+    _translateEntry(row)
       .then(function (r) {
-        K.search.setTranslatedText(sb, r.text);
         _setTranslating(false);
         _set({ status: 'Translated ' + row.offset + ' via ' + r.provider + '.' });
       })
@@ -674,6 +745,8 @@
   K.translate.exportCsv = exportCsv;
   K.translate.importCsvContent = importCsvContent;
   K.translate.autoTranslateText = autoTranslateText;
+  K.translate.autoTranslateGroup = autoTranslateGroup;
+  K.translate.stopAutoTranslateGroup = stopAutoTranslateGroup;
   K.translate.reset = reset;
   K.translate.setRomFromLoad = setRomFromLoad;
 
