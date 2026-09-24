@@ -43,6 +43,7 @@
 
   var _listeners = new Set();
   var _workers = { table: null, build: null };
+  var _lastBuildPatches = 0;
   var _pendingTableName = null;
 
   function _set(patch) {
@@ -298,7 +299,8 @@
 
     _set({
       isBusy: true, progress: 10, compileScope: compileScope,
-      status: 'Compiling ' + buildTexts.length + ' text(s) from ' + scopeLabel + '...'
+      status: 'Compiling ' + buildTexts.length + ' text(s) from ' + scopeLabel +
+        (appliedPatches ? ' with ' + appliedPatches + ' hex patch(es) applied' : '') + '...'
     });
 
     var mch = {};
@@ -307,13 +309,30 @@
       mch[k] = Array.from(mch[k]);
     });
 
+    // Patches made in the Hex Editor are part of the ROM now, so they are
+    // applied before any text is inserted (decision R2.2 #6). The loaded
+    // buffer itself is never modified.
     var rb = _state.romBytes;
-    var romBuffer = rb.buffer.slice(rb.byteOffset, rb.byteOffset + rb.byteLength);
+    var patched = new Uint8Array(rb.buffer.slice(rb.byteOffset, rb.byteOffset + rb.byteLength));
+    var appliedPatches = 0;
+    var hexState = (K.hex && typeof K.hex.getState === 'function') ? K.hex.getState() : null;
+    if (hexState && hexState.patches) {
+      Object.keys(hexState.patches).forEach(function (key) {
+        var off = parseInt(key, 10);
+        if (Number.isFinite(off) && off >= 0 && off < patched.length) {
+          patched[off] = hexState.patches[key] & 0xFF;
+          appliedPatches++;
+        }
+      });
+    }
+    var romBuffer = patched.buffer;
+    _lastBuildPatches = appliedPatches;
 
     _workers.build.postMessage({
       type: 'buildRom',
       payload: {
         originalRom: romBuffer,
+        appliedPatches: appliedPatches,
         allTexts: buildTexts,
         tableData: { masterCharToHex: mch },
         system: {
@@ -334,9 +353,10 @@
       var bytes = p instanceof Uint8Array ? p
         : (p instanceof ArrayBuffer ? new Uint8Array(p) : new Uint8Array(p || []));
       var scopeNote = _state.compileScope === 'group' ? ' (selected group)' : ' (all groups)';
+      var patchNote = _lastBuildPatches ? ', ' + _lastBuildPatches + ' hex patch(es) applied first' : '';
       _set({
         modifiedRom: bytes, isBusy: false, progress: 100,
-        status: 'Compiled' + scopeNote + ': ' + Math.round(bytes.length / 1024) + ' KB'
+        status: 'Compiled' + scopeNote + ': ' + Math.round(bytes.length / 1024) + ' KB' + patchNote
       });
       setTimeout(function () { _set({ progress: 0 }); }, 800);
       return;

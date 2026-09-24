@@ -348,6 +348,49 @@
 
   /* ---------- patches ---------- */
 
+  /* A patched byte changes the text it belongs to. Without this the Hex
+     Editor and the Translation activity disagree about the same ROM: the
+     grid shows the new byte while Search Text and Translation keep showing
+     the string as it was extracted. The registry is the single owner of that
+     text, so the fix belongs here: decode the affected entries again from
+     the patched bytes and write the result back. */
+  function _syncRegistryFor(offsets) {
+    if (!K.search || typeof K.search.setOriginalText !== 'function') return 0;
+    if (!offsets || !offsets.length) return 0;
+    var texts = K.search.getState().texts || [];
+    if (!texts.length) return 0;
+
+    var affected = [];
+    offsets.forEach(function (raw) {
+      var off = Number(raw);
+      for (var i = 0; i < texts.length; i++) {
+        var t = texts[i];
+        var start = Number(t.startByte);
+        var len = Math.max(1, Number(t.byteLength) || 1);
+        if (off >= start && off <= start + len - 1) {
+          if (affected.indexOf(t) === -1) affected.push(t);
+          break;
+        }
+      }
+    });
+    if (!affected.length) return 0;
+
+    var changed = 0;
+    affected.forEach(function (t) {
+      var start = Number(t.startByte);
+      var len = Math.max(1, Number(t.byteLength) || 1);
+      var decoded = decodeRange(start, start + len - 1);
+      if (decoded.text && decoded.text !== String(t.originalText || '')) {
+        if (K.search.setOriginalText(start, decoded.text)) changed++;
+      }
+    });
+    return changed;
+  }
+
+  function _patchedOffsets() {
+    return Object.keys(_state.patches || {}).map(Number);
+  }
+
   function currentByte(offset) {
     var off = Number(offset);
     var patch = _state.patches[off];
@@ -378,6 +421,8 @@
       redoStack: [],
       status: 'Patched ' + _hex(off) + ': ' + _hex2(before) + ' -> ' + _hex2(val)
     });
+    var resynced = _syncRegistryFor([off]);
+    if (resynced) _set({ status: _state.status + ' · ' + resynced + ' text re-decoded' });
     _persist();
     return true;
   }
@@ -400,6 +445,7 @@
       cursorOffset: entry.offset,
       status: 'Undo ' + _hex(entry.offset) + ' -> ' + _hex2(entry.from)
     });
+    _syncRegistryFor([entry.offset]);
     _persist();
     return true;
   }
@@ -415,6 +461,7 @@
       cursorOffset: entry.offset,
       status: 'Redo ' + _hex(entry.offset) + ' -> ' + _hex2(entry.to)
     });
+    _syncRegistryFor([entry.offset]);
     _persist();
     return true;
   }
@@ -422,7 +469,10 @@
   function clearPatches() {
     if (!Object.keys(_state.patches).length) { _set({ status: 'No patches to clear.' }); return; }
     var count = Object.keys(_state.patches).length;
+    var touched = _patchedOffsets();
     _set({ patches: {}, undoStack: [], redoStack: [], status: 'Cleared ' + count + ' patch(es).' });
+    var resynced = _syncRegistryFor(touched);
+    if (resynced) _set({ status: _state.status + ' · ' + resynced + ' text re-decoded' });
     _persist();
   }
 
@@ -571,6 +621,15 @@
     var mapped = 0;
     var total = 0;
     var i = from;
+
+    // Read through the patches: what the grid shows is what gets decoded, so
+    // a marked range and a re-decode after an edit both match the screen.
+    var byteAt = function (idx) {
+      var p = _state.patches[idx];
+      if (p !== undefined) return p & 0xFF;
+      return bytes[idx] & 0xFF;
+    };
+
     while (i <= to) {
       total++;
       var hit = null;
@@ -580,12 +639,13 @@
           if (i + cand.bytes.length - 1 > to) continue;
           var same = true;
           for (var b = 0; b < cand.bytes.length; b++) {
-            if ((bytes[i + b] & 0xFF) !== cand.bytes[b]) { same = false; break; }
+            if (byteAt(i + b) !== cand.bytes[b]) { same = false; break; }
           }
           if (same) { hit = cand; break; }
         }
-        if (!hit && index.single[bytes[i] & 0xFF] !== undefined) {
-          hit = { bytes: [bytes[i] & 0xFF], char: index.single[bytes[i] & 0xFF] };
+        var single = index.single[byteAt(i)];
+        if (!hit && single !== undefined) {
+          hit = { bytes: [byteAt(i)], char: single };
         }
       }
       if (hit) {
@@ -593,7 +653,7 @@
         mapped++;
         i += hit.bytes.length;
       } else {
-        text += '[' + _hex2(bytes[i]) + ']';
+        text += '[' + _hex2(byteAt(i)) + ']';
         i += 1;
       }
     }
@@ -836,6 +896,7 @@
   K.hex.redo = redo;
   K.hex.clearPatches = clearPatches;
   K.hex.getPatchedBytes = getPatchedBytes;
+  K.hex.syncRegistryFor = _syncRegistryFor;
   K.hex.exportPatchedRom = exportPatchedRom;
   K.hex.addBookmark = addBookmark;
   K.hex.removeBookmark = removeBookmark;

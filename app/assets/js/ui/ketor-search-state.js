@@ -747,6 +747,23 @@
     if (changed) _set({ texts: next });
   }
 
+  /* Rewrites the decoded text of one entry. The Hex Editor calls this after
+     a patch so every activity shows the bytes that are actually in the ROM,
+     instead of the text as it was extracted before the edit. */
+  function setOriginalText(startByte, value) {
+    var sb = Number(startByte);
+    var val = String(value == null ? '' : value);
+    var changed = false;
+    var next = (_state.texts || []).map(function (t) {
+      if (Number(t.startByte) !== sb) return t;
+      if (String(t.originalText || '') === val) return t;
+      changed = true;
+      return Object.assign({}, t, { originalText: val });
+    });
+    if (changed) _set({ texts: next });
+    return changed;
+  }
+
   function setComment(startByte, value) {
     var sb = Number(startByte);
     var val = String(value == null ? '' : value);
@@ -952,6 +969,7 @@
   K.search.getAssignedEntries = getAssignedEntries;
   K.search.loadSnapshot = loadSnapshot;
   K.search.setComment = setComment;
+  K.search.setOriginalText = setOriginalText;
   K.search.extractTexts = extractTexts;
   K.search.refresh = refresh;
   K.search.reset = reset;
