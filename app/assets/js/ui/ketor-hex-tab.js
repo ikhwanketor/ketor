@@ -407,7 +407,14 @@
     var rafRef = uR(0);
 
     var perRow = t.bytesPerRow || 16;
-    var totalBytes = t.romBytes ? t.romBytes.length : 0;
+
+    // Batch 21: the grid can show the loaded ROM or the image the Translation
+    // activity just compiled. Both are the same session; only the bytes on
+    // screen change, and the compiled one is read only.
+    var compiledView = K.hex.isCompiledView();
+    var viewBytes = K.hex.viewBytes() || t.romBytes;
+    var viewPatches = K.hex.viewPatches();
+    var totalBytes = viewBytes ? viewBytes.length : 0;
     var totalRows = Math.max(1, Math.ceil(totalBytes / perRow));
 
     var fullHeight = totalRows * ROW_HEIGHT;
@@ -712,8 +719,8 @@
         row: r,
         rowOffset: rowOffset,
         bytesPerRow: perRow,
-        romBytes: t.romBytes,
-        patches: t.patches,
+        romBytes: viewBytes,
+        patches: viewPatches,
         cursorOffset: t.cursorOffset,
         selStart: t.selection ? t.selection.start : null,
         selEnd: t.selection ? t.selection.end : null,
@@ -863,6 +870,30 @@
             )
           ),
 
+          // Original or compiled: the same session, two images. Compiling in
+          // the Translation activity publishes the image here, so the two
+          // activities can no longer disagree about what the ROM contains.
+          e('label', {
+            style: {
+              display: 'flex', alignItems: 'center', gap: 4,
+              fontSize: 11, flex: '0 0 auto', whiteSpace: 'nowrap'
+            }
+          },
+            'Source',
+            e('select', {
+              className: 'kt-select',
+              value: compiledView ? 'compiled' : 'original',
+              title: t.compiledBytes
+                ? 'Original: the loaded ROM with your patches. Compiled: the image the Translation activity built.'
+                : 'No compiled image yet. Compile from the Translation activity.',
+              onChange: function (ev) { K.hex.setViewSource(ev.target.value); },
+              style: { width: 112, fontSize: 11 }
+            },
+              e('option', { value: 'original' }, 'Original'),
+              e('option', { value: 'compiled' }, 'Compiled')
+            )
+          ),
+
           e('button', {
             type: 'button', className: 'kt-btn small',
             onClick: function () { setGroupsOpen(!groupsOpen); },
@@ -909,6 +940,28 @@
             title: 'Discard every patch'
           }, 'Clear')
         ),
+
+        compiledView ? e('div', {
+          style: {
+            flex: '0 0 auto',
+            padding: '3px 10px',
+            fontSize: 11,
+            background: 'var(--kt-statusbar-bg)',
+            color: 'var(--kt-statusbar-fg)',
+            borderBottom: '1px solid var(--kt-widget-border-default)',
+            display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap'
+          }
+        },
+          e('span', null,
+            'Compiled image from the Translation activity (' +
+            Math.round((t.compiledBytes ? t.compiledBytes.length : 0) / 1024) + ' KB, ' +
+            (t.compiledScope === 'group' ? 'selected group' : 'all groups') + '). Read only.'),
+          e('span', { style: { flex: 1 } }),
+          e('button', {
+            type: 'button', className: 'kt-btn small secondary',
+            onClick: function () { K.hex.setViewSource('original'); }
+          }, 'Back to Original')
+        ) : null,
 
         e('div', {
           // Grid on the left, rail on the right: layers at the top of the

@@ -39,7 +39,13 @@
     providerMode: 'free',
     providerId: 'openai',
     providerEndpoint: '',
-    providerModel: 'gpt-4o-mini'
+    providerModel: 'gpt-4o-mini',
+    // Compile report. rebuildRom() already relocates an over-long text into
+    // free space and repoints the game's pointer table; these keys keep its
+    // relocationLog and a short summary so the UI can show what happened
+    // instead of throwing the report away.
+    buildLog: [],
+    buildSummary: null
   };
 
   var _listeners = new Set();
@@ -176,6 +182,58 @@
      only way the Size readout and the built ROM can agree. */
   var _measure = { table: null, tokenizer: null, map: null };
 
+  /* ---- Line break token ------------------------------------------
+     The registry stores text exactly as the build encoder needs it, so a
+     line break is the table's own token ([LINE], [NL], ...). Showing those
+     tokens inside a text box turns a sentence into "[LINE]Japan." and makes
+     the translator type control codes by hand. Both boxes therefore render
+     the token as a real line break and turn the line breaks back into the
+     token on the way to the registry, CSV and the build. */
+  var LINE_TOKEN_NAMES = ['[LINE]', '[NEWLINE]', '[NL]', '[BR]', '[LF]', '[CR]', '[CRLF]', '[RETURN]'];
+  var _lineTokenCache = { table: null, token: '' };
+
+  function lineToken() {
+    if (_lineTokenCache.table === _state.tableData) return _lineTokenCache.token;
+    var token = '';
+    var table = _state.tableData;
+    if (table) {
+      var map = {};
+      _buildMasterMap(table, map);
+      var wanted = {};
+      LINE_TOKEN_NAMES.forEach(function (n) { wanted[n] = true; });
+      var keys = Object.keys(map);
+      for (var i = 0; i < keys.length; i++) {
+        var upper = String(keys[i]).toUpperCase();
+        if (wanted[upper] !== true) continue;
+        token = String(keys[i]);
+        if (upper === '[LINE]') break;
+      }
+    }
+    _lineTokenCache = { table: table, token: token };
+    return token;
+  }
+
+  function toDisplay(text) {
+    var value = String(text == null ? '' : text);
+    var token = lineToken();
+    if (!token || value.indexOf(token) < 0) return value;
+    var parts = value.split(token);
+    var out = parts[0];
+    for (var i = 1; i < parts.length; i++) {
+      // A token at the very end is a real break the game draws, so it is kept
+      // as a newline; the trailing one only exists to close the last line.
+      out += '\n' + parts[i];
+    }
+    return out;
+  }
+
+  function fromDisplay(text) {
+    var value = String(text == null ? '' : text).replace(/\r\n?/g, '\n');
+    var token = lineToken();
+    if (!token) return value.split('\n').join(' ');
+    return value.split('\n').join(token);
+  }
+
   function _measureTools(tableData) {
     if (_measure.table === tableData && _measure.tokenizer) return _measure;
     var lg = K.legacy || {};
@@ -219,12 +277,66 @@
     }
   }
 
+  /* How much room the original text really takes.
+     The extractor reports the length of the region it scanned, and a text
+     marked by hand in the Hex Editor keeps the length of the marked range,
+     which can be longer than the text inside it (the next string starts
+     right after this one). The number that decides "does the translation
+     still fit" is what the same encoder writes for the original text, and
+     the smaller of the two is the only safe answer: a block that is assumed
+     too large makes the build overwrite the string that follows. */
+  function measureOriginal(row) {
+    if (!row) return 0;
+    var stored = Math.max(0, Number(row.byteLength) || 0);
+    var byText = 0;
+    try { byText = measureBytes(row.originalText); } catch (_) { byText = 0; }
+    if (byText > 0 && stored > 0) return Math.min(byText, stored);
+    return byText > 0 ? byText : stored;
+  }
+
   // ---- UI (filter, page, selection) ----
   function setFilter(f) { _set({ filter: String(f || ''), page: 1 }); }
   function setPage(p) { _set({ page: Math.max(1, Number(p) || 1) }); }
   function selectOffset(off) {
     var o = Number(off);
     _set({ selectedOffset: Number.isFinite(o) ? o : null });
+  }
+
+  /* ---- Group wide text tools (Batch 21) ---------------------------
+     Two jobs that a translator repeats hundreds of times and that were
+     still done by hand: fixing one wrong word everywhere in a group, and
+     throwing away the machine output of a group to start over. Both work
+     on the stored value, so a line token inside the text is untouched. */
+  function replaceInGroup(groupId, find, replace, caseSensitive) {
+    if (!K.search || !groupId) return 0;
+    var needle = String(find == null ? '' : find);
+    if (!needle) return 0;
+    var with_ = String(replace == null ? '' : replace);
+    var entries = K.search.getTextsByGroup(groupId);
+    var flags = caseSensitive ? 'g' : 'gi';
+    var pattern = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags);
+    var count = 0;
+    entries.forEach(function (row) {
+      var current = String(row.translatedText || '');
+      if (!current) return;
+      var next = current.replace(pattern, with_);
+      if (next === current) return;
+      K.search.setTranslatedText(row.startByte, next);
+      count++;
+    });
+    return count;
+  }
+
+  function clearGroupTranslations(groupId) {
+    if (!K.search || !groupId) return 0;
+    var entries = K.search.getTextsByGroup(groupId);
+    var count = 0;
+    entries.forEach(function (row) {
+      if (!String(row.translatedText || '')) return;
+      K.search.setTranslatedText(row.startByte, '');
+      count++;
+    });
+    return count;
   }
 
   function setRomFromLoad(result, systemName) {
@@ -279,6 +391,12 @@
     var buildTexts = searchTexts.filter(function (t) {
       return assigned.has(Number(t.startByte)) &&
              (t.translatedText || '').trim().length > 0;
+    }).map(function (t) {
+      // The block the build may reuse in place is the room the original text
+      // occupies, measured with the encoder that is about to write. A range
+      // length that is too generous would let the new text run into the next
+      // string instead of being relocated and repointed.
+      return Object.assign({}, t, { byteLength: measureOriginal(t) });
     });
 
     var scopeLabel = 'all groups';
@@ -368,10 +486,48 @@
         : (p instanceof ArrayBuffer ? new Uint8Array(p) : new Uint8Array(p || []));
       var scopeNote = _state.compileScope === 'group' ? ' (selected group)' : ' (all groups)';
       var patchNote = _lastBuildPatches ? ', ' + _lastBuildPatches + ' hex patch(es) applied first' : '';
+
+      // The build worker has always returned its relocation report; the UI
+      // used to drop it. An over-long translation is moved into free space
+      // and the game's own pointer is rewritten by rebuildRom(), and the only
+      // way to know whether that happened, or was refused, is this log.
+      var log = Array.isArray(d.relocationLog) ? d.relocationLog.slice() : [];
+      var relocated = 0;
+      var inPlace = 0;
+      var pointersUpdated = 0;
+      var warnings = [];
+      log.forEach(function (line) {
+        var text = String(line || '');
+        if (/Relocated to 0x[0-9A-F]+/i.test(text)) relocated++;
+        else if (/Injected in-place|Updated \d+ pointer\(s\) in-place/i.test(text)) inPlace++;
+        var pm = text.match(/Updated (\d+) pointer/);
+        if (pm) pointersUpdated += Number(pm[1]) || 0;
+        if (text.indexOf('[WARNING]') >= 0) warnings.push(text);
+      });
+      var summary = {
+        at: Date.now(),
+        bytes: bytes.length,
+        scope: _state.compileScope,
+        relocated: relocated,
+        inPlace: inPlace,
+        pointersUpdated: pointersUpdated,
+        warnings: warnings,
+        lines: log.length
+      };
+
       _set({
         modifiedRom: bytes, isBusy: false, progress: 100,
-        status: 'Compiled' + scopeNote + ': ' + Math.round(bytes.length / 1024) + ' KB' + patchNote
+        buildLog: log, buildSummary: summary,
+        status: 'Compiled' + scopeNote + ': ' + Math.round(bytes.length / 1024) + ' KB' + patchNote +
+          (relocated ? ', ' + relocated + ' text(s) relocated and repointed' : ', no relocation needed') +
+          (warnings.length ? ', ' + warnings.length + ' warning(s)' : '')
       });
+
+      // Hand the compiled image to the Hex Editor so both activities show the
+      // same bytes after a compile. Nothing is written into the loaded ROM.
+      if (K.hex && typeof K.hex.setCompiledRom === 'function') {
+        K.hex.setCompiledRom(bytes, { at: summary.at, scope: summary.scope });
+      }
       setTimeout(function () { _set({ progress: 0 }); }, 800);
       return;
     }
@@ -624,9 +780,15 @@
         model: _state.providerModel
       };
     }
-    return tr(String(row.originalText || ''), _state.sourceLang, _state.targetLang, options)
+    // The provider never sees the table's line token. It gets a real line
+    // break, which is what made "[LINE]" end up inside translations, and the
+    // answer is turned back into tokens before it reaches the registry.
+    var source = toDisplay(row.originalText);
+    return tr(source, _state.sourceLang, _state.targetLang, options)
       .then(function (r) {
-        K.search.setTranslatedText(row.startByte, r.text);
+        var out = fromDisplay(r.text);
+        K.search.setTranslatedText(row.startByte, out);
+        r.text = out;
         return r;
       });
   }
@@ -714,7 +876,8 @@
       romBytes: null, romName: '', romSystem: '', romSize: 0,
       tableData: null, tableContent: '',
       filter: '', page: 1, selectedOffset: null,
-      modifiedRom: null, isBusy: false, status: '', progress: 0
+      modifiedRom: null, isBusy: false, status: '', progress: 0,
+      buildLog: [], buildSummary: null
     });
   }
 
@@ -724,6 +887,7 @@
   K.translate.loadTableContent = loadTableContent;
   K.translate.extractTexts = extractTexts;
   K.translate.measureBytes = measureBytes;
+  K.translate.measureOriginal = measureOriginal;
   K.translate.getActiveGroupId = getActiveGroupId;
   K.translate.getActiveGroupEntries = getActiveGroupEntries;
   K.translate.setFilter = setFilter;
@@ -738,7 +902,30 @@
   K.translate.setProviderModel = setProviderModel;
   K.translate.setProviderApiKey = setProviderApiKey;
   K.translate.getProviderApiKey = getProviderApiKey;
+  /* Sends the compiled image to the Hex Editor and switches it to the
+     compiled view, so a compile can be checked byte by byte without leaving
+     the ecosystem. The loaded ROM keeps its own patches, bookmarks and
+     session, which stay attached to the original view. */
+  function showCompiledInHex() {
+    if (!_state.modifiedRom) { _set({ status: 'Compile first.' }); return false; }
+    if (!K.hex || typeof K.hex.setCompiledRom !== 'function') return false;
+    K.hex.setCompiledRom(_state.modifiedRom, { at: _state.buildSummary ? _state.buildSummary.at : Date.now(), scope: _state.compileScope });
+    if (typeof K.hex.setViewSource === 'function') K.hex.setViewSource('compiled');
+    try {
+      global.dispatchEvent(new CustomEvent('ketor:navigate-activity', {
+        detail: { activity: 'hex', source: 'translation-compile' }
+      }));
+    } catch (_) { }
+    return true;
+  }
+
   K.translate.buildModifiedRom = buildModifiedRom;
+  K.translate.showCompiledInHex = showCompiledInHex;
+  K.translate.toDisplay = toDisplay;
+  K.translate.fromDisplay = fromDisplay;
+  K.translate.lineToken = lineToken;
+  K.translate.replaceInGroup = replaceInGroup;
+  K.translate.clearGroupTranslations = clearGroupTranslations;
   K.translate.saveProject = saveProject;
   K.translate.loadProjectContent = loadProjectContent;
   K.translate.downloadModifiedRom = downloadModifiedRom;

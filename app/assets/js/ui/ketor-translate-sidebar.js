@@ -151,8 +151,23 @@
             marginTop: 8, fontSize: 11,
             color: 'var(--kt-sidebar-fg)', opacity: 0.85, lineHeight: 1.5
           }
-        }, 'Compiled ROM ready (' + formatBytes(t.modifiedRom.length) +
-           '). Exporting it belongs to the Patch & Export activity.') : null,
+        },
+          e('div', null, 'Compiled ROM ready (' + formatBytes(t.modifiedRom.length) +
+            '). Exporting it belongs to the Patch & Export activity.'),
+          t.buildSummary ? e('div', { style: { marginTop: 2 } },
+            t.buildSummary.relocated + ' text(s) relocated and repointed, ' +
+            t.buildSummary.inPlace + ' written in place' +
+            (t.buildSummary.warnings.length
+              ? ', ' + t.buildSummary.warnings.length + ' warning(s)'
+              : '') + '.') : null,
+          e('div', { style: { marginTop: 6, display: 'flex', gap: 6 } },
+            e('button', {
+              type: 'button', className: 'kt-btn small secondary',
+              onClick: function () { K.translate.showCompiledInHex(); },
+              title: 'Open the compiled image in the Hex Editor and compare it byte by byte'
+            }, 'Show in Hex Editor')
+          )
+        ) : null,
         t.isBusy ? e('div', {
           style: {
             marginTop: 8, height: 4,
@@ -226,7 +241,7 @@
 
       hasTexts ? e(Section, { title: 'Translation I/O' },
         e(Action, {
-          label: 'Export CSV (grouped texts)',
+          label: 'Export CSV',
           first: true,
           title: 'Writes one row per text that belongs to a group: group, offset, original, translation.',
           onClick: onExportCsv

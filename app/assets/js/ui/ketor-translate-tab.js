@@ -57,6 +57,18 @@
     ['ca', 'Catalan'], ['fa', 'Persian'], ['lt', 'Lithuanian'], ['lv', 'Latvian']
   ];
 
+  // Batch 21: one toolbar is one row, so every button on it is the same size.
+  // The middle toolbar used to mix kt-btn with kt-btn small, which read as
+  // two different rows of controls.
+  var TOOL_BTN = {
+    height: 24,
+    minWidth: 96,
+    padding: '0 10px',
+    fontSize: 11,
+    lineHeight: '22px',
+    flex: '0 0 auto'
+  };
+
   function pad6(n) { return String(n).padStart(6, '0'); }
 
   function overflowOf(byteLen, originalLen) {
@@ -146,8 +158,17 @@
     );
   }
 
+  /* Batch 21: the Original box is a real (read only) field, not a div, so a
+     click puts a caret in the text and the footer reports the x/y position
+     the translator is looking at. That position is what the game's own line
+     width has to be compared against. */
   function SourceBox(props) {
-    var text = String(props.text || '');
+    var text = K.translate.toDisplay(props.text);
+    var caretSt = uS(0);
+    var caretPos = caretSt[0];
+    var setCaretPos = caretSt[1];
+    var caret = caretInfo(text, caretPos);
+
     return e('div', {
       style: {
         flex: '1 1 0', minWidth: 0,
@@ -162,21 +183,38 @@
         style: {
           flex: '0 0 auto', padding: '3px 6px',
           fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em',
-          opacity: 0.6, borderBottom: '1px solid var(--kt-widget-border-default)'
+          opacity: 0.6, borderBottom: '1px solid var(--kt-widget-border-default)',
+          display: 'flex', alignItems: 'center', gap: 6
         }
-      }, 'Original (read only)'),
-      e(Ruler, { length: text.length, caret: -1 }),
-      e('div', {
+      },
+        'Original (read only)',
+        e('span', { style: { textTransform: 'none', letterSpacing: 0, opacity: 0.8 } },
+          'click inside to read x/y')
+      ),
+      e(Ruler, { length: text.length, caret: caret.x }),
+      e('textarea', {
+        value: text,
+        readOnly: true,
+        spellCheck: false,
+        onClick: function (ev) { setCaretPos(ev.target.selectionStart || 0); },
+        onKeyUp: function (ev) { setCaretPos(ev.target.selectionStart || 0); },
+        onSelect: function (ev) { setCaretPos(ev.target.selectionStart || 0); },
+        title: 'Read only. Click a character to read its column (x) and line (y).',
         style: {
-          flex: '1 1 auto', minHeight: 0, overflow: 'auto',
+          flex: '1 1 auto', minHeight: 0,
+          width: '100%',
+          background: 'var(--kt-editor-bg)',
+          color: 'var(--kt-editor-fg)',
+          border: 'none',
+          outline: 'none',
+          resize: 'none',
+          cursor: 'text',
           padding: '6px 8px',
-          fontFamily: MONO, fontSize: 13, lineHeight: 1.5,
-          whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-          color: 'var(--kt-editor-fg)'
+          fontFamily: MONO, fontSize: 13, lineHeight: 1.5
         }
-      }, text || e('span', { style: { opacity: 0.5 } }, '(empty)')),
+      }),
       e(BoxFooter, {
-        caret: caretInfo(text, 0),
+        caret: caret,
         length: text.length,
         size: props.size,
         overflow: false
@@ -185,7 +223,8 @@
   }
 
   function TargetBox(props) {
-    var st = uS(String(props.value || ''));
+    var lineTok = K.translate.lineToken();
+    var st = uS(K.translate.toDisplay(props.value));
     var local = st[0];
     var setLocal = st[1];
     var caretSt = uS(0);
@@ -199,7 +238,7 @@
     // value unless the user is typing in this box right now.
     uE(function () {
       if (editingRef.current) return;
-      var next = String(props.value || '');
+      var next = K.translate.toDisplay(props.value);
       latestRef.current = next;
       setLocal(next);
     }, [props.value, props.offset]);
@@ -216,7 +255,7 @@
       if (pendingRef.current) clearTimeout(pendingRef.current);
       pendingRef.current = setTimeout(function () {
         pendingRef.current = null;
-        commit(latestRef.current);
+        commit(K.translate.fromDisplay(latestRef.current));
       }, 350);
     }, [commit]);
 
@@ -224,11 +263,13 @@
       if (!pendingRef.current) return;
       clearTimeout(pendingRef.current);
       pendingRef.current = null;
-      commit(latestRef.current);
+      commit(K.translate.fromDisplay(latestRef.current));
     }, [commit]);
 
     var caret = caretInfo(local, caretPos);
-    var size = props.measure(local);
+    // The box shows line breaks, the ROM stores the line token: measure the
+    // stored form, which is what the build will encode.
+    var size = props.measure(K.translate.fromDisplay(local));
     var overflow = overflowOf(size, props.originalSize);
 
     return e('div', {
@@ -257,12 +298,21 @@
         value: local,
         spellCheck: false,
         onChange: function (ev) { push(ev.target.value); },
+        onKeyDown: function (ev) {
+          // Without a line token in the table a newline cannot be encoded, so
+          // Enter would silently become a space. It is refused instead.
+          if (ev.key === 'Enter' && !lineTok) {
+            ev.preventDefault();
+          }
+        },
         onFocus: function () { editingRef.current = true; },
         onBlur: function () { editingRef.current = false; flush(); },
         onSelect: function (ev) { setCaretPos(ev.target.selectionStart || 0); },
         onKeyUp: function (ev) { setCaretPos(ev.target.selectionStart || 0); },
         onClick: function (ev) { setCaretPos(ev.target.selectionStart || 0); },
-        placeholder: 'Type the translation, or use Auto Translate',
+        placeholder: lineTok
+          ? 'Type the translation, or use Auto Translate. Enter inserts the line break token.'
+          : 'Type the translation, or use Auto Translate',
         style: {
           flex: '1 1 auto', minHeight: 0,
           width: '100%',
@@ -288,7 +338,7 @@
   function PreviewRow(props) {
     var row = props.row;
     var active = props.active;
-    var overflow = overflowOf(props.size, row.byteLength || 0);
+    var overflow = overflowOf(props.size, K.translate.measureOriginal(row));
     var translation = String(row.translatedText || '');
 
     return e('div', {
@@ -383,7 +433,8 @@
         if (status === 'untranslated') return !done;
         if (status === 'translated') return done;
         if (status === 'overflow') {
-          return done && K.translate.measureBytes(row.translatedText) > (row.byteLength || 0);
+          return done &&
+            K.translate.measureBytes(row.translatedText) > K.translate.measureOriginal(row);
         }
         return true;
       });
@@ -484,6 +535,54 @@
       K.translate.setProviderApiKey(value);
     }, []);
 
+    /* ---- Group wide tools (Batch 21) ------------------------------
+       Find & replace inside the active group, and a way to throw away the
+       machine output of a group and start over. Both live beside the group
+       name because that is the scope they work on. */
+    var toolsSt = uS(false);
+    var toolsOpen = toolsSt[0];
+    var setToolsOpen = toolsSt[1];
+    var findSt = uS('');
+    var findText = findSt[0];
+    var setFindText = findSt[1];
+    var replSt = uS('');
+    var replText = replSt[0];
+    var setReplText = replSt[1];
+    var caseSt = uS(false);
+    var caseSensitive = caseSt[0];
+    var setCaseSensitive = caseSt[1];
+    var noteSt = uS('');
+    var toolNote = noteSt[0];
+    var setToolNote = noteSt[1];
+
+    var onReplaceInGroup = uC(function () {
+      var n = K.translate.replaceInGroup(activeGroupId, findText, replText, caseSensitive);
+      setToolNote(n
+        ? 'Replaced in ' + n + ' entry/entries.'
+        : 'Nothing matched in this group.');
+    }, [activeGroupId, findText, replText, caseSensitive]);
+
+    var onClearGroup = uC(function () {
+      var n = 0;
+      for (var i = 0; i < entries.length; i++) {
+        if (String(entries[i].translatedText || '')) n++;
+      }
+      if (!n) { setToolNote('This group has no translations to clear.'); return; }
+      if (!global.confirm('Clear ' + n + ' translation(s) in this group?')) return;
+      var done = K.translate.clearGroupTranslations(activeGroupId);
+      setToolNote('Cleared ' + done + ' translation(s).');
+    }, [activeGroupId, entries]);
+
+    /* ---- Compile report (Batch 21) --------------------------------
+       rebuildRom() relocates a text that no longer fits, writes it into free
+       space and rewrites the pointer that the game follows. It reports every
+       decision; until now that report was thrown away. */
+    var reportSt = uS(false);
+    var reportOpen = reportSt[0];
+    var setReportOpen = reportSt[1];
+    var buildSummary = t.buildSummary;
+    var buildLog = t.buildLog || [];
+
     if (!t.romName) {
       return e('div', { className: 'kt-activity-placeholder' },
         e('div', { className: 'ap-title' }, 'Translation'),
@@ -522,7 +621,8 @@
       e('div', {
         style: {
           flex: '0 0 auto',
-          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+          display: 'flex', alignItems: 'center', gap: 8,
+          flexWrap: 'nowrap', overflowX: 'auto',
           padding: '5px 10px',
           borderBottom: '1px solid var(--kt-widget-border-default)',
           background: 'var(--kt-sidebar-bg)'
@@ -551,12 +651,45 @@
         ),
         e('button', {
           type: 'button', className: 'kt-btn small',
+          style: TOOL_BTN,
           onClick: onNextUntranslated,
           disabled: !entries.length,
           title: 'Jump to the next entry in this group that has no translation'
         }, 'Next untranslated'),
+
+        // Jumping to the bytes of the entry belongs to the group header, next
+        // to the entry it refers to, not to the provider row at the bottom.
+        e('button', {
+          type: 'button', className: 'kt-btn small',
+          style: TOOL_BTN,
+          onClick: onGotoHex,
+          disabled: !active,
+          title: 'Show this entry in the Hex Editor'
+        }, 'Goto Hex'),
+        active ? e('span', {
+          style: { fontSize: 10, opacity: 0.6, fontFamily: MONO, whiteSpace: 'nowrap' }
+        }, active.offset || '') : null,
+
+        e('button', {
+          type: 'button', className: 'kt-btn small secondary',
+          style: TOOL_BTN,
+          onClick: function () { setToolsOpen(!toolsOpen); },
+          title: 'Find and replace inside this group, or clear its translations'
+        }, 'Tools'),
+        e('button', {
+          type: 'button', className: 'kt-btn small secondary',
+          style: TOOL_BTN,
+          onClick: onClearGroup,
+          disabled: !entries.length,
+          title: 'Clear every translation in this group'
+        }, 'Clear'),
+
         e('span', {
-          style: { fontSize: 11, color: 'var(--kt-sidebar-fg)', display: 'flex', gap: 12, whiteSpace: 'nowrap' }
+          style: {
+            fontSize: 11, color: 'var(--kt-sidebar-fg)',
+            display: 'flex', gap: 12, whiteSpace: 'nowrap',
+            marginLeft: 'auto', paddingLeft: 12
+          }
         },
           e('span', null, 'Total: ', e('strong', null, stats.total)),
           e('span', null, 'Done: ', e('strong', null, stats.done)),
@@ -564,6 +697,53 @@
             stats.total ? Math.round(stats.done / stats.total * 100) + '%' : '0%'))
         )
       ),
+
+      toolsOpen ? e('div', {
+        style: {
+          flex: '0 0 auto',
+          display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
+          padding: '4px 10px',
+          borderBottom: '1px solid var(--kt-widget-border-default)',
+          background: 'var(--kt-editor-bg)',
+          fontSize: 11
+        }
+      },
+        e('span', { style: { opacity: 0.7 } }, 'Find'),
+        e('input', {
+          type: 'text', className: 'kt-input',
+          value: findText,
+          placeholder: 'text inside the translation',
+          onChange: function (ev) { setFindText(ev.target.value); },
+          style: { width: 190, fontSize: 11, fontFamily: MONO }
+        }),
+        e('span', { style: { opacity: 0.7 } }, 'Replace with'),
+        e('input', {
+          type: 'text', className: 'kt-input',
+          value: replText,
+          placeholder: '',
+          onChange: function (ev) { setReplText(ev.target.value); },
+          style: { width: 190, fontSize: 11, fontFamily: MONO }
+        }),
+        e('label', {
+          style: { display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' },
+          title: 'Match case'
+        },
+          e('input', {
+            type: 'checkbox',
+            checked: caseSensitive,
+            onChange: function (ev) { setCaseSensitive(!!ev.target.checked); }
+          }),
+          'Aa'
+        ),
+        e('button', {
+          type: 'button', className: 'kt-btn small',
+          style: TOOL_BTN,
+          onClick: onReplaceInGroup,
+          disabled: !findText || !entries.length,
+          title: 'Replace inside every translation of this group. Originals are never touched.'
+        }, 'Replace in group'),
+        toolNote ? e('span', { style: { opacity: 0.8 } }, toolNote) : null
+      ) : null,
 
       e('div', {
         style: {
@@ -632,14 +812,16 @@
       e('div', {
         style: {
           flex: '0 0 auto',
-          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+          display: 'flex', alignItems: 'center', gap: 8,
+          flexWrap: 'nowrap', overflowX: 'auto',
           padding: '5px 10px',
           borderBottom: '1px solid var(--kt-widget-border-default)',
           background: 'var(--kt-sidebar-bg)'
         }
       },
         e('button', {
-          type: 'button', className: 'kt-btn',
+          type: 'button', className: 'kt-btn small',
+          style: TOOL_BTN,
           onClick: onAuto,
           disabled: !active || t.isTranslating,
           title: 'Translate this entry with the selected provider'
@@ -655,12 +837,14 @@
               }, 'Group ' + batch.done + '/' + batch.total),
               e('button', {
                 type: 'button', className: 'kt-btn small',
+                style: TOOL_BTN,
                 onClick: onStopBatch,
                 title: 'Stop after the request in flight'
               }, 'Stop')
             )
           : e('button', {
               type: 'button', className: 'kt-btn small',
+              style: TOOL_BTN,
               onClick: onBatch,
               disabled: !entries.length,
               title: 'Translate every entry of this group that has no translation yet, one request at a time'
@@ -690,7 +874,7 @@
             style: { fontSize: 11, width: 112 }
           },
             e('option', { value: 'free' }, 'Free (fallback)'),
-            e('option', { value: 'custom' }, 'OpenAI / DeepL')
+            e('option', { value: 'custom' }, 'AI')
           )
         ),
 
@@ -736,19 +920,70 @@
           style: { width: 250, fontSize: 11, fontFamily: MONO }
         }) : null,
 
-        e('span', { style: { flex: 1 } }),
-
-        e('button', {
-          type: 'button', className: 'kt-btn small',
-          onClick: onGotoHex,
-          disabled: !active,
-          title: 'Show this entry in the Hex Editor'
-        }, 'Goto Hex'),
-
-        active ? e('span', {
-          style: { fontSize: 10, opacity: 0.6, fontFamily: MONO, whiteSpace: 'nowrap' }
-        }, active.offset || '') : null
+        e('span', { style: { flex: 1 } })
       ),
+
+      // The build worker reports every relocation and pointer rewrite it
+      // performed. It is the only proof that an over-long translation was
+      // moved into free space and repointed instead of being truncated.
+      buildSummary ? e('div', {
+        style: {
+          flex: '0 0 auto',
+          borderBottom: '1px solid var(--kt-widget-border-default)',
+          background: 'var(--kt-editor-bg)',
+          fontSize: 11
+        }
+      },
+        e('div', {
+          style: {
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '4px 10px', flexWrap: 'nowrap', overflowX: 'auto'
+          }
+        },
+          e('span', { style: { fontWeight: 600, whiteSpace: 'nowrap' } }, 'Compile report'),
+          e('span', { style: { opacity: 0.7, fontFamily: MONO, whiteSpace: 'nowrap' } },
+            new Date(buildSummary.at).toLocaleTimeString()),
+          e('span', { style: { whiteSpace: 'nowrap' } },
+            buildSummary.relocated + ' relocated & repointed'),
+          e('span', { style: { whiteSpace: 'nowrap' } },
+            buildSummary.inPlace + ' written in place'),
+          e('span', { style: { whiteSpace: 'nowrap' } },
+            buildSummary.pointersUpdated + ' pointer(s) updated'),
+          buildSummary.warnings.length ? e('span', {
+            style: { color: 'var(--kt-error-fg)', fontWeight: 700, whiteSpace: 'nowrap' },
+            title: buildSummary.warnings.join('\n')
+          }, buildSummary.warnings.length + ' warning(s)') : e('span', {
+            style: { opacity: 0.7, whiteSpace: 'nowrap' }
+          }, 'no warnings'),
+          e('span', { style: { flex: 1 } }),
+          e('button', {
+            type: 'button', className: 'kt-btn small secondary',
+            style: TOOL_BTN,
+            onClick: function () { setReportOpen(!reportOpen); }
+          }, reportOpen ? 'Hide log' : 'Show log'),
+          e('button', {
+            type: 'button', className: 'kt-btn small secondary',
+            style: TOOL_BTN,
+            onClick: function () { K.translate.showCompiledInHex(); },
+            title: 'Open the compiled image in the Hex Editor'
+          }, 'Show in Hex Editor')
+        ),
+        reportOpen ? e('pre', {
+          style: {
+            margin: 0, padding: '6px 10px',
+            maxHeight: 170, overflow: 'auto',
+            fontFamily: MONO, fontSize: 10.5, lineHeight: 1.45,
+            borderTop: '1px solid var(--kt-widget-border-default)',
+            whiteSpace: 'pre-wrap', wordBreak: 'break-word'
+          }
+        }, buildLog.map(function (line, i) {
+          var warn = String(line).indexOf('[WARNING]') >= 0;
+          return e('div', {
+            key: 'log-' + i,
+            style: { color: warn ? 'var(--kt-error-fg)' : 'inherit' }
+          }, String(line));
+        })) : null
+      ) : null,
 
       e('div', {
         style: {
@@ -759,7 +994,7 @@
         active
           ? e(SourceBox, {
               text: active.originalText,
-              size: active.byteLength || 0
+              size: K.translate.measureOriginal(active)
             })
           : e('div', {
               style: {
@@ -773,7 +1008,7 @@
           key: 'target-' + active.startByte,
           offset: active.startByte,
           value: active.translatedText || '',
-          originalSize: active.byteLength || 0,
+          originalSize: K.translate.measureOriginal(active),
           isTranslating: t.isTranslating && Number(t.translatingOffset) === Number(active.startByte),
           measure: K.translate.measureBytes,
           onChange: function (value) {

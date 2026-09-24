@@ -177,9 +177,16 @@
   }
 
   function _systemPrompt(cfg) {
+    // The line breaks arrive as real newlines, so the model has to preserve
+    // the line structure of the source: a line break costs one byte in the
+    // ROM and a missing one changes how the text is drawn. Tokens that are
+    // still in square brackets are control codes the game reads, so they are
+    // copied verbatim and never translated, explained or added.
     return 'You are a translator inside a ROM translation tool. Translate from ' +
       cfg.sourceLang + ' to ' + cfg.targetLang +
-      '. Keep any token in square brackets exactly as it is. Output only the translation.';
+      '. Keep every line break of the source: the translation must have the ' +
+      'same number of lines. Keep any token in square brackets exactly as it ' +
+      'is and never add tokens that are not in the source. Output only the translation.';
   }
 
   function _httpJson(url, options) {

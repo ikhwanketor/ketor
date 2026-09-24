@@ -35,6 +35,11 @@
 
   var _state = {
     romBytes: null, romName: '', romSystem: '', romSize: 0, romKey: '',
+    // Batch 21: the compiled image from the Translation activity. It is a
+    // second view over the same session, never a replacement: patches,
+    // bookmarks and the ROM key stay attached to the loaded file.
+    compiledBytes: null, compiledAt: 0, compiledScope: '',
+    viewSource: 'original',
     cursorOffset: 0,
     selection: null,
     bytesPerRow: 16,
@@ -280,6 +285,7 @@
       romBytes: null, romName: '', romSystem: '', romSize: 0, romKey: '',
       cursorOffset: 0, selection: null, bookmarks: [], patches: {},
       undoStack: [], redoStack: [], sections: [],
+      compiledBytes: null, compiledAt: 0, compiledScope: '', viewSource: 'original',
       searchQuery: '', searchResults: [], searchIndex: -1, status: ''
     });
   }
@@ -391,8 +397,66 @@
     return Object.keys(_state.patches || {}).map(Number);
   }
 
+  /* ---------- view source: original ROM or compiled image ---------- */
+
+  function isCompiledView() {
+    return _state.viewSource === 'compiled' && !!_state.compiledBytes;
+  }
+
+  function viewBytes() {
+    if (isCompiledView()) return _state.compiledBytes;
+    return _state.romBytes;
+  }
+
+  // Patches belong to the loaded ROM. The compiled image is already the
+  // result of those patches, so applying them again would show a byte that
+  // is not in the file.
+  function viewPatches() {
+    return isCompiledView() ? {} : _state.patches;
+  }
+
+  function setCompiledRom(bytes, meta) {
+    var data = null;
+    if (bytes instanceof Uint8Array) data = bytes;
+    else if (bytes instanceof ArrayBuffer) data = new Uint8Array(bytes);
+    else if (bytes && bytes.buffer) data = new Uint8Array(bytes.buffer, bytes.byteOffset || 0, bytes.byteLength);
+    if (!data || !data.length) return false;
+    var info = meta || {};
+    _set({
+      compiledBytes: data,
+      compiledAt: Number(info.at) || Date.now(),
+      compiledScope: String(info.scope || ''),
+      // A compiled image exists again: showing it straight away is what makes
+      // the Translation and Hex Editor activities agree after Compile.
+      viewSource: 'compiled',
+      status: 'Compiled image ready (' + Math.round(data.length / 1024) + ' KB). Viewing compiled bytes.'
+    });
+    return true;
+  }
+
+  function setViewSource(source) {
+    var next = source === 'compiled' ? 'compiled' : 'original';
+    if (next === 'compiled' && !_state.compiledBytes) {
+      _set({ status: 'No compiled image yet. Compile from the Translation activity first.' });
+      return false;
+    }
+    if (next === _state.viewSource) return true;
+    _set({
+      viewSource: next,
+      selection: null,
+      status: next === 'compiled'
+        ? 'Viewing the compiled image. Editing is disabled on this view.'
+        : 'Viewing the loaded ROM.'
+    });
+    return true;
+  }
+
   function currentByte(offset) {
     var off = Number(offset);
+    if (isCompiledView()) {
+      if (off < 0 || off >= _state.compiledBytes.length) return null;
+      return _state.compiledBytes[off] & 0xFF;
+    }
     var patch = _state.patches[off];
     if (patch !== undefined) return patch & 0xFF;
     if (!_state.romBytes || off < 0 || off >= _state.romBytes.length) return null;
@@ -406,6 +470,12 @@
   function setByte(offset, value) {
     var off = Number(offset);
     var val = Number(value) & 0xFF;
+    // The compiled image is a read-only view: a byte typed here would vanish
+    // on the next compile, so the edit is refused with a reason instead.
+    if (isCompiledView()) {
+      _set({ status: 'This is the compiled image. Switch to Original to patch bytes.' });
+      return false;
+    }
     if (!_state.romBytes || !Number.isFinite(off) || off < 0 || off >= _state.romBytes.length) return false;
     if (!Number.isFinite(Number(value))) return false;
     var before = currentByte(off);
@@ -611,7 +681,7 @@
   }
 
   function decodeRange(start, end) {
-    var bytes = _state.romBytes;
+    var bytes = viewBytes();
     var tableData = activeTable();
     if (!bytes) return { text: '', mapped: 0, total: 0 };
     var from = _clamp(start);
@@ -624,8 +694,9 @@
 
     // Read through the patches: what the grid shows is what gets decoded, so
     // a marked range and a re-decode after an edit both match the screen.
+    var livePatches = viewPatches();
     var byteAt = function (idx) {
-      var p = _state.patches[idx];
+      var p = livePatches[idx];
       if (p !== undefined) return p & 0xFF;
       return bytes[idx] & 0xFF;
     };
@@ -890,6 +961,11 @@
   K.hex.setHighlightLayers = setHighlightLayers;
   K.hex.toggleHighlightLayer = toggleHighlightLayer;
   K.hex.currentByte = currentByte;
+  K.hex.viewBytes = viewBytes;
+  K.hex.viewPatches = viewPatches;
+  K.hex.isCompiledView = isCompiledView;
+  K.hex.setCompiledRom = setCompiledRom;
+  K.hex.setViewSource = setViewSource;
   K.hex.isPatched = isPatched;
   K.hex.setByte = setByte;
   K.hex.undo = undo;
