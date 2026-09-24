@@ -516,7 +516,21 @@
       setEdit(null);
     }, [edit, totalBytes]);
 
+    // The cells call preventDefault on mousedown to stop text selection,
+    // which also stops the browser from moving focus to the grid. Without
+    // this the container never received keydown, so an open editor ignored
+    // every keystroke until the user happened to click the empty crosshair
+    // area and focused the grid by accident.
+    var focusGrid = uC(function () {
+      var el = scrollRef.current;
+      if (!el || typeof el.focus !== 'function') return;
+      try { el.focus({ preventScroll: true }); } catch (_) {
+        try { el.focus(); } catch (_) { }
+      }
+    }, []);
+
     var onByteEdit = uC(function (offset, mode) {
+      focusGrid();
       dragRef.current = null;
       K.hex.setCursor(offset);
       var m = mode === 'ascii' ? 'ascii' : 'hex';
@@ -541,6 +555,8 @@
         (last.offset === offset && (now - last.time) < DOUBLE_PRESS_MS);
       lastPressRef.current = { offset: offset, time: now };
 
+      focusGrid();
+
       if (isSecondPress && !shiftKey) {
         onByteEdit(offset, mode);
         return;
@@ -554,7 +570,7 @@
       dragRef.current = offset;
       K.hex.setCursor(offset);
       K.hex.setSelection(offset, offset);
-    }, [edit, t.cursorOffset, onByteEdit]);
+    }, [edit, t.cursorOffset, onByteEdit, focusGrid]);
 
     var onByteEnter = uC(function (offset) {
       if (dragRef.current === null || dragRef.current === undefined) return;
