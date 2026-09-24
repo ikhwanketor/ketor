@@ -33,6 +33,7 @@
     modifiedRom: null,
     isBusy: false, status: '', progress: 0,
     isTranslating: false, translatingOffset: null,
+    compileScope: 'all',
     sourceLang: 'en', targetLang: 'id',
     providerMode: 'free',
     providerId: 'openai',
@@ -243,7 +244,12 @@
     }
   }
 
-  function buildModifiedRom() {
+  /* Compiles the translated text into the ROM.
+     scope 'group' limits the work to the entries of the selected group, the
+     way Kruptar compiles one group at a time; scope 'all' recomputes and
+     inserts every group at once. */
+  function buildModifiedRom(scope) {
+    var compileScope = scope === 'group' ? 'group' : 'all';
     _ensureWorkers();
     if (!_workers.build) { _set({ status: 'Build unavailable.' }); return; }
     if (!_state.romBytes || !_state.tableData) {
@@ -258,12 +264,27 @@
              (t.translatedText || '').trim().length > 0;
     });
 
+    var scopeLabel = 'all groups';
+    if (compileScope === 'group') {
+      var gid = K.search.getState().selectedGroupId;
+      if (!gid) { _set({ status: 'Select a group first.' }); return; }
+      var inGroup = {};
+      K.search.getTextsByGroup(gid).forEach(function (t) { inGroup[Number(t.startByte)] = true; });
+      buildTexts = buildTexts.filter(function (t) { return inGroup[Number(t.startByte)] === true; });
+      var g = null;
+      K.search.getState().groups.forEach(function (x) { if (x.id === gid) g = x; });
+      scopeLabel = g ? 'group "' + g.name + '"' : 'the selected group';
+    }
+
     if (!buildTexts.length) {
-      _set({ status: 'No translated texts assigned to a group.' });
+      _set({ status: 'No translated texts in ' + scopeLabel + '.' });
       return;
     }
 
-    _set({ isBusy: true, progress: 10, status: 'Building...' });
+    _set({
+      isBusy: true, progress: 10, compileScope: compileScope,
+      status: 'Compiling ' + buildTexts.length + ' text(s) from ' + scopeLabel + '...'
+    });
 
     var mch = {};
     _buildMasterMap(_state.tableData, mch);
@@ -297,9 +318,10 @@
       var p = d.modifiedRom;
       var bytes = p instanceof Uint8Array ? p
         : (p instanceof ArrayBuffer ? new Uint8Array(p) : new Uint8Array(p || []));
+      var scopeNote = _state.compileScope === 'group' ? ' (selected group)' : ' (all groups)';
       _set({
         modifiedRom: bytes, isBusy: false, progress: 100,
-        status: 'Build OK: ' + Math.round(bytes.length / 1024) + ' KB'
+        status: 'Compiled' + scopeNote + ': ' + Math.round(bytes.length / 1024) + ' KB'
       });
       setTimeout(function () { _set({ progress: 0 }); }, 800);
       return;
@@ -309,41 +331,212 @@
     }
   }
 
-  // ---- CSV ----
-  // Reads from K.search so exported CSV reflects the unified registry.
+  /* ---- File helpers ---- */
+  function _baseName() {
+    return String(_state.romName || 'ketor').replace(/\.[^.]+$/, '') || 'ketor';
+  }
+
+  function _download(name, text, mime) {
+    var blob = new global.Blob([text], { type: mime || 'text/plain' });
+    var url = global.URL.createObjectURL(blob);
+    var a = global.document.createElement('a');
+    a.href = url;
+    a.download = name;
+    global.document.body.appendChild(a);
+    a.click();
+    global.document.body.removeChild(a);
+    global.URL.revokeObjectURL(url);
+  }
+
+  /* ---- CSV: group name, offset, original, translation ----------------
+     Only entries that belong to a group are exported, because those are the
+     ones a compile will touch. Every field is quoted so commas and newlines
+     inside a text survive the round trip. */
+  function _csvCell(value) {
+    return '"' + String(value == null ? '' : value).replace(/"/g, '""') + '"';
+  }
+
+  function _offsetKey(startByte) {
+    return '0x' + Number(startByte || 0).toString(16).toUpperCase().padStart(6, '0');
+  }
+
   function exportCsv() {
     if (!K.search) { _set({ status: 'Search state not available.' }); return; }
-    var lg = K.legacy || {};
-    if (typeof lg.exportCSV !== 'function') return;
-    var searchTexts = K.search.getState().texts || [];
-    var base = (_state.romName || 'ketor').replace(/\.[^.]+$/, '');
-    lg.exportCSV(searchTexts, base + '_translation.csv');
-    _set({ status: 'CSV exported (' + searchTexts.length + ' rows).' });
+    var rows = K.search.getAssignedEntries();
+    if (!rows.length) {
+      _set({ status: 'Nothing to export: no text is assigned to a group yet.' });
+      return;
+    }
+    var lines = ['Group,Offset,Original,Translation'];
+    rows.forEach(function (r) {
+      var t = r.entry;
+      lines.push([
+        _csvCell(r.groupName),
+        _csvCell(t.offset || _offsetKey(t.startByte)),
+        _csvCell(t.originalText),
+        _csvCell(t.translatedText)
+      ].join(','));
+    });
+    var name = _baseName() + '_translation.csv';
+    _download(name, lines.join('\r\n'), 'text/csv;charset=utf-8');
+    _set({ status: 'CSV exported: ' + rows.length + ' grouped text(s) to ' + name + '.' });
+  }
+
+  // Quoted-field CSV reader. Handles embedded commas, quotes and newlines.
+  function _parseCsv(text) {
+    var src = String(text || '');
+    var rows = [];
+    var row = [];
+    var field = '';
+    var inQuotes = false;
+    for (var i = 0; i < src.length; i++) {
+      var ch = src.charAt(i);
+      if (inQuotes) {
+        if (ch === '"') {
+          if (src.charAt(i + 1) === '"') { field += '"'; i++; }
+          else inQuotes = false;
+        } else field += ch;
+        continue;
+      }
+      if (ch === '"') { inQuotes = true; continue; }
+      if (ch === ',') { row.push(field); field = ''; continue; }
+      if (ch === '\r') continue;
+      if (ch === '\n') { row.push(field); rows.push(row); row = []; field = ''; continue; }
+      field += ch;
+    }
+    if (field.length || row.length) { row.push(field); rows.push(row); }
+    return rows.filter(function (r) {
+      return r.some(function (c) { return String(c).trim() !== ''; });
+    });
   }
 
   function importCsvContent(content) {
     if (!K.search) { _set({ status: 'Search state not available.' }); return; }
-    var lg = K.legacy || {};
-    if (typeof lg.parseCSV !== 'function') return;
-    try {
-      var parsed = lg.parseCSV(content);
-      if (!parsed || typeof parsed.forEach !== 'function') {
-        _set({ status: 'CSV import failed: no valid rows.' });
-        return;
-      }
-      // CSV row 1: "ID,Offset,Original,Translation". We key by offset.
-      var count = 0;
-      parsed.forEach(function (translated, key) {
-        // legacy parseCSV returns Map<id, translation>; id is numeric.
-        // We cannot map old numeric id to offset reliably without
-        // re-reading the CSV text. Fall back to position-based
-        // mapping by reading the raw text.
-        count++;
+    var rows = _parseCsv(content);
+    if (!rows.length) { _set({ status: 'CSV import failed: the file is empty.' }); return; }
+
+    var header = rows[0].map(function (c) { return String(c).trim().toLowerCase(); });
+    var hasHeader = header.indexOf('offset') !== -1;
+    var body = hasHeader ? rows.slice(1) : rows;
+    var col = {
+      group: header.indexOf('group'),
+      offset: header.indexOf('offset'),
+      original: header.indexOf('original'),
+      translation: header.indexOf('translation')
+    };
+    if (!hasHeader) { col = { group: 0, offset: 1, original: 2, translation: 3 }; }
+
+    var byOffset = {};
+    K.search.getState().texts.forEach(function (t) { byOffset[_offsetKey(t.startByte)] = t; });
+
+    var pairs = [];
+    var unknown = 0;
+    var empty = 0;
+    body.forEach(function (r) {
+      var rawOffset = String(r[col.offset] == null ? '' : r[col.offset]).trim();
+      if (!rawOffset) return;
+      var n = parseInt(rawOffset.replace(/^0x/i, ''), 16);
+      if (!Number.isFinite(n)) { unknown++; return; }
+      var key = _offsetKey(n);
+      var entry = byOffset[key];
+      if (!entry) { unknown++; return; }
+      var translation = String(r[col.translation] == null ? '' : r[col.translation]);
+      if (!translation.length) { empty++; return; }
+      pairs.push({ startByte: entry.startByte, translatedText: translation });
+    });
+
+    if (!pairs.length) {
+      _set({
+        status: 'CSV import: no row matched this ROM (' + unknown + ' unknown offset(s)).'
       });
-      _set({ status: 'CSV imported (' + count + ' rows). Reload ROM to re-extract if offsets changed.' });
-    } catch (e) {
-      _set({ status: 'CSV import failed: ' + (e.message || '') });
+      return;
     }
+
+    var applied = K.search.applyTranslations(pairs);
+    _set({
+      status: 'CSV import: ' + applied + ' translation(s) applied' +
+        (unknown ? ', ' + unknown + ' offset(s) not in this ROM' : '') +
+        (empty ? ', ' + empty + ' empty row(s) skipped' : '') + '.'
+    });
+  }
+
+  /* ---- Project file ------------------------------------------------
+     Kruptar saves its own binary project format tied to its pointer and
+     table metadata. Ketor keeps the same idea - one file with the whole
+     translation progress - in a readable JSON document, because the table
+     and the pointers live in the registry here, not in the project. */
+  function saveProject() {
+    if (!K.search) { _set({ status: 'Search state not available.' }); return; }
+    var s = K.search.getState();
+    if (!s.texts.length && !s.groups.length) {
+      _set({ status: 'Nothing to save yet.' });
+      return;
+    }
+    var payload = {
+      format: 'ketor-project',
+      version: 1,
+      savedAt: new Date().toISOString(),
+      rom: { name: _state.romName, size: _state.romSize, system: _state.romSystem },
+      table: _state.tableData ? {
+        name: _state.tableData.name,
+        entryCount: _state.tableData.entryCount,
+        content: _state.tableContent || ''
+      } : null,
+      groups: s.groups.map(function (g) {
+        return { id: g.id, name: g.name, color: g.color, offsets: g.offsets, createdAt: g.createdAt };
+      }),
+      texts: s.texts.map(function (t) {
+        return {
+          startByte: t.startByte,
+          offset: t.offset,
+          byteLength: t.byteLength,
+          originalText: t.originalText,
+          translatedText: t.translatedText,
+          comment: t.comment,
+          textType: t.textType,
+          buildable: t.buildable,
+          source: t.source
+        };
+      })
+    };
+    var name = _baseName() + '.ketor';
+    _download(name, JSON.stringify(payload, null, 1), 'application/json');
+    _set({
+      status: 'Project saved: ' + name + ' (' + payload.texts.length + ' text(s), ' +
+        payload.groups.length + ' group(s)).'
+    });
+  }
+
+  function loadProjectContent(content) {
+    var payload = null;
+    try {
+      payload = JSON.parse(String(content || ''));
+    } catch (_) {
+      _set({ status: 'Project file is not valid JSON.' });
+      return;
+    }
+    if (!payload || payload.format !== 'ketor-project') {
+      _set({ status: 'Not a Ketor project file.' });
+      return;
+    }
+    if (!K.search || typeof K.search.loadSnapshot !== 'function') {
+      _set({ status: 'Search state not available.' });
+      return;
+    }
+
+    K.search.loadSnapshot({ texts: payload.texts, groups: payload.groups });
+
+    if (payload.table && payload.table.content) {
+      loadTableContent(payload.table.content, payload.table.name || 'project.tbl');
+    }
+
+    var savedName = payload.rom && payload.rom.name;
+    var mismatch = savedName && _state.romName && savedName !== _state.romName;
+    _set({
+      status: 'Project loaded: ' + ((payload.texts || []).length) + ' text(s), ' +
+        ((payload.groups || []).length) + ' group(s).' +
+        (mismatch ? ' Warning: saved from ' + savedName + ' but the loaded ROM is ' + _state.romName + '.' : '')
+    });
   }
 
   function downloadModifiedRom() {
@@ -434,6 +627,8 @@
   K.translate.setProviderApiKey = setProviderApiKey;
   K.translate.getProviderApiKey = getProviderApiKey;
   K.translate.buildModifiedRom = buildModifiedRom;
+  K.translate.saveProject = saveProject;
+  K.translate.loadProjectContent = loadProjectContent;
   K.translate.downloadModifiedRom = downloadModifiedRom;
   K.translate.exportCsv = exportCsv;
   K.translate.importCsvContent = importCsvContent;

@@ -764,6 +764,29 @@
       return function () { input.removeEventListener('change', onChange); };
     }, []);
 
+    // ---- Project (.ketor) input handler ----
+    useEffect(function () {
+      var input = document.getElementById('kt-input-project');
+      if (!input) return;
+      function onChange(ev) {
+        var f = ev.target.files && ev.target.files[0];
+        ev.target.value = '';
+        if (!f) return;
+        f.text().then(function (content) {
+          if (Ketor.translate && Ketor.translate.loadProjectContent) {
+            Ketor.translate.loadProjectContent(content);
+          }
+          var st = Ketor.translate && Ketor.translate.getState ? Ketor.translate.getState() : null;
+          actionsRef.current.appendLog('success',
+            'Project loaded: ' + f.name + (st && st.status ? ' - ' + st.status : ''), 'translate');
+        }).catch(function (err) {
+          actionsRef.current.appendLog('error', 'Project load failed: ' + (err.message || ''), 'translate');
+        });
+      }
+      input.addEventListener('change', onChange);
+      return function () { input.removeEventListener('change', onChange); };
+    }, []);
+
     useEffect(function () {
       if (!isCompact && kebabOpen) setKebabOpen(false);
     }, [isCompact, kebabOpen]);

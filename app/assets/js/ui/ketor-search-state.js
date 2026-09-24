@@ -45,6 +45,10 @@
 /* ============================================================
    Ketor - Search Text State (v4)
    ------------------------------------------------------------
+   Batch 20: applyTranslations() writes many entries in one notification,
+   getAssignedEntries() lists group membership for export, and
+   loadSnapshot() restores a saved project.
+
    Batch 17: extraction options gain a strictExtractorMode flag
    and can be seeded from the per-console workflow config via
    applyExtractionDefaults(). Keys the user has edited by hand
@@ -640,6 +644,86 @@
     return sb;
   }
 
+  // Bulk translation write: one store notification for a whole CSV import
+  // instead of one per row.
+  function applyTranslations(pairs) {
+    if (!pairs || !pairs.length) return 0;
+    var wanted = {};
+    pairs.forEach(function (p) {
+      var sb = Number(p && p.startByte);
+      if (Number.isFinite(sb)) wanted[sb] = String(p.translatedText == null ? '' : p.translatedText);
+    });
+    var applied = 0;
+    var next = (_state.texts || []).map(function (t) {
+      var sb = Number(t.startByte);
+      if (!Object.prototype.hasOwnProperty.call(wanted, sb)) return t;
+      applied++;
+      if (String(t.translatedText || '') === wanted[sb]) return t;
+      return Object.assign({}, t, { translatedText: wanted[sb] });
+    });
+    if (applied) _set({ texts: next });
+    return applied;
+  }
+
+  // Every entry that belongs to a group, with the group it belongs to.
+  // Used by the CSV export and by the project file.
+  function getAssignedEntries() {
+    var map = {};
+    (_state.texts || []).forEach(function (t) { map[Number(t.startByte)] = t; });
+    var out = [];
+    (_state.groups || []).forEach(function (g) {
+      (g.offsets || []).forEach(function (off) {
+        var entry = map[Number(off)];
+        if (entry) out.push({ groupId: g.id, groupName: g.name, entry: entry });
+      });
+    });
+    return out;
+  }
+
+  // Replaces groups and texts from a saved project file. Offsets, texts and
+  // translations come back exactly as they were saved.
+  function loadSnapshot(payload) {
+    var data = payload || {};
+    var texts = (Array.isArray(data.texts) ? data.texts : []).map(function (t) {
+      var copy = Object.assign({}, t);
+      copy.startByte = Number(copy.startByte);
+      delete copy.id;
+      if (copy.translatedText === undefined) copy.translatedText = '';
+      if (copy.comment === undefined) copy.comment = '';
+      if (copy.source === undefined) copy.source = 'extract';
+      if (!copy.offset) copy.offset = _offsetHex(copy.startByte);
+      return copy;
+    }).filter(function (t) { return Number.isFinite(t.startByte) && t.startByte >= 0; });
+
+    var groups = (Array.isArray(data.groups) ? data.groups : []).map(function (g, idx) {
+      var offsets = (Array.isArray(g.offsets) ? g.offsets : [])
+        .map(Number).filter(function (n) { return Number.isFinite(n); });
+      return {
+        id: g.id || ('g-load-' + Date.now() + '-' + idx),
+        name: String(g.name || ('Group ' + (idx + 1))),
+        color: g.color || COLOR_PALETTE[idx % COLOR_PALETTE.length],
+        offsets: offsets,
+        createdAt: Number(g.createdAt) || Date.now()
+      };
+    });
+
+    texts.sort(function (a, b) { return a.startByte - b.startByte; });
+
+    var expanded = {};
+    if (groups.length) expanded[groups[0].id] = true;
+
+    _set({
+      texts: texts,
+      groups: groups,
+      selectedGroupId: groups.length ? groups[0].id : null,
+      marked: {},
+      expandedGroups: expanded,
+      page: 1,
+      filter: { search: '', type: 'all', assigned: 'all', minLength: 0, maxLength: 0 },
+      status: 'Project loaded: ' + texts.length + ' text(s) in ' + groups.length + ' group(s).'
+    });
+  }
+
   function setTranslatedText(startByte, value) {
     var sb = Number(startByte);
     var val = String(value == null ? '' : value);
@@ -855,6 +939,9 @@
   K.search.getTextsInRange = getTextsInRange;
   K.search.addManualEntry = addManualEntry;
   K.search.setTranslatedText = setTranslatedText;
+  K.search.applyTranslations = applyTranslations;
+  K.search.getAssignedEntries = getAssignedEntries;
+  K.search.loadSnapshot = loadSnapshot;
   K.search.setComment = setComment;
   K.search.extractTexts = extractTexts;
   K.search.refresh = refresh;
