@@ -39,6 +39,10 @@
     // second view over the same session, never a replacement: patches,
     // bookmarks and the ROM key stay attached to the loaded file.
     compiledBytes: null, compiledAt: 0, compiledScope: '',
+    // Where the last compile moved text to, from the build worker's own
+    // report. The compiled view marks those ranges so "did it repoint?" can be
+    // answered by looking at the ROM instead of at a log line.
+    compileRelocations: [],
     viewSource: 'original',
     cursorOffset: 0,
     selection: null,
@@ -285,7 +289,7 @@
       romBytes: null, romName: '', romSystem: '', romSize: 0, romKey: '',
       cursorOffset: 0, selection: null, bookmarks: [], patches: {},
       undoStack: [], redoStack: [], sections: [],
-      compiledBytes: null, compiledAt: 0, compiledScope: '', viewSource: 'original',
+      compiledBytes: null, compiledAt: 0, compiledScope: '', compileRelocations: [], viewSource: 'original',
       searchQuery: '', searchResults: [], searchIndex: -1, status: ''
     });
   }
@@ -426,10 +430,24 @@
       compiledBytes: data,
       compiledAt: Number(info.at) || Date.now(),
       compiledScope: String(info.scope || ''),
+      compileRelocations: Array.isArray(info.relocations) ? info.relocations.slice() : [],
       // A compiled image exists again: showing it straight away is what makes
       // the Translation and Hex Editor activities agree after Compile.
       viewSource: 'compiled',
-      status: 'Compiled image ready (' + Math.round(data.length / 1024) + ' KB). Viewing compiled bytes.'
+      status: 'Compiled text ready (' + Math.round(data.length / 1024) + ' KB). Viewing the compiled bytes.'
+    });
+    return true;
+  }
+
+  /* The compiled image is invalid the moment its sources change (translations
+     cleared, project reloaded), so it is dropped instead of being left on
+     screen as if it still matched the work. */
+  function clearCompiledRom() {
+    if (!_state.compiledBytes && _state.viewSource === 'original') return false;
+    _set({
+      compiledBytes: null, compiledAt: 0, compiledScope: '', compileRelocations: [],
+      viewSource: 'original',
+      status: _state.compiledBytes ? 'Compiled view discarded.' : _state.status
     });
     return true;
   }
@@ -437,7 +455,7 @@
   function setViewSource(source) {
     var next = source === 'compiled' ? 'compiled' : 'original';
     if (next === 'compiled' && !_state.compiledBytes) {
-      _set({ status: 'No compiled image yet. Compile from the Translation activity first.' });
+      _set({ status: 'No compiled text yet. Compile from the Translation activity first.' });
       return false;
     }
     if (next === _state.viewSource) return true;
@@ -445,7 +463,7 @@
       viewSource: next,
       selection: null,
       status: next === 'compiled'
-        ? 'Viewing the compiled image. Editing is disabled on this view.'
+        ? 'Viewing the compiled text. Editing is disabled on this view.'
         : 'Viewing the loaded ROM.'
     });
     return true;
@@ -473,7 +491,7 @@
     // The compiled image is a read-only view: a byte typed here would vanish
     // on the next compile, so the edit is refused with a reason instead.
     if (isCompiledView()) {
-      _set({ status: 'This is the compiled image. Switch to Original to patch bytes.' });
+      _set({ status: 'This is the compiled text. Switch to Original to patch bytes.' });
       return false;
     }
     if (!_state.romBytes || !Number.isFinite(off) || off < 0 || off >= _state.romBytes.length) return false;
@@ -965,6 +983,10 @@
   K.hex.viewPatches = viewPatches;
   K.hex.isCompiledView = isCompiledView;
   K.hex.setCompiledRom = setCompiledRom;
+  K.hex.clearCompiledRom = clearCompiledRom;
+  K.hex.getRelocations = function () {
+    return isCompiledView() ? (_state.compileRelocations || []) : [];
+  };
   K.hex.setViewSource = setViewSource;
   K.hex.isPatched = isPatched;
   K.hex.setByte = setByte;

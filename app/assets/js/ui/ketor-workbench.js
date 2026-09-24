@@ -818,7 +818,8 @@
             return t.translatedText && String(t.translatedText).trim();
           }).length,
           patches: x ? Object.keys(x.patches || {}).length : 0,
-          build: (tr && tr.modifiedRom) ? tr.modifiedRom.length : 0
+          build: (tr && tr.modifiedRom) ? tr.modifiedRom.length : 0,
+          buildAt: (tr && tr.buildSummary) ? Number(tr.buildSummary.at) || 0 : 0
         };
       }
 
@@ -852,6 +853,35 @@
         }
         if (now.build !== prev.build && now.build) {
           A.appendLog('success', 'Modified ROM built: ' + Ketor.core.formatSize(now.build), 'session');
+        }
+
+        // The compile report belongs in this panel, not in the editor toolbar.
+        // An over-long text is relocated into free space and the game's own
+        // pointer is rewritten; every one of those decisions used to be thrown
+        // away, so "did it repoint?" could not be answered from the UI.
+        if (now.buildAt && now.buildAt !== prev.buildAt) {
+          var tr2 = Ketor.translate ? Ketor.translate.getState() : null;
+          var sum = tr2 && tr2.buildSummary ? tr2.buildSummary : null;
+          var logLines = (tr2 && Array.isArray(tr2.buildLog)) ? tr2.buildLog : [];
+          if (sum) {
+            A.appendLog('success',
+              'Compile report: ' + sum.relocated + ' text(s) relocated and repointed, ' +
+              sum.inPlace + ' written in place, ' + sum.pointersUpdated + ' pointer(s) updated' +
+              (sum.warnings.length ? ', ' + sum.warnings.length + ' warning(s)' : ', no warnings') +
+              (sum.scope === 'group' ? ' (selected group)' : ' (all groups)'), 'compile');
+          }
+          logLines.forEach(function (line) {
+            var text = String(line || '');
+            var isWarn = text.indexOf('[WARNING]') >= 0;
+            A.appendLog(isWarn ? 'warn' : 'info', text, 'compile');
+            if (isWarn) {
+              A.addProblem({
+                severity: 'warning',
+                source: 'compile',
+                message: text.replace('[WARNING] ', '')
+              });
+            }
+          });
         }
       }
 

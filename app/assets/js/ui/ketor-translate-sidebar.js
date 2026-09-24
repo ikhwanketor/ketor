@@ -164,7 +164,7 @@
             e('button', {
               type: 'button', className: 'kt-btn small secondary',
               onClick: function () { K.translate.showCompiledInHex(); },
-              title: 'Open the compiled image in the Hex Editor and compare it byte by byte'
+              title: 'Open the compiled text in the Hex Editor and compare it byte by byte'
             }, 'Show in Hex Editor')
           )
         ) : null,

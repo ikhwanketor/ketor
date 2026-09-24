@@ -62,7 +62,7 @@
   // two different rows of controls.
   var TOOL_BTN = {
     height: 24,
-    minWidth: 96,
+    minWidth: 88,
     padding: '0 10px',
     fontSize: 11,
     lineHeight: '22px',
@@ -70,6 +70,13 @@
   };
 
   function pad6(n) { return String(n).padStart(6, '0'); }
+
+  /* The list is one line per entry. A real line break inside a row would give
+     the rows different heights, and the table token would show up as a control
+     code, so a break is drawn as a marker instead. */
+  function oneLine(text) {
+    return K.translate.toDisplay(text).split('\n').join(' \u21b5 ');
+  }
 
   function overflowOf(byteLen, originalLen) {
     return originalLen > 0 && byteLen > originalLen;
@@ -116,12 +123,24 @@
     );
   }
 
+  /* x is the column inside the line the caret sits on, so it has to be
+     reported against the length of that line, not against the length of the
+     whole text: "x: 0/88" told the translator nothing. y counts lines. */
   function caretInfo(text, pos) {
     var value = String(text || '');
     var at = Math.max(0, Math.min(value.length, Number(pos) || 0));
     var before = value.slice(0, at);
     var lastBreak = before.lastIndexOf('\n');
-    return { x: at - lastBreak - 1, y: before.split('\n').length - 1, lines: value.split('\n').length };
+    var x = at - lastBreak - 1;
+    var lineStart = lastBreak + 1;
+    var nextBreak = value.indexOf('\n', lineStart);
+    var lineEnd = nextBreak === -1 ? value.length : nextBreak;
+    return {
+      x: x,
+      y: before.split('\n').length - 1,
+      lines: value.split('\n').length,
+      lineLength: Math.max(0, lineEnd - lineStart)
+    };
   }
 
   function BoxFooter(props) {
@@ -137,8 +156,10 @@
         flex: '0 0 auto'
       }
     },
-      e('span', { style: { opacity: 0.75 } }, 'x: ' + props.caret.x + '/' + props.length),
-      e('span', { style: { opacity: 0.75 } }, 'y: ' + props.caret.y + '/' + props.caret.lines),
+      e('span', { style: { opacity: 0.75 } },
+        'x: ' + props.caret.x + '/' + (props.caret.lineLength === undefined ? props.length : props.caret.lineLength)),
+      e('span', { style: { opacity: 0.75 } },
+        'y: ' + (props.caret.y + 1) + '/' + props.caret.lines),
       e('span', { style: { flex: 1 } }),
       props.mode ? e('span', {
         style: {
@@ -167,7 +188,38 @@
     var caretSt = uS(0);
     var caretPos = caretSt[0];
     var setCaretPos = caretSt[1];
-    var caret = caretInfo(text, caretPos);
+
+    // A new entry means the old index belongs to different text, which is what
+    // made the reported x/y look wrong: the caret stayed at the old offset.
+    uE(function () { setCaretPos(0); }, [props.offset, text]);
+
+    var at = Math.max(0, Math.min(text.length, Number(caretPos) || 0));
+    var caret = caretInfo(text, at);
+    var MAX_MARKED_CHARS = 800;
+    var marked = null;
+    if (text.length && text.length <= MAX_MARKED_CHARS) {
+      var out = [];
+      for (var ci = 0; ci < text.length; ci++) {
+        var chr = text.charAt(ci);
+        if (chr === '\n') {
+          out.push(e('span', { key: 'nl' + ci }, '\n'));
+          continue;
+        }
+        out.push(e('span', {
+          key: 'ch' + ci,
+          onClick: (function (index) {
+            return function () { setCaretPos(index); };
+          })(ci),
+          title: 'Column ' + caretInfo(text, ci).x + ', line ' + (caretInfo(text, ci).y + 1),
+          style: {
+            background: ci === at ? 'var(--kt-focus-border)' : 'transparent',
+            color: ci === at ? 'var(--kt-editor-bg)' : 'var(--kt-editor-fg)',
+            cursor: 'text'
+          }
+        }, chr));
+      }
+      marked = out;
+    }
 
     return e('div', {
       style: {
@@ -189,30 +241,25 @@
       },
         'Original (read only)',
         e('span', { style: { textTransform: 'none', letterSpacing: 0, opacity: 0.8 } },
-          'click inside to read x/y')
+          'click a character to mark it')
       ),
       e(Ruler, { length: text.length, caret: caret.x }),
-      e('textarea', {
-        value: text,
-        readOnly: true,
-        spellCheck: false,
-        onClick: function (ev) { setCaretPos(ev.target.selectionStart || 0); },
-        onKeyUp: function (ev) { setCaretPos(ev.target.selectionStart || 0); },
-        onSelect: function (ev) { setCaretPos(ev.target.selectionStart || 0); },
-        title: 'Read only. Click a character to read its column (x) and line (y).',
+      e('div', {
+        'data-kt-original-box': '1',
+        title: 'Read only. Click a character: its column (x) and line (y) are reported below.',
         style: {
           flex: '1 1 auto', minHeight: 0,
           width: '100%',
-          background: 'var(--kt-editor-bg)',
-          color: 'var(--kt-editor-fg)',
-          border: 'none',
-          outline: 'none',
-          resize: 'none',
-          cursor: 'text',
+          overflow: 'auto',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
           padding: '6px 8px',
-          fontFamily: MONO, fontSize: 13, lineHeight: 1.5
+          fontFamily: MONO, fontSize: 13, lineHeight: 1.5,
+          color: 'var(--kt-editor-fg)',
+          caretColor: 'var(--kt-focus-border)',
+          cursor: 'text'
         }
-      }),
+      }, marked || e('span', null, text || '(empty)')),
       e(BoxFooter, {
         caret: caret,
         length: text.length,
@@ -339,7 +386,8 @@
     var row = props.row;
     var active = props.active;
     var overflow = overflowOf(props.size, K.translate.measureOriginal(row));
-    var translation = String(row.translatedText || '');
+    var original = oneLine(row.originalText);
+    var translation = oneLine(row.translatedText);
 
     return e('div', {
       onClick: function () { props.onSelect(row.startByte); },
@@ -360,7 +408,7 @@
           flex: '1 1 auto', minWidth: 0,
           whiteSpace: 'pre', overflow: 'hidden', textOverflow: 'ellipsis'
         }
-      }, String(row.originalText || '')),
+      }, original),
       translation ? e('span', {
         style: {
           flex: '0 1 34%', minWidth: 0, opacity: 0.75,
@@ -390,7 +438,7 @@
         className: 'kt-select',
         value: value,
         onChange: function (ev) { props.onChange(ev.target.value); },
-        style: { width: 132, fontSize: 11 }
+        style: { flex: '0 1 132px', minWidth: 96, fontSize: 11 }
       },
         LANGUAGES.map(function (l) {
           return e('option', { key: l[0], value: l[0] }, l[0] + '  ' + l[1]);
@@ -556,11 +604,22 @@
     var setToolNote = noteSt[1];
 
     var onReplaceInGroup = uC(function () {
+      if (!String(findText || '')) {
+        setToolNote('Type what to find first.');
+        return;
+      }
       var n = K.translate.replaceInGroup(activeGroupId, findText, replText, caseSensitive);
       setToolNote(n
-        ? 'Replaced in ' + n + ' entry/entries.'
+        ? 'Replaced in ' + n + ' entry/entries of this group.'
         : 'Nothing matched in this group.');
     }, [activeGroupId, findText, replText, caseSensitive]);
+
+    // Enter is what a translator presses after typing a word to fix; it used
+    // to do nothing at all.
+    var onToolKeyDown = uC(function (ev) {
+      if (ev.key === 'Enter') { ev.preventDefault(); onReplaceInGroup(); }
+      else if (ev.key === 'Escape') { ev.preventDefault(); setToolsOpen(false); }
+    }, [onReplaceInGroup]);
 
     var onClearGroup = uC(function () {
       var n = 0;
@@ -568,20 +627,22 @@
         if (String(entries[i].translatedText || '')) n++;
       }
       if (!n) { setToolNote('This group has no translations to clear.'); return; }
-      if (!global.confirm('Clear ' + n + ' translation(s) in this group?')) return;
-      var done = K.translate.clearGroupTranslations(activeGroupId);
-      setToolNote('Cleared ' + done + ' translation(s).');
+      // Same contract as Clear in the Hex Editor: the work is thrown away,
+      // including the ROM that was compiled from it, so no stale compiled
+      // image is left behind pretending the translations are still in it.
+      var hadBuild = !!t.modifiedRom;
+      if (!global.confirm('Clear ' + n + ' translation(s) in this group?' +
+        (hadBuild ? ' The compiled ROM is discarded too.' : ''))) return;
+      var done = K.translate.clearGroupTranslations(activeGroupId, true);
+      setToolNote('Cleared ' + done + ' translation(s).' + (hadBuild ? ' Compiled ROM discarded.' : ''));
     }, [activeGroupId, entries]);
 
     /* ---- Compile report (Batch 21) --------------------------------
        rebuildRom() relocates a text that no longer fits, writes it into free
        space and rewrites the pointer that the game follows. It reports every
        decision; until now that report was thrown away. */
-    var reportSt = uS(false);
-    var reportOpen = reportSt[0];
-    var setReportOpen = reportSt[1];
-    var buildSummary = t.buildSummary;
-    var buildLog = t.buildLog || [];
+    // The compile report lives in the bottom panel Log now, not in this
+    // toolbar: it is a report, not a control.
 
     if (!t.romName) {
       return e('div', { className: 'kt-activity-placeholder' },
@@ -622,7 +683,7 @@
         style: {
           flex: '0 0 auto',
           display: 'flex', alignItems: 'center', gap: 8,
-          flexWrap: 'nowrap', overflowX: 'auto',
+          flexWrap: 'nowrap',
           padding: '5px 10px',
           borderBottom: '1px solid var(--kt-widget-border-default)',
           background: 'var(--kt-sidebar-bg)'
@@ -633,6 +694,7 @@
             fontSize: 12, fontWeight: 600,
             color: activeGroup ? activeGroup.color : 'inherit',
             whiteSpace: 'nowrap',
+            flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
             borderBottom: '2px solid ' + (activeGroup ? activeGroup.color : 'transparent'),
             paddingBottom: 1
           }
@@ -642,7 +704,7 @@
           value: status,
           title: 'Show only part of the group',
           onChange: function (ev) { K.translate.setFilter(ev.target.value); },
-          style: { fontSize: 11, width: 148 }
+          style: { fontSize: 11, flex: '0 1 148px', minWidth: 110 }
         },
           e('option', { value: 'all' }, 'All entries'),
           e('option', { value: 'untranslated' }, 'Untranslated'),
@@ -688,7 +750,7 @@
           style: {
             fontSize: 11, color: 'var(--kt-sidebar-fg)',
             display: 'flex', gap: 12, whiteSpace: 'nowrap',
-            marginLeft: 'auto', paddingLeft: 12
+            flex: '0 0 auto', marginLeft: 'auto', paddingLeft: 12
           }
         },
           e('span', null, 'Total: ', e('strong', null, stats.total)),
@@ -708,21 +770,24 @@
           fontSize: 11
         }
       },
-        e('span', { style: { opacity: 0.7 } }, 'Find'),
+        e('span', { style: { opacity: 0.7, whiteSpace: 'nowrap' } },
+          'Find in this group\u2019s translations'),
         e('input', {
           type: 'text', className: 'kt-input',
           value: findText,
-          placeholder: 'text inside the translation',
+          placeholder: 'word or token to find',
+          onKeyDown: onToolKeyDown,
           onChange: function (ev) { setFindText(ev.target.value); },
-          style: { width: 190, fontSize: 11, fontFamily: MONO }
+          style: { flex: '0 1 190px', minWidth: 92, fontSize: 11, fontFamily: MONO }
         }),
         e('span', { style: { opacity: 0.7 } }, 'Replace with'),
         e('input', {
           type: 'text', className: 'kt-input',
           value: replText,
-          placeholder: '',
+          placeholder: 'replacement (empty deletes it)',
+          onKeyDown: onToolKeyDown,
           onChange: function (ev) { setReplText(ev.target.value); },
-          style: { width: 190, fontSize: 11, fontFamily: MONO }
+          style: { flex: '0 1 190px', minWidth: 92, fontSize: 11, fontFamily: MONO }
         }),
         e('label', {
           style: { display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' },
@@ -742,7 +807,10 @@
           disabled: !findText || !entries.length,
           title: 'Replace inside every translation of this group. Originals are never touched.'
         }, 'Replace in group'),
-        toolNote ? e('span', { style: { opacity: 0.8 } }, toolNote) : null
+        toolNote ? e('span', { style: { opacity: 0.85, whiteSpace: 'nowrap' } }, toolNote) : null,
+        e('span', { style: { flex: 1 } }),
+        e('span', { style: { opacity: 0.55, whiteSpace: 'nowrap' } },
+          'Enter replaces, Esc closes. Original texts are never changed.')
       ) : null,
 
       e('div', {
@@ -813,7 +881,7 @@
         style: {
           flex: '0 0 auto',
           display: 'flex', alignItems: 'center', gap: 8,
-          flexWrap: 'nowrap', overflowX: 'auto',
+          flexWrap: 'nowrap',
           padding: '5px 10px',
           borderBottom: '1px solid var(--kt-widget-border-default)',
           background: 'var(--kt-sidebar-bg)'
@@ -871,7 +939,7 @@
             onChange: function (ev) {
               K.translate.setProviderMode(ev.target.value === 'custom' ? 'custom' : 'free');
             },
-            style: { fontSize: 11, width: 112 }
+            style: { fontSize: 11, flex: '0 1 118px', minWidth: 94 }
           },
             e('option', { value: 'free' }, 'Free (fallback)'),
             e('option', { value: 'custom' }, 'AI')
@@ -883,7 +951,7 @@
           value: t.providerId,
           title: 'Translation provider. The list comes from core/translator.js.',
           onChange: function (ev) { K.translate.setProvider(ev.target.value); },
-          style: { fontSize: 11, width: 186 }
+          style: { fontSize: 11, flex: '0 1 186px', minWidth: 100 }
         },
           providers.map(function (p) {
             return e('option', { key: p.id, value: p.id }, p.label);
@@ -897,7 +965,7 @@
           value: apiKey,
           onChange: function (ev) { setKey(ev.target.value); },
           title: 'Stored in memory only. Never written to the project, the CSV export or the session.',
-          style: { width: 168, fontSize: 11 }
+          style: { flex: '0 1 168px', minWidth: 88, fontSize: 11 }
         }) : null,
 
         !freeMode && providerKind === 'chat' ? e('input', {
@@ -907,7 +975,7 @@
           value: t.providerModel,
           onChange: function (ev) { K.translate.setProviderModel(ev.target.value); },
           title: 'Model id. Defaults come from the provider list; model names change, so this stays editable.',
-          style: { width: 150, fontSize: 11, fontFamily: MONO }
+          style: { flex: '0 1 150px', minWidth: 76, fontSize: 11, fontFamily: MONO }
         }) : null,
 
         !freeMode && t.providerId === 'custom' ? e('input', {
@@ -917,73 +985,11 @@
           value: t.providerEndpoint,
           onChange: function (ev) { K.translate.setProviderEndpoint(ev.target.value); },
           title: 'Endpoint for the custom provider. Any OpenAI compatible server works.',
-          style: { width: 250, fontSize: 11, fontFamily: MONO }
+          style: { flex: '0 1 250px', minWidth: 100, fontSize: 11, fontFamily: MONO }
         }) : null,
 
         e('span', { style: { flex: 1 } })
       ),
-
-      // The build worker reports every relocation and pointer rewrite it
-      // performed. It is the only proof that an over-long translation was
-      // moved into free space and repointed instead of being truncated.
-      buildSummary ? e('div', {
-        style: {
-          flex: '0 0 auto',
-          borderBottom: '1px solid var(--kt-widget-border-default)',
-          background: 'var(--kt-editor-bg)',
-          fontSize: 11
-        }
-      },
-        e('div', {
-          style: {
-            display: 'flex', alignItems: 'center', gap: 10,
-            padding: '4px 10px', flexWrap: 'nowrap', overflowX: 'auto'
-          }
-        },
-          e('span', { style: { fontWeight: 600, whiteSpace: 'nowrap' } }, 'Compile report'),
-          e('span', { style: { opacity: 0.7, fontFamily: MONO, whiteSpace: 'nowrap' } },
-            new Date(buildSummary.at).toLocaleTimeString()),
-          e('span', { style: { whiteSpace: 'nowrap' } },
-            buildSummary.relocated + ' relocated & repointed'),
-          e('span', { style: { whiteSpace: 'nowrap' } },
-            buildSummary.inPlace + ' written in place'),
-          e('span', { style: { whiteSpace: 'nowrap' } },
-            buildSummary.pointersUpdated + ' pointer(s) updated'),
-          buildSummary.warnings.length ? e('span', {
-            style: { color: 'var(--kt-error-fg)', fontWeight: 700, whiteSpace: 'nowrap' },
-            title: buildSummary.warnings.join('\n')
-          }, buildSummary.warnings.length + ' warning(s)') : e('span', {
-            style: { opacity: 0.7, whiteSpace: 'nowrap' }
-          }, 'no warnings'),
-          e('span', { style: { flex: 1 } }),
-          e('button', {
-            type: 'button', className: 'kt-btn small secondary',
-            style: TOOL_BTN,
-            onClick: function () { setReportOpen(!reportOpen); }
-          }, reportOpen ? 'Hide log' : 'Show log'),
-          e('button', {
-            type: 'button', className: 'kt-btn small secondary',
-            style: TOOL_BTN,
-            onClick: function () { K.translate.showCompiledInHex(); },
-            title: 'Open the compiled image in the Hex Editor'
-          }, 'Show in Hex Editor')
-        ),
-        reportOpen ? e('pre', {
-          style: {
-            margin: 0, padding: '6px 10px',
-            maxHeight: 170, overflow: 'auto',
-            fontFamily: MONO, fontSize: 10.5, lineHeight: 1.45,
-            borderTop: '1px solid var(--kt-widget-border-default)',
-            whiteSpace: 'pre-wrap', wordBreak: 'break-word'
-          }
-        }, buildLog.map(function (line, i) {
-          var warn = String(line).indexOf('[WARNING]') >= 0;
-          return e('div', {
-            key: 'log-' + i,
-            style: { color: warn ? 'var(--kt-error-fg)' : 'inherit' }
-          }, String(line));
-        })) : null
-      ) : null,
 
       e('div', {
         style: {
@@ -994,6 +1000,7 @@
         active
           ? e(SourceBox, {
               text: active.originalText,
+              offset: active.startByte,
               size: K.translate.measureOriginal(active)
             })
           : e('div', {

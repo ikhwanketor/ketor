@@ -884,8 +884,8 @@
               className: 'kt-select',
               value: compiledView ? 'compiled' : 'original',
               title: t.compiledBytes
-                ? 'Original: the loaded ROM with your patches. Compiled: the image the Translation activity built.'
-                : 'No compiled image yet. Compile from the Translation activity.',
+                ? 'Original: the loaded ROM with your patches. Compiled: the text the Translation activity built.'
+                : 'No compiled text yet. Compile from the Translation activity.',
               onChange: function (ev) { K.hex.setViewSource(ev.target.value); },
               style: { width: 112, fontSize: 11 }
             },
@@ -952,10 +952,31 @@
             display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap'
           }
         },
-          e('span', null,
-            'Compiled image from the Translation activity (' +
+          e('span', { style: { whiteSpace: 'nowrap' } },
+            'Compiled text from the Translation activity (' +
             Math.round((t.compiledBytes ? t.compiledBytes.length : 0) / 1024) + ' KB, ' +
             (t.compiledScope === 'group' ? 'selected group' : 'all groups') + '). Read only.'),
+
+          // Where the compile moved text to. A relocated text is written into
+          // free space and the pointer is rewritten, so the original offset
+          // still holds the old bytes: without this the ROM looks unchanged.
+          (t.compileRelocations || []).length ? e('span', {
+            style: { display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }
+          },
+            e('span', null, (t.compileRelocations || []).length + ' relocated text(s), new offset:'),
+            (t.compileRelocations || []).slice(0, 8).map(function (r, i) {
+              var hexOff = '0x' + Number(r.to).toString(16).toUpperCase().padStart(6, '0');
+              return e('button', {
+                key: 'reloc' + i,
+                type: 'button',
+                className: 'kt-btn small',
+                title: 'Moved from 0x' + Number(r.from).toString(16).toUpperCase().padStart(6, '0') +
+                  (r.pointers ? ' and ' + r.pointers + ' pointer(s) updated' : '') + '. Click to jump there.',
+                onClick: function () { K.hex.setCursor(r.to); }
+              }, hexOff);
+            })
+          ) : null,
+
           e('span', { style: { flex: 1 } }),
           e('button', {
             type: 'button', className: 'kt-btn small secondary',

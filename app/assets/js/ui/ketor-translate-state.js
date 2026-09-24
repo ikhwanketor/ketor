@@ -51,6 +51,7 @@
   var _listeners = new Set();
   var _workers = { table: null, build: null };
   var _lastBuildPatches = 0;
+  var _pendingBuildCount = 0;
   var _pendingTableName = null;
 
   function _set(patch) {
@@ -327,7 +328,7 @@
     return count;
   }
 
-  function clearGroupTranslations(groupId) {
+  function clearGroupTranslations(groupId, discardBuild) {
     if (!K.search || !groupId) return 0;
     var entries = K.search.getTextsByGroup(groupId);
     var count = 0;
@@ -336,6 +337,12 @@
       K.search.setTranslatedText(row.startByte, '');
       count++;
     });
+    // A compiled ROM built from translations that no longer exist is worse
+    // than no ROM, so it goes with them.
+    if (discardBuild && (_state.modifiedRom || _state.buildSummary)) {
+      _set({ modifiedRom: null, buildLog: [], buildSummary: null });
+      if (K.hex && typeof K.hex.clearCompiledRom === 'function') K.hex.clearCompiledRom();
+    }
     return count;
   }
 
@@ -457,6 +464,7 @@
     }
     var romBuffer = patched.buffer;
     _lastBuildPatches = appliedPatches;
+    _pendingBuildCount = buildTexts.length;
 
     _workers.build.postMessage({
       type: 'buildRom',
@@ -496,18 +504,32 @@
       var inPlace = 0;
       var pointersUpdated = 0;
       var warnings = [];
+      var relocations = [];
+      var lastBlock = 0;
       log.forEach(function (line) {
         var text = String(line || '');
-        if (/Relocated to 0x[0-9A-F]+/i.test(text)) relocated++;
-        else if (/Injected in-place|Updated \d+ pointer\(s\) in-place/i.test(text)) inPlace++;
+        var bm = text.match(/^Block at 0x([0-9A-F]+)/i);
+        if (bm) lastBlock = parseInt(bm[1], 16);
+        var rm = text.match(/Relocated to 0x([0-9A-F]+)/i);
+        if (rm) {
+          relocated++;
+          // Where the text went, so the Hex Editor can point at the new bytes
+          // instead of leaving the user staring at the old ones.
+          relocations.push({ from: lastBlock, to: parseInt(rm[1], 16), len: 0 });
+        } else if (/Injected in-place|Updated \d+ pointer\(s\) in-place/i.test(text)) inPlace++;
         var pm = text.match(/Updated (\d+) pointer/);
-        if (pm) pointersUpdated += Number(pm[1]) || 0;
+        if (pm) {
+          pointersUpdated += Number(pm[1]) || 0;
+          if (relocations.length) relocations[relocations.length - 1].pointers = Number(pm[1]) || 0;
+        }
         if (text.indexOf('[WARNING]') >= 0) warnings.push(text);
       });
       var summary = {
         at: Date.now(),
         bytes: bytes.length,
+        texts: _pendingBuildCount,
         scope: _state.compileScope,
+        relocations: relocations,
         relocated: relocated,
         inPlace: inPlace,
         pointersUpdated: pointersUpdated,
@@ -518,7 +540,8 @@
       _set({
         modifiedRom: bytes, isBusy: false, progress: 100,
         buildLog: log, buildSummary: summary,
-        status: 'Compiled' + scopeNote + ': ' + Math.round(bytes.length / 1024) + ' KB' + patchNote +
+        status: 'Compiled text' + scopeNote + ': ' + _pendingBuildCount + ' text(s), ' +
+          Math.round(bytes.length / 1024) + ' KB' + patchNote +
           (relocated ? ', ' + relocated + ' text(s) relocated and repointed' : ', no relocation needed') +
           (warnings.length ? ', ' + warnings.length + ' warning(s)' : '')
       });
@@ -526,7 +549,9 @@
       // Hand the compiled image to the Hex Editor so both activities show the
       // same bytes after a compile. Nothing is written into the loaded ROM.
       if (K.hex && typeof K.hex.setCompiledRom === 'function') {
-        K.hex.setCompiledRom(bytes, { at: summary.at, scope: summary.scope });
+        K.hex.setCompiledRom(bytes, {
+          at: summary.at, scope: summary.scope, relocations: relocations
+        });
       }
       setTimeout(function () { _set({ progress: 0 }); }, 800);
       return;

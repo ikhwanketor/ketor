@@ -1,4 +1,4 @@
-﻿window.__PT_APP_READY__ = false;
+window.__PT_APP_READY__ = false;
     window.__PT_RUNTIME_ERROR_HANDLER__ = null;
     const showBootstrapError = (title, detail) => {
       if (window.__PT_APP_READY__ && typeof window.__PT_RUNTIME_ERROR_HANDLER__ === 'function') {
@@ -345,8 +345,20 @@
             const end = i + cand.charLen;
             if (end > n) continue;
             const seg = sourceText.slice(i, end);
-            if (seg !== cand.token && sourceUpper.slice(i, end) !== cand.tokenUpper) continue;
+            const isExactCase = seg === cand.token;
+            // A token may be written in another case than the table lists it
+            // ("[line]" for "[LINE]"), which is why the uppercase form is
+            // accepted at all. For a single character that leniency is wrong:
+            // "T" and "t" are different codes, and the lowercase token used to
+            // win the tie, so every capital letter was written with the code of
+            // its lowercase form.
+            const isLooseCase = !isExactCase && sourceUpper.slice(i, end) === cand.tokenUpper;
+            if (!isExactCase && !isLooseCase) continue;
             let candidateCost = cand.byteLen;
+            // Loose case is a fallback, never a tie winner: a table that only
+            // lists lowercase still encodes an uppercase source instead of
+            // dropping the character.
+            if (isLooseCase) candidateCost += 0.5;
             if (usePaddingByte && cand.byteLen === 1) {
               const tokenStr = String(cand.token || '');
               const upper = tokenStr.toUpperCase();
