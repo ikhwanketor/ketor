@@ -407,8 +407,26 @@
     // occupies, measured with the encoder that is about to write. A range
     // length that is too generous would let the new text run into the next
     // string instead of being relocated and repointed.
+    /* Which other texts live in the same pointer container as the ones being written.
+       This used to be "the texts assigned to a group", and that was not enough: in this
+       ROM the dialogue is packed back to back with a two byte gap, so a translated text
+       that is written longer runs into the text that follows it. The engine only protects
+       the neighbours it has been told about, so a neighbour outside the groups was
+       overwritten and the game lost it. The window below hands the engine every text
+       near a translation, whether it belongs to a group or not. */
+    var translatedOffsets = searchTexts.filter(function (t) {
+      return (t.translatedText || '').trim().length > 0;
+    }).map(function (t) { return Number(t.startByte); });
+    var WINDOW = 0x10000;
+    function nearATranslation(t) {
+      var start = Number(t.startByte);
+      for (var i = 0; i < translatedOffsets.length; i++) {
+        if (Math.abs(translatedOffsets[i] - start) <= WINDOW) return true;
+      }
+      return false;
+    }
     var contextTexts = searchTexts.filter(function (t) {
-      return assigned.has(Number(t.startByte));
+      return assigned.has(Number(t.startByte)) || nearATranslation(t);
     }).map(function (t) {
       // A unique id per entry. The build worker keys its text map by id, so
       // entries without one (or with a repeated one) collapse into a single

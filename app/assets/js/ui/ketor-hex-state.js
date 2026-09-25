@@ -682,7 +682,18 @@
   function exportPatchedRom() {
     var bytes = getPatchedBytes();
     if (!bytes) { _set({ status: 'No ROM loaded.' }); return; }
-    var name = (_state.romName || 'patched.rom').replace(/\.[^.]+$/, '') + '_patched.rom';
+    /* The exported file has to be the format the console expects, not a generic .rom:
+       emulators and flash carts decide by extension, and a GBA file called .rom is a
+       file the user has to rename before anything will open it. The extension of the
+       file that was loaded wins; the console profile is the fallback. */
+    var romExtension = function () {
+      var fromName = /^(.*)\.([A-Za-z0-9]{1,4})$/.exec(String(_state.romName || ''));
+      if (fromName) return fromName[2].toLowerCase();
+      var profile = K.core && K.core.consoleProfile ? K.core.consoleProfile(_state.romSystem) : null;
+      var byId = { gba: 'gba', nds: 'nds', nes: 'nes', snes: 'sfc', gb: 'gb', gbc: 'gbc', genesis: 'md', pce: 'pce', ps1: 'bin' };
+      return (profile && byId[profile.id]) || 'bin';
+    };
+    var name = (_state.romName || ('patched.' + romExtension())).replace(/\.[^.]+$/, '') + '_patched.' + romExtension();
     var blob = new Blob([bytes], { type: 'application/octet-stream' });
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
