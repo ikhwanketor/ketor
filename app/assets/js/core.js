@@ -2345,7 +2345,51 @@ window.__PT_APP_READY__ = false;
            is what made the game skip dialogue: this rom put one at 0x1A73C4 while
            its neighbours stayed at 0xEA7C8, and the engine reads the table in
            order. */
-        const growByBorrowingFollowingPadding = (list) => {
+        /* The records of this rom are indexed by one pointer table, and pages inside
+         a record have no pointer of their own: anything the search finds for a page
+         is a look-alike. Build 69 acted on those look-alikes and moved four pages
+         to 0x1297F4 while the game skipped exactly those conversations, so the rule
+         is now: only the head of a record may leave its place, a page inside a
+         record can only grow where it is (or be reported so it can be shortened). */
+      let _recordTable = null;
+      const recordTable = () => {
+        if (_recordTable) return _recordTable;
+        _recordTable = { entries: [] };
+        for (let start = 0; start + 8 * 8 <= originalRom.length; start += 2) {
+          const run = [];
+          for (let k = 0; k < 8; k++) {
+            const at = start + k * 4;
+            const v = (originalRom[at] | (originalRom[at + 1] << 8) | (originalRom[at + 2] << 16) | (originalRom[at + 3] << 24)) >>> 0;
+            if ((v & 0xFF000000) !== 0x08000000) break;
+            const off = v & 0x01FFFFFF;
+            if (off >= originalRom.length) break;
+            if (run.length && off <= run[run.length - 1]) break;
+            run.push(off);
+          }
+          if (run.length < 8) continue;
+          let at = start + run.length * 4;
+          while (at + 4 <= originalRom.length) {
+            const v = (originalRom[at] | (originalRom[at + 1] << 8) | (originalRom[at + 2] << 16) | (originalRom[at + 3] << 24)) >>> 0;
+            if ((v & 0xFF000000) !== 0x08000000) break;
+            const off = v & 0x01FFFFFF;
+            if (off >= originalRom.length || off <= run[run.length - 1]) break;
+            run.push(off);
+            at += 4;
+          }
+          if (run.length > _recordTable.entries.length) _recordTable.entries = run;
+          start += (run.length - 1) * 4;
+        }
+        return _recordTable;
+      };
+      const recordIndexFor = (offset) => {
+        const entries = recordTable().entries;
+        for (let k = 0; k < entries.length - 1; k++) {
+          if (offset >= entries[k] && offset < entries[k + 1]) return k;
+        }
+        return -1;
+      };
+
+      const growByBorrowingFollowingPadding = (list) => {
           if (!needsRelocation) return null;
           const grow = Number(newBlockBytes.length) - Number(originalBlockLength);
           if (!(grow > 0)) return null;
@@ -2668,6 +2712,15 @@ window.__PT_APP_READY__ = false;
             if (borrowed) {
               romCopy.set(newBlockBytes, block.start);
               relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: Grew in place by ${borrowed.grew} byte(s) instead of moving; ${borrowed.moved} message(s) after it slid forward and ${borrowed.repointed} pointer(s) were recalculated.`);
+              continue;
+            }
+          }
+          /* A page inside a record may not move: no pointer of its own exists, so a
+             relocation would trust a look-alike and the conversation would vanish. */
+          if (needsRelocation) {
+            const ridx = recordIndexFor(block.start);
+            if (ridx >= 0 && recordTable().entries[ridx] !== block.start) {
+              relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: [WARNING] This page sits inside record 0x${recordTable().entries[ridx].toString(16).toUpperCase()} and has no pointer of its own, so it was left where it is. Shorten the page (it needs ${Number(newBlockBytes.length) - Number(originalBlockLength)} byte(s) less) or move the whole record.`);
               continue;
             }
           }
