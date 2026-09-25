@@ -38,7 +38,8 @@
      compression schemes come from its profile instead of from a guess. */
   function consoleProfile() {
     var h = K.hex && K.hex.getState ? K.hex.getState() : null;
-    var name = h ? h.romSystem : '';
+    // what the identifier worked out wins over the loader's label
+    var name = (_state.romIdentity && _state.romIdentity.system) || (h ? h.romSystem : '');
     if (!K.core || !K.core.consoleProfile) return { id: 'unknown', label: 'Unknown', tileFormats: ['gba-4bpp'], defaultFormat: 'gba-4bpp', mapLayout: 'gba-text', compression: [] };
     return K.core.consoleProfile(name);
   }
@@ -53,6 +54,7 @@
     // a compressed graphic the user picked: the editor then reads the
     // decompressed bytes instead of the ROM
     graphicSource: null,
+    romIdentity: null,
     format: 'gba-4bpp',
     palette: null,
     paletteOffset: null,
@@ -233,20 +235,11 @@
 
   /* Which pixels of a tile one byte covers, so the Hex Editor cursor can be
      shown on the canvas. 4bpp: two pixels, 8bpp: one, 2bpp planes: a row. */
+  /* Which pixels of a tile one byte covers comes from the shared mapping, so the
+     hex cursor lands on the same pixels the codec reads. */
   function pixelSpanForByte(format, index) {
-    var b = Number(index) || 0;
-    if (format === 'gba-4bpp') {
-      var row = Math.floor(b / 4), par = b % 4;
-      return [{ x: par * 2, y: row }, { x: par * 2 + 1, y: row }];
-    }
-    if (format === 'gba-8bpp') return [{ x: b % 8, y: Math.floor(b / 8) }];
-    if (format === 'gb-2bpp' || format === 'nes-2bpp') {
-      var r2 = Math.floor(b / 2);
-      var span = [];
-      for (var x = 0; x < 8; x++) span.push({ x: x, y: r2 });
-      return span;
-    }
-    return null;
+    if (!K.core.byteToPixels || !K.core.tileFormat) return null;
+    return K.core.byteToPixels(K.core.tileFormat(format), index, 8);
   }
 
   /* ---------- detection ---------- */
@@ -326,6 +319,33 @@
 
   function clearSource() {
     _set({ graphicSource: null, status: 'Reading the ROM again.' });
+  }
+
+  /* The safe write: copy the region somewhere free, redirect every pointer that
+     named the old address, and let the whole move land in the patch layer, so it
+     can be undone or thrown away like any other edit. Nothing here guesses: the
+     plan refuses when there is no free space or the console needs a mapper the
+     file does not describe. */
+  function repointRegion(count) {
+    var C = K.core;
+    var bytes = romBytes();
+    if (!bytes || !C.planRelocation) { _set({ status: 'Load a ROM first.' }); return null; }
+    if (_state.graphicSource) { _set({ status: 'A compressed graphic cannot be moved yet: rewriting the stream comes with the compressor.' }); return null; }
+    var win = regionWindow();
+    var region = Number(_state.region);
+    if (!win || !Number.isFinite(region)) { _set({ status: 'Pick a region first.' }); return null; }
+    var tiles = Math.max(1, Math.min(Number(count) || 64, _state.tiles));
+    var size = C.tileSize(_state.format) * tiles;
+    var payload = win.bytes.slice(0, size);
+    var plan = C.planRelocation(bytes, payload, { system: consoleProfile().id, oldOffset: region, align: 4 });
+    if (!plan.ok) { _set({ status: 'Move refused: ' + plan.reason + '.' }); return plan; }
+    var written = C.applyPlan(plan, function (offset, value) { return K.hex.setByte(offset, value); });
+    _set({
+      status: 'Moved ' + plan.bytes + ' byte(s) from 0x' + hex6(region) + ' to 0x' + hex6(plan.newOffset)
+        + (plan.grows ? ', appended at the end' : ', into free space') + '. ' + plan.pointers.length
+        + ' pointer(s) redirected, ' + written + ' byte(s) written as patches. Undo or Clear discards the move.'
+    });
+    return plan;
   }
 
   /* ---------- palette ---------- */
@@ -1095,12 +1115,12 @@
     /* ---- map view handlers ---- */
 
     function mapCellAt(ev, canvas) {
-      var rect = canvas.getBoundingClientRect();
-      var z = st.zoom;
-      var col = Math.floor((ev.clientX - rect.left) / (8 * z));
-      var row = Math.floor((ev.clientY - rect.top) / (8 * z));
-      if (!mapWin || col < 0 || row < 0 || col >= mapWin.cols || row >= mapWin.rows) return null;
-      return row * mapWin.cols + col;
+      if (!mapWin) return null;
+      var point = K.core.screenToCanvas(ev.clientX, ev.clientY, canvas.getBoundingClientRect());
+      var hit = K.core.mapHit(point.x, point.y, {
+        zoom: st.zoom, columns: mapWin.cols, rows: mapWin.rows, tileWidth: 8, tileHeight: 8
+      });
+      return hit ? hit.cell : null;
     }
     function placeMapTile(cell) {
       var tile = currentDrawTile(selected);
@@ -1155,20 +1175,15 @@
       pickMapTile(cell);
     }
 
-    // Pixel under the pointer: which tile, and which of its 64 pixels.
+    /* Pixel under the pointer. The arithmetic lives in core/canvas-math.js and is
+       covered by a round trip test over the whole canvas, so the click and the
+       byte it changes cannot drift apart here. */
     function pixelAt(ev, canvas) {
-      var rect = canvas.getBoundingClientRect();
-      var z = st.zoom;
-      var perRow = Math.max(1, Math.floor((width - 16) / (8 * z)));
-      var col = Math.floor((ev.clientX - rect.left) / (8 * z));
-      var row = Math.floor((ev.clientY - rect.top) / (8 * z));
-      if (col < 0 || row < 0 || col >= perRow) return null;
-      var t = row * perRow + col;
-      if (t < 0 || t >= st.tiles) return null;
-      var x = Math.floor(((ev.clientX - rect.left) - col * 8 * z) / z);
-      var y = Math.floor(((ev.clientY - rect.top) - row * 8 * z) / z);
-      if (x < 0 || x > 7 || y < 0 || y > 7) return null;
-      return { tile: t, x: x, y: y };
+      var point = K.core.screenToCanvas(ev.clientX, ev.clientY, canvas.getBoundingClientRect());
+      var hit = K.core.tileHit(point.x, point.y, {
+        zoom: st.zoom, availableWidth: width - 16, tiles: st.tiles, tileWidth: 8, tileHeight: 8
+      });
+      return hit ? { tile: hit.tile, x: hit.x, y: hit.y } : null;
     }
 
     function line(x0, y0, x1, y1, fn) {
@@ -1493,6 +1508,8 @@
     var formatIds = preferred.concat(others);
     return e('div', { style: { padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 } },
       e('div', { style: { fontWeight: 600 } }, 'Tiles'),
+      st.romIdentity ? e('div', { style: { fontSize: 11, opacity: 0.8, lineHeight: 1.4 } },
+        (st.romIdentity.title || 'Unrecognised ROM') + ' - ' + st.romIdentity.reason) : null,
       e('div', { style: { opacity: 0.75 } }, 'Console: ' + prof.label
         + (prof.compression && prof.compression.length ? ' (compressed graphics)' : ' (raw tile data)')),
       e('label', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
@@ -1563,6 +1580,12 @@
         }),
         e('button', { type: 'button', className: 'kt-btn small', onClick: commitRegion }, 'Go')
       ),
+      e('button', {
+        type: 'button', className: 'kt-btn small secondary',
+        disabled: st.region === null || !hex || !hex.romBytes,
+        title: 'Copy this region into free space and rewrite every pointer that named the old address. The move is kept as patches, so Undo or Clear discards it.',
+        onClick: function () { repointRegion(64); }
+      }, 'Move region to free space'),
       e('div', { style: { height: 1, background: 'var(--kt-widget-border-default)', margin: '2px 0' } }),
       e('div', { style: { fontWeight: 600 } }, 'Map'),
       e('div', { style: { opacity: 0.7, lineHeight: 1.45 } }, 'GBA text mode map: one 2 byte entry per cell, tile number in bits 0-9, flips in 10-11, palette bank in 12-15. Click places the current tile, Ctrl+click picks it, Alt+click swaps it, Shift+click fills, middle drag scrolls.'),
@@ -1661,9 +1684,16 @@
 
   // A new ROM can be a different console, so the format and any opened compressed
   // source are dropped when one arrives.
-  global.addEventListener('ketor:rom-loaded', function () {
+  global.addEventListener('ketor:rom-loaded', function (ev) {
+    // Identifying hashes the whole file, so it happens once per load, not per render.
+    var detail = (ev && ev.detail) || {};
+    var ident = null;
+    if (detail.data && K.core.identifyRom) {
+      try { ident = K.core.identifyRom(detail.data, detail.name || ''); } catch (err) { ident = null; }
+    }
     var prof = consoleProfile();
     _set({
+      romIdentity: ident,
       graphicSource: null,
       candidates: [],
       region: null,
@@ -1690,6 +1720,7 @@
     MAP_SIZES: MAP_SIZES, mapWindow: mapWindow, charWindow: charWindow, mapEntry: mapEntry,
     detectMap: detectMap, scoreMapBlock: scoreMapBlock, charBase: charBase,
     consoleProfile: consoleProfile, mapLayoutId: mapLayoutId, openCandidate: openCandidate, clearSource: clearSource,
+    repointRegion: repointRegion, romIdentity: function () { return _state.romIdentity; },
     writeMapEntry: writeMapEntry, mapBucket: mapBucket, renderMap: renderMap, bankPalette: bankPalette,
     decodeMapTile: decodeMapTile, entryTile: entryTile, entryFlipH: entryFlipH, entryFlipV: entryFlipV,
     entryBank: entryBank, setView: function (v) { _set({ view: String(v) }); },
