@@ -480,21 +480,29 @@
     else if (bytes && bytes.buffer) data = new Uint8Array(bytes.buffer, bytes.byteOffset || 0, bytes.byteLength);
     if (!data || !data.length) return false;
     var info = meta || {};
+    var source = _state.romBytes;
+    if (!source || source.length !== data.length) return false;
+
+    // The insert is expressed as a patch layer on top of the loaded ROM, not
+    // as a replacement for it. That is what makes one ecosystem work: the Hex
+    // Editor shows the inserted bytes, paints them as changed bytes, Clear
+    // discards them (back to the source) and Export writes source + patches.
+    var patches = Object.assign({}, _state.patches);
+    var diffCount = 0;
+    for (var i = 0; i < data.length; i++) {
+      if (data[i] === source[i]) continue;
+      if (patches[i] !== data[i]) diffCount++;
+      patches[i] = data[i];
+    }
     _set({
-      romBytes: data,
-      romSize: data.length,
+      patches: patches,
       compiledBytes: data,
       compileRelocations: Array.isArray(info.relocations) ? info.relocations.slice() : [],
       compiledAt: Number(info.at) || Date.now(),
       compiledScope: String(info.scope || ''),
-      // The build already wrote the hex patches into this buffer.
-      patches: {},
-      undoStack: [],
-      redoStack: [],
-      selection: null,
-      status: 'Inserted ROM adopted (' + Math.round(data.length / 1024) + ' KB). The Hex Editor shows it now.'
+      status: 'Inserted ROM applied as ' + diffCount + ' changed byte(s) over the loaded ROM. ' +
+        'Clear in the Hex Editor discards the insert.'
     });
-    refreshSections();
     return true;
   }
 
