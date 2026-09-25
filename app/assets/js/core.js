@@ -1908,8 +1908,25 @@ let _recordTable = null;
              came along only because a neighbour was translated would have been
              rewritten with the wrong control code. */
           const hasTranslation = !!(textData && typeof textData.translatedText === 'string' && textData.translatedText.length > 0);
+          let textToEncode = textData ? textData.translatedText : '';
+          if (hasTranslation && textData && typeof textData.originalText === 'string') {
+            /* Engine tokens name the speaker and the portrait - [SOMA PORTRAIT][SOMA] on
+               this rom. They are part of the text, so a translation that rewrites them
+               ("potret soma" instead of "SOMA PORTRAIT") writes a page whose header the
+               engine no longer recognises and the conversation is skipped, even though
+               every structural check passes. The leading token block of the original is
+               restored whenever the translation does not repeat it. */
+            const prefixMatch = /^(?:\[[^\]]{1,32}\])+/.exec(textData.originalText);
+            if (prefixMatch && prefixMatch[0]) {
+              const kept = prefixMatch[0];
+              if (textToEncode.indexOf(kept) !== 0) {
+                textToEncode = kept + textToEncode.replace(/^(?:\[[^\]]{1,32}\])+/, '');
+                relocationLog.push(`Block at 0x${Number(textItem.startByte).toString(16).toUpperCase()}: page header restored to ${kept} because the translation had changed it.`);
+              }
+            }
+          }
           let encoded = hasTranslation
-            ? smartTextParse(textData.translatedText, tokenizer, masterCharToHex, usePaddingByte, encodeOptions)
+            ? smartTextParse(textToEncode, tokenizer, masterCharToHex, usePaddingByte, encodeOptions)
             : originalRom.slice(Number(textItem.startByte), Number(textItem.startByte) + Number(textItem.byteLength));
           /* A record's room holds the text PLUS the control bytes that close it: the
              page separator and the end code (05 09 0a on this rom). Writing only the
