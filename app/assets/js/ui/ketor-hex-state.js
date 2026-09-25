@@ -598,6 +598,8 @@
   }
 
   function clearPatches() {
+    // The insert is a patch layer too, so clearing patches clears it.
+    _state = Object.assign({}, _state, { insertedOffsets: {} });
     if (!Object.keys(_state.patches).length) { _set({ status: 'No patches to clear.' }); return; }
     var count = Object.keys(_state.patches).length;
     var touched = _patchedOffsets();
@@ -1028,6 +1030,27 @@
   K.hex.setCompiledRom = setCompiledRom;
   K.hex.clearCompiledRom = clearCompiledRom;
   K.hex.adoptInsertedRom = adoptInsertedRom;
+  /* Discards the bytes an insert wrote and everything it reported, so Clear
+     means the same thing in both activities: back to the loaded ROM. */
+  function discardInsert() {
+    var owned = _state.insertedOffsets || {};
+    var patches = Object.assign({}, _state.patches);
+    var dropped = 0;
+    Object.keys(owned).forEach(function (key) {
+      if (patches[key] !== undefined) { delete patches[key]; dropped++; }
+    });
+    _set({
+      patches: patches,
+      insertedOffsets: {},
+      compileRelocations: [],
+      compiledBytes: null,
+      status: dropped
+        ? 'Insert discarded: ' + dropped + ' byte(s) back to the loaded ROM.'
+        : 'Nothing inserted to discard.'
+    });
+    return dropped;
+  }
+  K.hex.discardInsert = discardInsert;
   /* The file that was loaded, without any insert on top: the next insert has
      to start from it, otherwise every press of Insert writes another copy of
      the same text into the next free run of the ROM. */

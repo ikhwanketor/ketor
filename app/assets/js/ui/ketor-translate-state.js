@@ -52,6 +52,7 @@
   var _workers = { table: null, build: null };
   var _lastBuildPatches = 0;
   var _pendingBuildCount = 0;
+  var _lastBuiltTexts = {};
   var _pendingTableName = null;
 
   function _set(patch) {
@@ -341,6 +342,9 @@
     // than no ROM, so it goes with them.
     if (discardBuild && (_state.modifiedRom || _state.buildSummary)) {
       _set({ modifiedRom: null, buildLog: [], buildSummary: null });
+      // Same meaning as Clear in the Hex Editor: the inserted bytes go too, so
+      // the ROM is the loaded file again.
+      if (K.hex && typeof K.hex.discardInsert === 'function') K.hex.discardInsert();
       if (K.hex && typeof K.hex.clearCompiledRom === 'function') K.hex.clearCompiledRom();
     }
     return count;
@@ -485,6 +489,11 @@
     var romBuffer = patched.buffer;
     _lastBuildPatches = appliedPatches;
     _pendingBuildCount = buildTexts.length;
+    // What each written text now says, so the registry can follow the insert.
+    _lastBuiltTexts = {};
+    buildTexts.forEach(function (t) {
+      _lastBuiltTexts[Number(t.startByte)] = String(t.translatedText || '');
+    });
 
     _workers.build.postMessage({
       type: 'buildRom',
@@ -574,6 +583,14 @@
       if (K.hex && typeof K.hex.adoptInsertedRom === 'function') {
         K.hex.adoptInsertedRom(bytes, {
           at: summary.at, scope: summary.scope, relocations: relocations
+        });
+      }
+      // The ROM holds these translations now, so the registry says so at once:
+      // the group manager follows the insert without a hand edit, and because
+      // the text comes from the build there is no control code to read back.
+      if (K.search && typeof K.search.setOriginalText === 'function') {
+        Object.keys(_lastBuiltTexts).forEach(function (off) {
+          K.search.setOriginalText(Number(off), _lastBuiltTexts[off]);
         });
       }
       if (K.hex && typeof K.hex.setCompiledRom === 'function') {
