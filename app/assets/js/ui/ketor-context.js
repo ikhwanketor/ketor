@@ -525,9 +525,16 @@
       setTasks(function (prev) { return prev.filter(function (t) { return t.status === 'running'; }); });
     }, []);
 
+    var _logSeqRef = React.useRef(0);
+
     var appendLog = React.useCallback(function (level, message, source) {
+      // A compile report adds a whole block of lines in the same millisecond,
+      // and Date.now() plus a random suffix collided: React then saw two
+      // children with the same key and could duplicate or drop entries. The
+      // counter makes the id unique however fast the lines arrive.
+      _logSeqRef.current += 1;
       var entry = {
-        id: 'log-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
+        id: 'log-' + Date.now() + '-' + _logSeqRef.current,
         level: level || 'info', message: String(message || ''),
         source: source || 'ketor', timestamp: Date.now()
       };
