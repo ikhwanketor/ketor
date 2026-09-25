@@ -133,25 +133,6 @@
         // No download here on purpose: getting a patched ROM out of the app
         // belongs to the Patch & Export activity. A finished compile is only
         // reported, so the user knows it is ready for that activity.
-        t.modifiedRom ? e('div', {
-          style: {
-            marginTop: 8, fontSize: 11,
-            color: 'var(--kt-sidebar-fg)', opacity: 0.85, lineHeight: 1.5
-          }
-        },
-          e('div', null, 'Inserted ROM ready (' + formatBytes(t.modifiedRom.length) +
-            '). Exporting it belongs to the Patch & Export activity.'),
-          t.buildSummary ? e('div', { style: { marginTop: 2 } },
-            t.buildSummary.relocated + ' text(s) relocated and repointed, ' +
-            t.buildSummary.inPlace + ' written in place' +
-            (t.buildSummary.warnings.length
-              ? ', ' + t.buildSummary.warnings.length + ' warning(s)'
-              : '') + '.') : null,
-          t.buildSummary && t.buildSummary.relocations.length ? e('div', { style: { marginTop: 4 } },
-            'New offset: ' + t.buildSummary.relocations.map(function (r) {
-              return '0x' + Number(r.to).toString(16).toUpperCase().padStart(6, '0');
-            }).join(', ')) : null
-        ) : null,
         t.isBusy ? e('div', {
           style: {
             marginTop: 8, height: 4,
