@@ -73,6 +73,7 @@
     mapDrawTile: null,
     mapCandidates: [],
     mapCursor: -1,
+    screens: [],
     mapScanning: false,
     mapFlipH: false,
     mapFlipV: false,
@@ -785,6 +786,13 @@
     return sizes[_state.mapSize] || sizes[Object.keys(sizes)[0]];
   }
 
+  /* A character block is 16 KiB, so 4bpp holds 512 tiles and 8bpp holds 256. A map
+     naming tiles past that cannot be drawn, which is what tells a map from data. */
+  function charTilesLimit() {
+    var f = K.core.tileFormat ? K.core.tileFormat(_state.format) : { size: 32 };
+    return f && f.size ? Math.floor(0x4000 / f.size) : 512;
+  }
+
   function entryBytes() {
     if (K.core && K.core.mapLayout) return K.core.mapLayout(mapLayoutId()).entryBytes;
     return 2;
@@ -945,7 +953,7 @@
   /* Kept as a thin wrapper so the tile activity and the tests share one rule:
      the score itself lives in the map codec next to the layouts it has to know. */
   function scoreMapBlock(bytes, offset, cells, cols) {
-    if (K.core && K.core.scoreMapBlock) return K.core.scoreMapBlock(bytes, offset, cells, cols, mapLayoutId());
+    if (K.core && K.core.scoreMapBlock) return K.core.scoreMapBlock(bytes, offset, cells, cols, mapLayoutId(), { charTiles: charTilesLimit() });
     return scoreMapBlockLocal(bytes, offset, cells, cols);
   }
 
@@ -999,7 +1007,7 @@
     var found = [];
     for (var off = 0; off + cells * 2 <= bytes.length; off += 0x800) {
       var s = scoreMapBlock(bytes, off, cells, dim[0]);
-      if (s) found.push(s);
+      if (s) { s.cells = cells; s.cols = dim[0]; found.push(s); }
     }
     found.sort(function (a, b) { return b.score - a.score; });
     var top = found.slice(0, 8);
@@ -1009,9 +1017,112 @@
       mapCandidates: top,
       mapScreenBase: top[0].offset,
       status: 'Map: best screen base 0x' + hex6(top[0].offset) + ' (score ' + top[0].score.toFixed(2)
-        + ', ' + top[0].distinct + ' distinct tiles, mean run ' + top[0].meanRun.toFixed(1) + ' cells).'
+        + ', ' + top[0].distinct + ' distinct tiles, tile numbers up to ' + top[0].maxTile
+        + ' of the ' + charTilesLimit() + ' a character block holds).'
     });
     return top[0];
+  }
+
+  /* How much of a screen this map and character block actually draw: the share of
+     cells whose tile is inside the block and is not blank. A wrong pairing leaves
+     holes, because the numbers name tiles that are empty somewhere else. */
+  function screenCoverage(mapData, cells, charBase, bytes) {
+    var C = K.core;
+    var size = C.tileSize(_state.format);
+    var limit = charTilesLimit();
+    var filled = 0, inside = 0;
+    var used = {};
+    for (var c = 0; c < cells; c++) {
+      var v = C.readMapEntry(mapData, c * entryBytes(), mapLayoutId());
+      var t = C.entryTile(v, mapLayoutId());
+      if (t >= limit) continue;
+      inside++;
+      var at = charBase + t * size;
+      if (at + size > bytes.length) continue;
+      var px = C.decodeTile(bytes, at, _state.format);
+      var any = false;
+      for (var y = 0; y < 8 && !any; y++) for (var x = 0; x < 8; x++) if (px[y][x]) { any = true; break; }
+      if (any) filled++;
+      used[t] = true;
+    }
+    var distinct = Object.keys(used).length;
+    return {
+      coverage: cells ? filled / cells : 0,
+      inside: cells ? inside / cells : 0,
+      distinct: distinct
+    };
+  }
+
+  /* Character bases worth trying: the block of the current tile region and the blocks
+     the last detection named. */
+  function candidateCharBases() {
+    var out = [];
+    function add(base) {
+      var b = Math.max(0, Number(base) || 0);
+      if (out.indexOf(b) === -1) out.push(b);
+    }
+    if (_state.region !== null) add(Number(_state.region) & ~0x3FFF);
+    (_state.candidates || []).slice(0, 10).forEach(function (c) {
+      add(c.offset);
+      add(Number(c.offset) & ~0x3FFF);
+    });
+    if (_state.mapCharBase !== null && _state.mapCharBase !== undefined) add(Number(_state.mapCharBase));
+    return out.slice(0, 10);
+  }
+
+  /* Character blocks found by their content: a 16 KiB boundary whose first tiles read
+     as art. This is what the screen finder falls back on when no detection has run. */
+  function scanCharBases() {
+    var C = K.core;
+    var bytes = romBytes();
+    var step = 0x4000;
+    var out = [];
+    if (!bytes || !C.scoreTileRegion) return out;
+    for (var off = 0; off + step <= bytes.length; off += step) {
+      var score = C.scoreTileRegion(bytes, off, _state.format, 64);
+      if (score >= 0.5) out.push({ offset: off, score: score });
+    }
+    out.sort(function (a, b) { return b.score - a.score; });
+    return out.slice(0, 5).map(function (o) { return o.offset; });
+  }
+
+  /* Every surviving map against every character base, ranked by how much screen the
+     two of them draw together. */
+  function findScreens() {
+    var bytes = romBytes();
+    if (!bytes) { _set({ status: 'Load a ROM first.' }); return null; }
+    var maps = (_state.mapCandidates || []).filter(function (c) { return !c.overLimit; }).slice(0, 8);
+    if (!maps.length) { _set({ status: 'No map candidate survives the character block limit. Run Detect map first.' }); return null; }
+    var bases = candidateCharBases();
+    if (bases.length < 3) {
+      // nothing was detected yet: look for character blocks by their art instead
+      scanCharBases().forEach(function (base) { if (bases.indexOf(base) === -1) bases.push(base); });
+    }
+    var out = [];
+    maps.forEach(function (m) {
+      var width = entryBytes();
+      var data = bytes.slice(m.offset, Math.min(bytes.length, m.offset + m.cells * width));
+      if (data.length < m.cells * width) return;
+      bases.forEach(function (base) {
+        var cov = screenCoverage(data, m.cells, base, bytes);
+        out.push({
+          mapOffset: m.offset, cells: m.cells, charBase: base,
+          coverage: cov.coverage, inside: cov.inside, distinct: cov.distinct,
+          mapScore: m.score,
+          score: m.score * 0.35 + cov.coverage * 0.45 + Math.min(1, cov.distinct / 64) * 0.2
+        });
+      });
+    });
+    out.sort(function (a, b) { return b.score - a.score; });
+    var top = out.slice(0, 8);
+    _set({
+      screens: top,
+      status: top.length
+        ? 'Screens: best is map 0x' + hex6(top[0].mapOffset) + ' with character block 0x' + hex6(top[0].charBase)
+          + ' (draws ' + Math.round(top[0].coverage * 100) + '% of the cells, ' + top[0].distinct + ' distinct tiles).'
+        : 'No screen pairing found.'
+    });
+    return top;
   }
 
   /* Placing a tile keeps the flip and palette bits of the entry unless the
@@ -1773,6 +1884,32 @@
         e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapTile }, 'Set')
       ),
 
+      e('div', { style: head }, 'Screens'),
+      e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'Pairs each map candidate with the character blocks the detection named, and keeps the ones that actually draw a full screen.'),
+      e('button', {
+        type: 'button', className: 'kt-btn',
+        disabled: !hex || !hex.romBytes,
+        onClick: findScreens,
+        title: 'A map can only name the tiles of one character block, so a pairing that leaves the screen full of holes is wrong'
+      }, 'Find screens'),
+      st.screens && st.screens.length ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+        st.screens.slice(0, 6).map(function (s) {
+          return e('button', {
+            key: 'scr' + s.mapOffset + '-' + s.charBase,
+            type: 'button',
+            className: 'kt-btn small' + (st.mapScreenBase === s.mapOffset && charBase() === s.charBase ? '' : ' secondary'),
+            style: { fontFamily: MONO, justifyContent: 'flex-start' },
+            title: 'Load this map and this character block into the map view',
+            onClick: function () {
+              _set({
+                mapScreenBase: s.mapOffset, mapCharBase: s.charBase, view: 'map',
+                status: 'Screen: map 0x' + hex6(s.mapOffset) + ' drawn with character block 0x' + hex6(s.charBase)
+                  + ' (' + Math.round(s.coverage * 100) + '% of cells, ' + s.distinct + ' tiles).'
+              });
+            }
+          }, 'map ' + hex6(s.mapOffset) + ' + chr ' + hex6(s.charBase) + '  ' + Math.round(s.coverage * 100) + '%  ' + s.distinct + ' tiles');
+        })
+      ) : null,
       e('div', { style: head }, 'Write text on this screen'),
       e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'The table gives the code of each character and the font base gives the tile that holds code 0, so this writes the tile numbers a screen needs. A newline starts the next row.'),
       e('textarea', {
@@ -2117,6 +2254,7 @@
     pixelSpanForByte: pixelSpanForByte, fromBgr555: fromBgr555, toBgr555: toBgr555,
     MAP_SIZES: MAP_SIZES, mapWindow: mapWindow, charWindow: charWindow, mapEntry: mapEntry,
     detectMap: detectMap, scoreMapBlock: scoreMapBlock, charBase: charBase,
+    findScreens: findScreens, screenCoverage: screenCoverage, charTilesLimit: charTilesLimit, scanCharBases: scanCharBases,
     consoleProfile: consoleProfile, mapLayoutId: mapLayoutId, openCandidate: openCandidate, clearSource: clearSource,
     repointRegion: repointRegion, romIdentity: function () { return _state.romIdentity; },
     writeBackCompressed: writeBackCompressed, scheduleCompressedWrite: scheduleCompressedWrite,

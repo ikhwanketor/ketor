@@ -119,7 +119,8 @@
      uses a believable number of different tiles. Repetition alone is not
      enough: the first version of this score picked stripe textures on the
      test ROM, nine tiles stretched over a thousand cells. */
-  function scoreMapBlock(bytes, offset, cells, cols, layoutId) {
+  function scoreMapBlock(bytes, offset, cells, cols, layoutId, options) {
+    var opts = options || {};
     var L = layoutOf(layoutId);
     var width = cols || 32;
     if (!bytes || offset < 0 || offset + cells * L.entryBytes > bytes.length) return null;
@@ -128,14 +129,22 @@
     var highBits = 0;
     var runs = 0;
     var prev = -1;
+    var maxTile = 0;
     for (var c = 0; c < cells; c++) {
       var v = readEntry(bytes, offset + c * L.entryBytes, layoutId);
       var t = entryTile(v, layoutId);
       if (!seen[t]) { seen[t] = true; distinct++; }
+      if (t > maxTile) maxTile = t;
       if (L.paletteMask && entryPalette(v, layoutId) > 3) highBits++;
       if (c % width === 0 || t !== prev) runs++;
       prev = t;
     }
+    /* A text mode map can only name the tiles of one character block: 512 of them for
+       4bpp, 256 for 8bpp. A block that names tiles past that cannot be drawn by the
+       hardware it is meant to run on, so it is data and not a map. Measured on the test
+       ROM this is the whole difference between 539 candidates and 3. */
+    var limit = opts.charTiles === undefined ? 0 : Number(opts.charTiles) || 0;
+    var overLimit = limit > 0 && maxTile >= limit;
     var share = distinct / cells;
     var highShare = highBits / cells;
     var meanRun = cells / Math.max(1, runs);
@@ -147,9 +156,13 @@
     else band = 0.3;
     var score = runTerm * 0.4 + band * 0.4 + (1 - highShare) * 0.2;
     if (distinct < 4) score *= 0.3;
+    if (overLimit) score *= 0.05;
     return {
       offset: offset,
       score: Math.max(0, Math.min(1, score)),
+      maxTile: maxTile,
+      charTiles: limit,
+      overLimit: overLimit,
       distinct: distinct,
       highShare: highShare,
       share: share,
