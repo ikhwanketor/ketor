@@ -643,8 +643,8 @@
       lines.push([
         _csvCell(r.groupName),
         _csvCell(t.offset || _offsetKey(t.startByte)),
-        _csvCell(t.originalText),
-        _csvCell(t.translatedText)
+        _csvCell(toDisplay(t.originalText)),
+        _csvCell(toDisplay(t.translatedText))
       ].join(','));
     });
     var name = _baseName() + '_translation.csv';

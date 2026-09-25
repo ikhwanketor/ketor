@@ -503,7 +503,10 @@
     }
     _set({
       patches: patches,
-      insertedOffsets: inserted,
+      // Merged, never replaced: the next insert has to ignore the bytes of
+      // every earlier insert, or it treats them as ordinary user patches and
+      // writes another copy of the text into the next free run.
+      insertedOffsets: Object.assign({}, _state.insertedOffsets, inserted),
       compiledBytes: data,
       compileRelocations: Array.isArray(info.relocations) ? info.relocations.slice() : [],
       compiledAt: Number(info.at) || Date.now(),
