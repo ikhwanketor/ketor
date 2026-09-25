@@ -395,15 +395,28 @@
 
     var assigned = K.search.getAssignedOffsets();
     var searchTexts = K.search.getState().texts || [];
-    var buildTexts = searchTexts.filter(function (t) {
-      return assigned.has(Number(t.startByte)) &&
-             (t.translatedText || '').trim().length > 0;
+    // Every text of the scope travels with the build, translated or not: the
+    // engine has to know which other texts live inside the same pointer
+    // container, otherwise it treats the container as free room and copies the
+    // following texts along when it relocates one of them.
+    // The block the build may reuse in place is the room the original text
+    // occupies, measured with the encoder that is about to write. A range
+    // length that is too generous would let the new text run into the next
+    // string instead of being relocated and repointed.
+    var contextTexts = searchTexts.filter(function (t) {
+      return assigned.has(Number(t.startByte));
     }).map(function (t) {
-      // The block the build may reuse in place is the room the original text
-      // occupies, measured with the encoder that is about to write. A range
-      // length that is too generous would let the new text run into the next
-      // string instead of being relocated and repointed.
-      return Object.assign({}, t, { byteLength: measureOriginal(t) });
+      // A unique id per entry. The build worker keys its text map by id, so
+      // entries without one (or with a repeated one) collapse into a single
+      // key: every lookup then returns the same entry and only that one text
+      // could ever be seen as changed.
+      return Object.assign({}, t, {
+        id: 'tx-' + Number(t.startByte),
+        byteLength: measureOriginal(t)
+      });
+    });
+    var buildTexts = contextTexts.filter(function (t) {
+      return (t.translatedText || '').trim().length > 0;
     });
 
     var scopeLabel = 'all groups';
@@ -413,6 +426,7 @@
       var inGroup = {};
       K.search.getTextsByGroup(gid).forEach(function (t) { inGroup[Number(t.startByte)] = true; });
       buildTexts = buildTexts.filter(function (t) { return inGroup[Number(t.startByte)] === true; });
+      contextTexts = contextTexts.filter(function (t) { return inGroup[Number(t.startByte)] === true; });
       var g = null;
       K.search.getState().groups.forEach(function (x) { if (x.id === gid) g = x; });
       scopeLabel = g ? 'group "' + g.name + '"' : 'the selected group';
@@ -471,7 +485,8 @@
       payload: {
         originalRom: romBuffer,
         appliedPatches: appliedPatches,
-        allTexts: buildTexts,
+        // Translated or not: the container math needs the neighbours.
+        allTexts: contextTexts,
         tableData: { masterCharToHex: mch },
         // The console's own pointer profile, not a generic one. The NES uses
         // 2 byte pointers based at $8000, the GBA 4 byte pointers based at
