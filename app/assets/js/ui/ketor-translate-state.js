@@ -848,10 +848,10 @@
     // The provider never sees the table's line token. It gets a real line
     // break, which is what made "[LINE]" end up inside translations, and the
     // answer is turned back into tokens before it reaches the registry.
-    var source = String(row.originalText || '');
+    var source = toDisplay(row.originalText);
     return tr(source, _state.sourceLang, _state.targetLang, options)
       .then(function (r) {
-        var out = String(r.text || '');
+        var out = fromDisplay(r.text);
         K.search.setTranslatedText(row.startByte, out);
         r.text = out;
         return r;

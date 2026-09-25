@@ -291,7 +291,9 @@
                     }
                   // Same rule as the editor: a line break token is drawn as a
                   // line break here too, never as a control code.
-                  }, String(t.originalText || '')),
+                  }, (K.translate && typeof K.translate.toDisplay === 'function')
+                    ? K.translate.toDisplay(t.originalText || '')
+                    : String(t.originalText || '')),
                   e('button', {
                     type: 'button',
                     title: canTextUp ? 'Move up' : 'Already at top',

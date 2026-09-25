@@ -245,7 +245,9 @@
           wordBreak: 'break-word',
           maxWidth: 0
         })
-      }, String(t.originalText || '')),
+      }, (K.translate && typeof K.translate.toDisplay === 'function')
+        ? K.translate.toDisplay(t.originalText || '')
+        : String(t.originalText || '')),
       group ? e('td', { style: Object.assign(tdStyle('left'), { width: 120 }) }, groupBadge) : e('td', { style: tdStyle('left') }, '')
     );
   }
