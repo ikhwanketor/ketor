@@ -212,12 +212,14 @@
           if (spanIsRecord(bytes, entries[s], entries[s + 1], termSet)) ok++; else bad++;
         }
         if (ok < minEntries || bad > 0) return;
-        var entrySet = Object.create(null);
-        entries.forEach(function (t) { entrySet[t] = true; });
+        /* Walk the entries and ask whether a mapped text sits there, instead of walking
+           every mapped text for every candidate table: on a four megabyte Game Boy rom the
+           old direction meant 152980 texts times nine deltas times thousands of runs, which
+           is where the 400 seconds went. */
         var matched = 0, deltas = Object.create(null);
-        texts.forEach(function (o) {
+        entries.forEach(function (t) {
           for (var d = -deltaWindow; d <= deltaWindow; d++) {
-            if (entrySet[o + d]) { matched++; deltas[d] = (deltas[d] || 0) + 1; break; }
+            if (t + d >= 0 && textSet[t + d]) { matched++; deltas[d] = (deltas[d] || 0) + 1; break; }
           }
         });
         /* Consensus, the criterion that separates a real text table from a table
@@ -233,6 +235,7 @@
         if (texts.length >= 8 && !confirmed) return;
         results.push({
           console: rules.name, at: lo, stride: stride, entrySize: rules.size,
+          fromIndex: run.from, toIndex: run.to,
           dominantDelta: dominantDelta, deltaConsensus: consensus, confirmed: confirmed,
           endianness: rules.little ? 'little' : 'big', base: mode === 'raw' ? 0 : rules.base, mode: mode,
           count: entries.length, regionStart: entries[0], regionEnd: entries[entries.length - 1],
@@ -252,7 +255,11 @@
       var close = last && (r.at - lastEnd) >= 0 && (r.at - lastEnd) <= last.stride * 8;
       var sameDelta = last && (last.dominantDelta === r.dominantDelta || last.matchedTexts === 0 || r.matchedTexts === 0);
       if (close && sameDelta) {
-        last.count = Math.floor((r.at + (r.count - 1) * r.stride - last.at) / last.stride) + 1;
+        /* Count the sites between the two runs instead of multiplying a stride across a
+           gap of entries that are not pointers: that arithmetic reported 2567 entries
+           where the table holds 2893. */
+        last.count = r.toIndex - last.fromIndex + 1;
+        last.toIndex = r.toIndex;
         last.regionEnd = Math.max(last.regionEnd, r.regionEnd);
         last.spansOk += r.spansOk;
         last.spansBad += r.spansBad;
