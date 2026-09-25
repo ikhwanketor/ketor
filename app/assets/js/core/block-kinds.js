@@ -138,6 +138,57 @@
     return { blocks: out, byKind: byKind, references: ref.references };
   }
 
+  /* Palettes a ROM points at, plus the ones sitting near a given block. Measured on the
+     test ROM, scoring alone cannot identify a palette: 241844 offsets near one character
+     block score within a hair of each other, and the palette the screen really uses is
+     one of them. So this returns a short list to click through, not an answer, and every
+     entry says where it came from. */
+  function paletteCandidates(bytes, options) {
+    var opts = options || {};
+    var near = opts.near === undefined ? null : Number(opts.near);
+    var span = Number(opts.span) || 0x40000;
+    var out = [];
+    var seen = {};
+    function add(offset, reason, score) {
+      var off = Number(offset);
+      if (!Number.isFinite(off) || off < 0 || off + 32 > bytes.length) return;
+      var key = String(off);
+      if (seen[key]) return;
+      var s = score === undefined ? paletteScore(bytes, { at: off, length: 32 }) : score;
+      if (!s) return;
+      seen[key] = true;
+      out.push({ offset: off, score: s, reason: reason });
+    }
+    if (opts.referenced && K.core.scanReferencedBlocks) {
+      var ref = K.core.scanReferencedBlocks(bytes, { system: opts.system || 'gba', tileOnly: false, minSize: 0x20, maxSize: 0x400 });
+      ref.blocks.forEach(function (b) {
+        var dec = K.core.decompressAt ? K.core.decompressAt(bytes, b.offset, {}) : null;
+        if (dec) {
+          if (dec.size < 32 || dec.size % 2 !== 0) return;
+          var s = paletteScore(dec.data, { at: 0, length: Math.min(dec.size, 0x200) });
+          if (!s) return;
+          var key = 'c' + b.offset;
+          if (seen[key]) return;
+          seen[key] = true;
+          out.push({ offset: b.offset, score: s, reason: 'pointed at (' + dec.size + ' bytes, ' + b.label + ')', compressed: true });
+          return;
+        }
+        add(b.offset, 'pointed at');
+      });
+    }
+    if (near !== null) {
+      for (var off = Math.max(0, near - span); off + 32 <= Math.min(bytes.length, near + span); off += 32) {
+        add(off, 'near the tiles');
+      }
+    }
+    out.sort(function (a, b) { return b.score - a.score || a.offset - b.offset; });
+    var limit = Number(opts.max) || 12;
+    var pointed = out.filter(function (c) { return c.reason.indexOf('pointed') === 0; });
+    var rest = out.filter(function (c) { return c.reason.indexOf('pointed') !== 0; });
+    return { all: out, top: pointed.slice(0, limit).concat(rest.slice(0, Math.max(0, limit - pointed.slice(0, limit).length))), pointed: pointed.length, total: out.length };
+  }
+
+  K.core.paletteCandidates = paletteCandidates;
   K.core.paletteScore = paletteScore;
   K.core.classifyBlock = classifyBlock;
   K.core.referencedKinds = referencedKinds;

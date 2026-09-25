@@ -74,6 +74,7 @@
     mapCandidates: [],
     mapCursor: -1,
     screens: [],
+    palettes: [],
     savedScreens: [],
     mapScanning: false,
     mapFlipH: false,
@@ -2055,6 +2056,34 @@
           }, 'map ' + hex6(s.mapOffset) + ' + chr ' + hex6(s.charBase) + '  ' + Math.round(s.coverage * 100) + '%  ' + s.distinct + ' tiles');
         })
       ) : null,
+      e('div', { style: head }, 'Palettes for this screen'),
+      e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'A palette cannot be worked out from a ROM alone: hundreds of thousands of offsets near a character block score the same. These are the ones the ROM points at and the ones sitting beside the tiles, so click through them with the screen in front of you. The one that looks right is remembered with the screen.'),
+      e('button', {
+        type: 'button', className: 'kt-btn',
+        disabled: !hex || !hex.romBytes || !K.core.paletteCandidates,
+        onClick: function () {
+          var res = K.core.paletteCandidates(romBytes(), {
+            near: charBase(), span: 0x40000, referenced: true, system: consoleProfile().id, max: 10
+          });
+          _set({
+            palettes: res.top,
+            status: 'Palettes: ' + res.pointed + ' the ROM points at, ' + res.total + ' candidate(s) in total, showing ' + res.top.length + '.'
+          });
+        },
+        title: 'The ROM is asked which palettes it names, and the tiles are asked which palettes sit beside them'
+      }, 'Find palettes'),
+      (st.palettes && st.palettes.length) ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+        st.palettes.map(function (p) {
+          return e('button', {
+            key: 'pal' + p.offset,
+            type: 'button',
+            className: 'kt-btn small' + (Number(st.paletteOffset) === p.offset ? '' : ' secondary'),
+            style: { fontFamily: MONO, justifyContent: 'flex-start' },
+            title: 'Load these 16 colours',
+            onClick: function () { loadPalette(p.offset, ''); }
+          }, '0x' + hex6(p.offset) + '  ' + p.score.toFixed(2) + '  ' + p.reason);
+        })
+      ) : null,
       e('div', { style: head }, 'Write text on this screen'),
       e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'The table gives the code of each character and the font base gives the tile that holds code 0, so this writes the tile numbers a screen needs. A newline starts the next row.'),
       e('textarea', {
@@ -2405,6 +2434,14 @@
     MAP_SIZES: MAP_SIZES, mapWindow: mapWindow, charWindow: charWindow, mapEntry: mapEntry,
     detectMap: detectMap, scoreMapBlock: scoreMapBlock, charBase: charBase,
     findScreens: findScreens, screenCoverage: screenCoverage, charTilesLimit: charTilesLimit, scanCharBases: scanCharBases,
+    findPalettes: function () {
+      if (!K.core.paletteCandidates) return null;
+      var res = K.core.paletteCandidates(romBytes() || new Uint8Array(0), {
+        near: charBase(), span: 0x40000, referenced: true, system: consoleProfile().id, max: 10
+      });
+      _set({ palettes: res.top, status: 'Palettes: ' + res.pointed + ' pointed at, ' + res.total + ' total.' });
+      return res;
+    },
     consoleProfile: consoleProfile, mapLayoutId: mapLayoutId, openCandidate: openCandidate, clearSource: clearSource,
     repointRegion: repointRegion, romIdentity: function () { return _state.romIdentity; },
     parseOffsetInput: parseOffsetInput, savedScreens: savedScreens, saveCurrentScreen: saveCurrentScreen,
