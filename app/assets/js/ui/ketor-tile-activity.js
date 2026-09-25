@@ -74,6 +74,7 @@
     mapCandidates: [],
     mapCursor: -1,
     screens: [],
+    savedScreens: [],
     mapScanning: false,
     mapFlipH: false,
     mapFlipV: false,
@@ -478,6 +479,97 @@
     try {
       global.dispatchEvent(new CustomEvent('ketor:navigate-activity', { detail: { activity: 'tile', source: 'tile-open-at' } }));
     } catch (error) { /* the event is a nicety, not a requirement */ }
+  }
+
+  /* An address a person has in hand is usually a pointer, not a file offset: 0x08159000
+     on a GBA, $80:8000 on a SNES. Accept both, plus plain hex and decimal, and convert
+     through the console's bus mapping so typing what the game's code says is enough. */
+  function parseOffsetInput(text) {
+    var raw = String(text == null ? '' : text).trim();
+    if (!raw) return null;
+    var value;
+    if (/^0x/i.test(raw)) value = parseInt(raw.replace(/^0x/i, ''), 16);
+    else if (/^[0-9]+$/.test(raw)) value = parseInt(raw, 10);
+    else value = parseInt(raw.replace(/[^0-9a-fA-F]/g, ''), 16);
+    if (!Number.isFinite(value)) return null;
+    var prof = consoleProfile();
+    if (K.core.toRomOffset) {
+      var off = K.core.toRomOffset(prof.id, value, { allowBare: true });
+      if (off !== null && off >= 0) return off;
+    }
+    return value >= 0 ? value : null;
+  }
+
+  /* ---------- what the user confirmed, remembered per ROM ----------
+     Automatic detection proposes; a person decides. Once a screen is confirmed it is
+     stored against the ROM, so the next time this file is opened the answer is exact
+     instead of proposed. This is the honest equivalent of the per game configuration
+     files that tools like Tilemap Studio ship with. */
+  var SCREEN_STORE = 'ketor.screens.';
+
+  function romIdentityKey() {
+    var h = K.hex && K.hex.getState ? K.hex.getState() : null;
+    var ident = _state.romIdentity;
+    if (ident && ident.sha1) return SCREEN_STORE + ident.sha1;
+    if (h && h.romKey) return SCREEN_STORE + h.romKey;
+    if (h && h.romName) return SCREEN_STORE + h.romName + '.' + (h.romSize || 0);
+    return null;
+  }
+
+  function savedScreens() {
+    var key = romIdentityKey();
+    if (!key || !global.localStorage) return [];
+    try {
+      var raw = global.localStorage.getItem(key);
+      var list = raw ? JSON.parse(raw) : [];
+      return Array.isArray(list) ? list : [];
+    } catch (error) { return []; }
+  }
+
+  function writeSavedScreens(list) {
+    var key = romIdentityKey();
+    if (!key || !global.localStorage) return false;
+    try { global.localStorage.setItem(key, JSON.stringify(list.slice(0, 40))); return true; } catch (error) { return false; }
+  }
+
+  function saveCurrentScreen(name) {
+    var screen = Number(_state.mapScreenBase);
+    if (!Number.isFinite(screen)) { _set({ status: 'Set a screen base first.' }); return false; }
+    var entry = {
+      name: String(name || '').trim() || ('screen at 0x' + hex6(screen)),
+      mapOffset: screen,
+      charBase: charBase(),
+      layout: mapLayoutId(),
+      format: _state.format,
+      // only a palette that is really loaded is remembered: Number(null) is 0, which
+      // would have stored "no palette" as the palette at offset zero
+      paletteOffset: (_state.paletteOffset === null || _state.paletteOffset === undefined)
+        ? null : Number(_state.paletteOffset),
+      savedAt: Date.now()
+    };
+    var list = savedScreens().filter(function (s) { return !(s.mapOffset === entry.mapOffset && s.charBase === entry.charBase); });
+    list.unshift(entry);
+    if (!writeSavedScreens(list)) { _set({ status: 'This browser refused to store the screen.' }); return false; }
+    _set({ savedScreens: list, status: 'Saved "' + entry.name + '" for this ROM: map 0x' + hex6(entry.mapOffset) + ' with character block 0x' + hex6(entry.charBase) + '.' });
+    return true;
+  }
+
+  function loadSavedScreen(entry) {
+    if (!entry) return false;
+    _set({ mapScreenBase: entry.mapOffset, mapCharBase: entry.charBase, view: 'map' });
+    // the palette first, so its own message does not bury what was loaded
+    if (entry.paletteOffset !== null && entry.paletteOffset !== undefined) loadPalette(entry.paletteOffset);
+    _set({
+      status: 'Loaded "' + entry.name + '": map 0x' + hex6(entry.mapOffset) + ' with character block 0x' + hex6(entry.charBase)
+        + (entry.paletteOffset !== null && entry.paletteOffset !== undefined ? ' and palette 0x' + hex6(entry.paletteOffset) : '') + '.'
+    });
+    return true;
+  }
+
+  function deleteSavedScreen(entry) {
+    var list = savedScreens().filter(function (s) { return !(s.mapOffset === entry.mapOffset && s.charBase === entry.charBase); });
+    writeSavedScreens(list);
+    _set({ savedScreens: list, status: 'Forgot "' + entry.name + '".' });
   }
 
   function clearSource() {
@@ -1757,24 +1849,47 @@
     var mapTileSt = uS(st.mapDrawTile === null ? '' : Number(st.mapDrawTile).toString(16).toUpperCase());
     var textSt = uS('');
     var startSt = uS('');
+    var nameSt = uS('');
 
     uE(function () { mapScreenSt[1](st.mapScreenBase === null ? '' : hex6(st.mapScreenBase)); }, [st.mapScreenBase]);
     uE(function () { mapCharSt[1](hex6(charBase())); }, [st.mapCharBase, st.region]);
     uE(function () { mapTileSt[1](st.mapDrawTile === null ? '' : Number(st.mapDrawTile).toString(16).toUpperCase()); }, [st.mapDrawTile]);
 
+    /* Both accept a pointer as it is written in the game or in a disassembly, a file
+       offset in hex, or a decimal number, and neither silently moves what was typed. */
     function commitMapScreen() {
       var raw = String(mapScreenSt[0]).trim();
       if (!raw) { _set({ mapScreenBase: null, status: 'No screen base: use Detect map or type one.' }); return; }
-      var v = parseInt(raw.replace(/^0x/i, ''), 16);
-      if (!Number.isFinite(v)) { _set({ status: 'Screen base must be a hex offset.' }); return; }
-      _set({ mapScreenBase: v & ~0x7FF });
+      var v = parseOffsetInput(raw);
+      if (v === null) { _set({ status: 'Screen base not understood. A pointer like 0x08159000, or an offset like 0x159000, or a number.' }); return; }
+      var aligned = (v % 0x800) === 0;
+      _set({
+        mapScreenBase: v,
+        status: 'Screen base 0x' + hex6(v) + (aligned ? '.' : ' (not on a 2 KiB screen block boundary, which GBA hardware requires; it was kept as typed).')
+      });
     }
     function commitMapChar() {
       var raw = String(mapCharSt[0]).trim();
       if (!raw) { _set({ mapCharBase: null, status: 'Character base follows the tile region block again.' }); return; }
-      var v = parseInt(raw.replace(/^0x/i, ''), 16);
-      if (!Number.isFinite(v)) { _set({ status: 'Character base must be a hex offset.' }); return; }
-      _set({ mapCharBase: v & ~0x3FFF });
+      var v = parseOffsetInput(raw);
+      if (v === null) { _set({ status: 'Character base not understood. A pointer like 0x080E0000, or an offset like 0xE0000.' }); return; }
+      var aligned = (v % 0x4000) === 0;
+      _set({
+        mapCharBase: v,
+        status: 'Character base 0x' + hex6(v) + (aligned ? '.' : ' (not on a 16 KiB character block boundary; it was kept as typed).')
+      });
+    }
+    function screenFromCursor() {
+      var at = Number(K.hex.getState().cursorOffset) || 0;
+      _set({ mapScreenBase: at, view: 'map', status: 'Screen base taken from the hex cursor: 0x' + hex6(at) + '.' });
+    }
+    function charFromCursor() {
+      var at = Number(K.hex.getState().cursorOffset) || 0;
+      _set({ mapCharBase: at, view: 'map', status: 'Character base taken from the hex cursor: 0x' + hex6(at) + '.' });
+    }
+    function commitScreenName() {
+      saveCurrentScreen(nameSt[0]);
+      nameSt[1]('');
     }
     function commitMapTile() {
       var raw = String(mapTileSt[0]).trim();
@@ -1844,20 +1959,50 @@
       ) : null,
       e('div', { style: rowStyle },
         e('input', {
-          style: inputStyle, value: mapScreenSt[0], spellCheck: false, placeholder: 'screen base (hex)',
+          style: inputStyle, value: mapScreenSt[0], spellCheck: false,
+          placeholder: 'screen base: pointer or offset',
+          title: 'Accepts a pointer (0x08159000), a file offset (0x159000) or a number',
           onChange: function (ev) { mapScreenSt[1](ev.target.value); },
           onKeyDown: function (ev) { if (ev.key === 'Enter') commitMapScreen(); }
         }),
-        e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapScreen }, 'Go')
+        e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapScreen }, 'Go'),
+        e('button', { type: 'button', className: 'kt-btn small secondary', title: 'Use the offset the hex cursor is on', onClick: screenFromCursor }, 'cursor')
       ),
       e('div', { style: rowStyle },
         e('input', {
-          style: inputStyle, value: mapCharSt[0], spellCheck: false, placeholder: 'character base (empty = tile block)',
+          style: inputStyle, value: mapCharSt[0], spellCheck: false,
+          placeholder: 'character base: pointer or offset',
+          title: 'Accepts a pointer (0x080E0000), a file offset (0xE0000) or a number',
           onChange: function (ev) { mapCharSt[1](ev.target.value); },
           onKeyDown: function (ev) { if (ev.key === 'Enter') commitMapChar(); }
         }),
-        e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapChar }, 'Go')
+        e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapChar }, 'Go'),
+        e('button', { type: 'button', className: 'kt-btn small secondary', title: 'Use the offset the hex cursor is on', onClick: charFromCursor }, 'cursor')
       ),
+      e('div', { style: { display: 'flex', gap: 4 } },
+        e('input', {
+          style: inputStyle, value: nameSt[0], spellCheck: false, placeholder: 'name this screen',
+          onChange: function (ev) { nameSt[1](ev.target.value); },
+          onKeyDown: function (ev) { if (ev.key === 'Enter') commitScreenName(); }
+        }),
+        e('button', { type: 'button', className: 'kt-btn small', onClick: commitScreenName, disabled: st.mapScreenBase === null }, 'Remember')
+      ),
+      (st.savedScreens && st.savedScreens.length) ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+        e('div', { style: { opacity: 0.75 } }, 'Screens remembered for this ROM'),
+        st.savedScreens.slice(0, 8).map(function (s) {
+          return e('div', { key: 'saved' + s.mapOffset + '-' + s.charBase, style: { display: 'flex', gap: 4, alignItems: 'center' } },
+            e('button', {
+              type: 'button', className: 'kt-btn small', style: { flex: '1 1 auto', justifyContent: 'flex-start' },
+              title: 'Load this screen: map 0x' + hex6(s.mapOffset) + ', character block 0x' + hex6(s.charBase),
+              onClick: function () { loadSavedScreen(s); }
+            }, s.name + '  ' + hex6(s.mapOffset)),
+            e('button', {
+              type: 'button', className: 'kt-btn small secondary', title: 'Forget this screen',
+              onClick: function () { deleteSavedScreen(s); }
+            }, 'x')
+          );
+        })
+      ) : null,
       e('button', {
         type: 'button', className: 'kt-btn small secondary',
         title: 'A GBA character base is a 16 KiB block: take the block the current tile region lives in',
@@ -2219,10 +2364,15 @@
       graphicSource: null,
       candidates: [],
       region: null,
-      format: prof.defaultFormat || _state.format,
-      status: prof.label + ' loaded: ' + (prof.tileFormats || []).length + ' tile format(s)'
-        + ((prof.compression && prof.compression.length) ? ', graphics are compressed' : ', tiles are stored raw')
-        + '.'
+      format: prof.defaultFormat || _state.format
+    });
+    /* The screens this ROM was already given, which is what makes the second visit
+       exact instead of proposed. */
+    var known = savedScreens();
+    _set({
+      savedScreens: known,
+      status: prof.label + ' loaded: ' + known.length + ' screen(s) remembered, '
+        + (prof.compression && prof.compression.length ? 'graphics are compressed' : 'tiles are stored raw') + '.'
     });
   });
 
@@ -2257,6 +2407,8 @@
     findScreens: findScreens, screenCoverage: screenCoverage, charTilesLimit: charTilesLimit, scanCharBases: scanCharBases,
     consoleProfile: consoleProfile, mapLayoutId: mapLayoutId, openCandidate: openCandidate, clearSource: clearSource,
     repointRegion: repointRegion, romIdentity: function () { return _state.romIdentity; },
+    parseOffsetInput: parseOffsetInput, savedScreens: savedScreens, saveCurrentScreen: saveCurrentScreen,
+    loadSavedScreen: loadSavedScreen, deleteSavedScreen: deleteSavedScreen,
     writeBackCompressed: writeBackCompressed, scheduleCompressedWrite: scheduleCompressedWrite,
     openAt: function (offset, options) { return K.tileOpenAt(offset, options); },
     writeMapEntry: writeMapEntry, mapBucket: mapBucket, renderMap: renderMap, bankPalette: bankPalette,
