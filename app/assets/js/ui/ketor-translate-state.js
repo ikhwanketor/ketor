@@ -287,6 +287,37 @@
      still fit" is what the same encoder writes for the original text, and
      the smaller of the two is the only safe answer: a block that is assumed
      too large makes the build overwrite the string that follows. */
+  /* ---- Line budget (Batch 66) ---------------------------
+     Kotak dialog di layar memuat sebanyak yang dibutuhkan baris aslinya. Baris
+     yang lebih lebar dari baris terlebar di halaman aslinya membuat mesin
+     membungkusnya, halaman itu butuh baris lebih banyak daripada kotak yang
+     disediakan, dan baris-baris berikutnya saling menumpuk: halaman terlihat
+     sesak dan jarak antar paragraf aslinya hilang. Anggarannya diambil dari
+     halaman itu sendiri, bukan angka tebakan. */
+  var LINE_TOKEN_SPLIT = /\[LINE\]|\[NEWLINE\]|\[NL\]/gi;
+  function linesOf(text, isTokenForm) {
+    var s = String(text == null ? '' : text).replace(/\r\n?/g, '\n');
+    if (isTokenForm) s = s.replace(LINE_TOKEN_SPLIT, '\n');
+    return s.split('\n');
+  }
+  function lineBudget(row) {
+    if (!row) return { budget: 0, originalLines: 0, translatedLines: 0, over: [] };
+    var origLines = linesOf(row.originalText, false);
+    var newLines = linesOf(row.translatedText === undefined ? '' : row.translatedText, true);
+    var widest = 0;
+    origLines.forEach(function (l) {
+      var n = String(l).replace(/\s+$/, '').length;
+      if (n > widest) widest = n;
+    });
+    var over = [];
+    newLines.forEach(function (l, i) {
+      var n = String(l).replace(/\s+$/, '').length;
+      if (widest > 0 && n > widest) over.push({ line: i + 1, length: n, budget: widest });
+    });
+    return { budget: widest, originalLines: origLines.length, translatedLines: newLines.length, over: over };
+  }
+  var _lineBudgetNote = '';
+
   function measureOriginal(row) {
     if (!row) return 0;
     var stored = Math.max(0, Number(row.byteLength) || 0);
@@ -459,6 +490,22 @@
       return;
     }
 
+    var overBudget = 0;
+    var worstOver = null;
+    buildTexts.forEach(function (t) {
+      lineBudget(t).over.forEach(function (o) {
+        overBudget++;
+        if (!worstOver || (o.length - o.budget) > worstOver.excess) {
+          worstOver = { offset: Number(t.startByte), excess: o.length - o.budget, length: o.length, budget: o.budget };
+        }
+      });
+    });
+    _lineBudgetNote = (overBudget && worstOver)
+      ? overBudget + ' line(s) wider than the original page (worst ' + worstOver.length + ' vs ' +
+        worstOver.budget + ' chars at 0x' + worstOver.offset.toString(16).toUpperCase() +
+        '); the game wraps those and the page looks cramped'
+      : '';
+
     _set({
       isBusy: true, progress: 10, compileScope: compileScope,
       status: 'Compiling ' + buildTexts.length + ' text(s) from ' + scopeLabel +
@@ -572,6 +619,7 @@
         }
         if (text.indexOf('[WARNING]') >= 0) warnings.push(text);
       });
+      if (_lineBudgetNote) warnings.push('Line budget: ' + _lineBudgetNote);
       var summary = {
         at: Date.now(),
         bytes: bytes.length,
@@ -971,6 +1019,7 @@
   K.translate.extractTexts = extractTexts;
   K.translate.measureBytes = measureBytes;
   K.translate.measureOriginal = measureOriginal;
+  K.translate.lineBudget = lineBudget;
   K.translate.getActiveGroupId = getActiveGroupId;
   K.translate.getActiveGroupEntries = getActiveGroupEntries;
   K.translate.setFilter = setFilter;

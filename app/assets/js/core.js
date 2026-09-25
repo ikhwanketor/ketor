@@ -1467,6 +1467,20 @@ window.__PT_APP_READY__ = false;
             if (len <= 0 || Math.abs(len - Number(item.byteLength)) > 8) return null;
             return end;
           };
+          /* The last page of a message carries the console's end code, and the
+             stored byteLength can be a couple of bytes short of it (the extractor
+             measures the text, the end code is a token). Copying the page verbatim
+             then dropped the end code and the relocated message ran straight into
+             whatever followed. Walk to the end code and take it along. */
+          const endWithTerminator = (item) => {
+            const start = Number(item.startByte);
+            const len = Number(item.byteLength);
+            if (!Number.isFinite(start) || !Number.isFinite(len) || len <= 0) return null;
+            for (let k = 0; k <= 8; k++) {
+              if (originalRom[start + len + k] === terminatorHex) return start + len + k;
+            }
+            return null;
+          };
           const runOf = (seed) => {
             const seedIdx = knownIndex.get(seed.startByte);
             if (seedIdx === undefined) return [seed];
@@ -1496,8 +1510,10 @@ window.__PT_APP_READY__ = false;
               run.push(nxt);
               i++;
             }
+            const lastRunItem = run[run.length - 1];
             return run.map(item => {
-              const end = derivedEnd(item, separator);
+              let end = derivedEnd(item, separator);
+              if (end === null && item === lastRunItem) end = endWithTerminator(item);
               if (end === null) return item;
               const len = end - Number(item.startByte) + 1;
               return len === Number(item.byteLength) ? item : Object.assign({}, item, { byteLength: len });
@@ -2296,6 +2312,139 @@ window.__PT_APP_READY__ = false;
           return { list, stats };
         };
 
+        /* Grow in place by borrowing the padding that follows, instead of moving
+           the message somewhere else in the file. A message table covers one
+           contiguous region (on this rom 2893 entries over 0xEA744..0x11664E) and
+           every message in it ends with the console's end code plus a few zero
+           bytes. A message that grew pays for the growth with those bytes: the
+           messages after it slide forward just far enough that the end of the
+           region does not move, and every word that pointed inside the moved part
+           is recalculated - the table entries and the 2668 words outside the table
+           that aim into the same region. Moving a grown message out of the region
+           is what made the game skip dialogue: this rom put one at 0x1A73C4 while
+           its neighbours stayed at 0xEA7C8, and the engine reads the table in
+           order. */
+        const growByBorrowingFollowingPadding = (list) => {
+          if (!needsRelocation) return null;
+          const grow = Number(newBlockBytes.length) - Number(originalBlockLength);
+          if (!(grow > 0)) return null;
+          if ((Number(system.pointerSize) || 4) !== 4 || String(system.pointerEndianness || 'little') !== 'little') return null;
+          const stride = 4;
+          const valueAt = (at) => (originalRom[at] | (originalRom[at + 1] << 8) | (originalRom[at + 2] << 16) | (originalRom[at + 3] << 24)) >>> 0;
+          const targetAt = (at) => {
+            if (at < 0 || at + 4 > originalRom.length) return -1;
+            const v = valueAt(at);
+            if ((v & 0xFF000000) !== 0x08000000) return -1;
+            const off = v & 0x01FFFFFF;
+            return off < originalRom.length ? off : -1;
+          };
+          const sites = list
+            .filter(p => (p.ptrSize || system.pointerSize) === 4 &&
+              (p.transformId === 'gba' || p.transformId === 'gba_offset' || p.transformId === 'raw'))
+            .map(p => p.ptrOffset)
+            .filter(v => Number.isFinite(v))
+            .sort((a, b) => a - b);
+          const blockStart = Number(block.start);
+          const site = sites.filter(at => targetAt(at) === blockStart)[0];
+          if (!Number.isFinite(site)) return null;
+          let lo = site;
+          while (lo - stride >= 0) {
+            const prev = targetAt(lo - stride);
+            const cur = targetAt(lo);
+            if (prev < 0 || cur < 0 || prev >= cur || (cur - prev) > 0x10000) break;
+            lo -= stride;
+          }
+          const entries = [];
+          let hi = lo;
+          while (hi + stride <= originalRom.length) {
+            const cur = targetAt(hi);
+            const next = targetAt(hi + stride);
+            if (cur < 0 || next < 0 || next <= cur || (next - cur) > 0x10000) break;
+            entries.push(cur);
+            hi += stride;
+          }
+          entries.push(targetAt(hi));
+          if (entries.length < 4) return null;
+          const idx = entries.indexOf(blockStart);
+          if (idx < 0 || idx >= entries.length - 1) return null;
+          const spans = [];
+          for (let i = idx; i < entries.length - 1; i++) {
+            const s = entries[i];
+            const e = entries[i + 1];
+            let pad = 0;
+            while (e - 1 - pad >= s && originalRom[e - 1 - pad] === 0x00) pad++;
+            spans.push({ start: s, len: e - s - pad, pad: pad });
+          }
+          const grown = spans[0];
+          if (grown.start !== blockStart || grown.len <= 0) return null;
+          const keep = 2;
+          let need = grow;
+          /* Take at most (pad - 2) from each message and never less than nothing:
+             a message whose padding is already down to the minimum simply keeps it,
+             otherwise the arithmetic would grow the padding of one message while
+             shrinking another and the end of the region would drift. */
+          const takeFrom = (pad) => Math.min(need, Math.max(0, pad - keep));
+          const take0 = takeFrom(grown.pad);
+          need -= take0;
+          const q0 = grown.pad - take0;
+          const plan = [];
+          let cursor = grown.start + grown.len + grow + q0;
+          for (let i = 1; i < spans.length && need > 0; i++) {
+            const sp = spans[i];
+            const take = takeFrom(sp.pad);
+            need -= take;
+            const q = sp.pad - take;
+            const to = cursor;
+            if (to > sp.start) plan.push({ from: sp.start, len: sp.len, to: to });
+            cursor = to + sp.len + q;
+          }
+          if (need > 0) return null;
+          if (plan.length === 0) return { grew: grow, moved: 0, repointed: 0 };
+          const tailStart = plan[0].from;
+          const last = plan[plan.length - 1];
+          const tailEnd = last.from + last.len;
+          if (tailEnd > originalRom.length || tailStart <= blockStart) return null;
+          const movedTo = (off) => {
+            for (let i = 0; i < plan.length; i++) {
+              const p = plan[i];
+              if (off >= p.from && off < p.from + p.len) return p.to + (off - p.from);
+            }
+            return -1;
+          };
+          /* A word that aims at padding keeps aiming at zeros: the whole tail is
+             cleared first and only message content is written back, so a reference
+             into bytes that disappear still finds zero bytes. Counted, not fatal. */
+          let paddingRefs = 0;
+          for (let i = 0; i + 4 <= originalRom.length; i += 2) {
+            const t = targetAt(i);
+            if (t < 0 || t < tailStart || t >= tailEnd) continue;
+            if (movedTo(t) < 0) paddingRefs++;
+          }
+          if (paddingRefs > 0) {
+            relocationLog.push(`Borrow check: ${paddingRefs} reference(s) aim at padding that is cleared to zero.`);
+          }
+          const tail = romCopy.slice(tailStart, tailEnd);
+          romCopy.fill(0x00, tailStart, tailEnd);
+          plan.forEach(function (p) {
+            romCopy.set(tail.subarray(p.from - tailStart, p.from - tailStart + p.len), p.to);
+          });
+          let repointed = 0;
+          for (let i = 0; i + 4 <= romCopy.length; i += 2) {
+            if (i >= tailStart && i < tailEnd) continue;
+            const v = (originalRom[i] | (originalRom[i + 1] << 8) | (originalRom[i + 2] << 16) | (originalRom[i + 3] << 24)) >>> 0;
+            if ((v & 0xFF000000) !== 0x08000000) continue;
+            const moved = movedTo(v & 0x01FFFFFF);
+            if (moved < 0) continue;
+            const nv = (0x08000000 + moved) >>> 0;
+            romCopy[i] = nv & 0xFF;
+            romCopy[i + 1] = (nv >> 8) & 0xFF;
+            romCopy[i + 2] = (nv >> 16) & 0xFF;
+            romCopy[i + 3] = (nv >>> 24) & 0xFF;
+            repointed++;
+          }
+          return { grew: grow, moved: plan.length, repointed: repointed };
+        };
+
         if (shouldUpdatePointers) {
           let newOffset = needsRelocation ? freeSpaceOffset : block.start;
           if (needsRelocation && isGbaNonPaddingProfile) {
@@ -2475,6 +2624,17 @@ window.__PT_APP_READY__ = false;
             } else {
               relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: [WARNING] Relocation skipped (only weak pointer transforms detected).`);
               validPointers = [];
+            }
+          }
+          /* Borrowing the padding of the messages that follow keeps the grown
+             message inside its region and needs no pointer rewrite of its own:
+             everything that moved was recalculated by the helper. */
+          if (needsRelocation && validPointers.length > 0) {
+            const borrowed = growByBorrowingFollowingPadding(validPointers);
+            if (borrowed) {
+              romCopy.set(newBlockBytes, block.start);
+              relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: Grew in place by ${borrowed.grew} byte(s) instead of moving; ${borrowed.moved} message(s) after it slid forward and ${borrowed.repointed} pointer(s) were recalculated.`);
+              continue;
             }
           }
           if (validPointers.length === 0) {
