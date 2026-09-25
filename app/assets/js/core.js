@@ -1319,11 +1319,109 @@ window.__PT_APP_READY__ = false;
               return !!(tx && typeof tx.translatedText === 'string' && tx.translatedText.length > 0);
             })
             .sort((a, b) => a.startByte - b.startByte);
-          return changed.map(t => ({
-            texts: [t],
-            start: t.startByte,
-            end: t.startByte + t.byteLength - 1
-          }));
+          /* A text is not always a record of its own. On this GBA ROM one dialogue
+             message is a run of pages joined by the same two byte control pair
+             (05 09) and a single pointer aims at the head of the run; the engine
+             walks the pages itself. Writing one page of that run somewhere else -
+             or letting the pages after it keep their old offsets - left the rest
+             of the message unreachable: the compiled ROM then showed only the
+             relocated line and every other line of that message was gone in game.
+             A changed text therefore brings its whole run along, and the changed
+             texts of one run share a single block so that they are written
+             together instead of overwriting each other. */
+          const known = texts
+            .filter(t => typeof t.startByte === 'number' && typeof t.byteLength === 'number')
+            .sort((a, b) => a.startByte - b.startByte);
+          const knownIndex = new Map();
+          known.forEach((t, i) => { if (!knownIndex.has(t.startByte)) knownIndex.set(t.startByte, i); });
+          const controlPairAt = (startOffset) => {
+            if (!Number.isFinite(startOffset) || startOffset < 2) return null;
+            const b0 = originalRom[startOffset - 2];
+            const b1 = originalRom[startOffset - 1];
+            if (!isLikelyControlByte(b0) || !isLikelyControlByte(b1)) return null;
+            return (b0 << 8) | b1;
+          };
+          const linkGap = (left, right) => {
+            const gap = Number(right.startByte) - (Number(left.startByte) + Number(left.byteLength));
+            return (gap >= 2 && gap <= 4) ? gap : 0;
+          };
+          /* The room of a page stops where the separator in front of the next
+             known text begins. The stored byteLength can be two bytes short (a
+             line break is stored as a newline, which the table spells [LINE]),
+             so the block would have been measured too small and the last page of
+             the message would have lost its tail. Counting the separator pairs
+             backwards from the next text gives the real end. */
+          const derivedEnd = (item, separator) => {
+            if (separator === null) return null;
+            const idx = knownIndex.get(item.startByte);
+            const next = idx === undefined ? null : known[idx + 1];
+            if (!next) return null;
+            const hi = separator >> 8;
+            const lo = separator & 0xFF;
+            let reps = 0;
+            let p = Number(next.startByte);
+            while (reps < 4 && p - 2 > Number(item.startByte) &&
+                   originalRom[p - 2] === hi && originalRom[p - 1] === lo) {
+              reps++;
+              p -= 2;
+            }
+            if (reps === 0) return null;
+            const end = p - 1;
+            const len = end - Number(item.startByte) + 1;
+            if (len <= 0 || Math.abs(len - Number(item.byteLength)) > 8) return null;
+            return end;
+          };
+          const runOf = (seed) => {
+            const seedIdx = knownIndex.get(seed.startByte);
+            if (seedIdx === undefined) return [seed];
+            let separator = null;
+            const next = known[seedIdx + 1];
+            if (next && linkGap(seed, next) && controlPairAt(next.startByte) !== null) {
+              separator = controlPairAt(next.startByte);
+            } else {
+              const prev = known[seedIdx - 1];
+              if (prev && linkGap(prev, seed) && controlPairAt(seed.startByte) !== null) {
+                separator = controlPairAt(seed.startByte);
+              }
+            }
+            if (separator === null) return [seed];
+            const run = [seed];
+            let i = seedIdx - 1;
+            while (i >= 0 && run.length < 512) {
+              const prev = known[i];
+              if (!linkGap(prev, run[0]) || controlPairAt(run[0].startByte) !== separator) break;
+              run.unshift(prev);
+              i--;
+            }
+            i = seedIdx + 1;
+            while (i < known.length && run.length < 512) {
+              const nxt = known[i];
+              if (!linkGap(run[run.length - 1], nxt) || controlPairAt(nxt.startByte) !== separator) break;
+              run.push(nxt);
+              i++;
+            }
+            return run.map(item => {
+              const end = derivedEnd(item, separator);
+              if (end === null) return item;
+              const len = end - Number(item.startByte) + 1;
+              return len === Number(item.byteLength) ? item : Object.assign({}, item, { byteLength: len });
+            });
+          };
+          const chainBlocks = [];
+          const chainHeads = new Set();
+          for (const t of changed) {
+            const run = runOf(t);
+            const head = Number(run[0].startByte);
+            if (chainHeads.has(head)) continue;
+            chainHeads.add(head);
+            let end = 0;
+            run.forEach(item => { end = Math.max(end, Number(item.startByte) + Number(item.byteLength) - 1); });
+            chainBlocks.push({ texts: run, start: Number(run[0].startByte), end: end });
+          }
+          if (chainBlocks.some(b => b.texts.length > 1)) {
+            relocationLog.push(`Chained text run(s): ${chainBlocks.filter(b => b.texts.length > 1).length} message(s) of ${chainBlocks.filter(b => b.texts.length > 1).map(b => b.texts.length).join(', ')} page(s) will be written as one unit.`);
+          }
+          return chainBlocks;
         }
         const sorted = [...texts].sort((a, b) => a.startByte - b.startByte);
         const blocks = [];
@@ -1590,8 +1688,15 @@ window.__PT_APP_READY__ = false;
         for (let i = 0; i < sortedTexts.length; i++) {
           const textItem = sortedTexts[i];
           const textData = textMap.get(textItem.id);
-          const textToParse = textData?.translatedText || textData.originalText;
-          const encoded = smartTextParse(textToParse, tokenizer, masterCharToHex, usePaddingByte, encodeOptions);
+          /* Pages that were not translated are copied byte for byte. Re-encoding
+             them from the extracted text is lossy - the extractor stores a line
+             break as a newline while the table spells it [LINE] - so a page that
+             came along only because a neighbour was translated would have been
+             rewritten with the wrong control code. */
+          const hasTranslation = !!(textData && typeof textData.translatedText === 'string' && textData.translatedText.length > 0);
+          const encoded = hasTranslation
+            ? smartTextParse(textData.translatedText, tokenizer, masterCharToHex, usePaddingByte, encodeOptions)
+            : originalRom.slice(Number(textItem.startByte), Number(textItem.startByte) + Number(textItem.byteLength));
           if (typeof textItem.startByte === 'number' && typeof textItem.byteLength === 'number') {
             textRanges.push({ start: textItem.startByte, end: textItem.startByte + textItem.byteLength - 1 });
           }
@@ -1631,9 +1736,9 @@ window.__PT_APP_READY__ = false;
           textOffsetsInBlock.set(effectiveBlockStart, 0);
         }
 
-        const newBlockBytes = new Uint8Array(totalLength);
+        const packedBlockBytes = new Uint8Array(totalLength);
         let offset = 0;
-        segments.forEach(arr => { newBlockBytes.set(arr, offset); offset += arr.length; });
+        segments.forEach(arr => { packedBlockBytes.set(arr, offset); offset += arr.length; });
 
         const effectiveBlock = {
           ...block,
@@ -1641,6 +1746,47 @@ window.__PT_APP_READY__ = false;
           end: effectiveBlockEnd
         };
         const originalBlockLength = (effectiveBlock.end - effectiveBlock.start) + 1;
+        /* Slack inside a chained run is spent before anything is moved: a page
+           whose translation is shorter than its own room keeps every page after it
+           exactly where it was, and the leftover bytes are cleared instead of
+           being packed away. A page that does not move cannot break a reference
+           the pointer search failed to find. Packing the run tight stays the
+           fallback, for when the pages that shrank have to pay for one that grew. */
+        let newBlockBytes = packedBlockBytes;
+        if (sortedTexts.length > 1 && packedBlockBytes.length !== originalBlockLength) {
+          const padded = originalRom.slice(effectiveBlockStart, effectiveBlockEnd + 1);
+          let fits = true;
+          for (let i = 0; i < sortedTexts.length; i++) {
+            const item = sortedTexts[i];
+            const textData = textMap.get(item.id);
+            const hasTranslation = !!(textData && typeof textData.translatedText === 'string' && textData.translatedText.length > 0);
+            const encoded = hasTranslation
+              ? smartTextParse(textData.translatedText, tokenizer, masterCharToHex, usePaddingByte, encodeOptions)
+              : originalRom.slice(Number(item.startByte), Number(item.startByte) + Number(item.byteLength));
+            const next = sortedTexts[i + 1];
+            const room = next
+              ? Number(item.byteLength)
+              : (effectiveBlockEnd - Number(item.startByte) + 1);
+            const rel = Number(item.startByte) - effectiveBlockStart;
+            if (encoded.length > room || rel < 0 || rel + room > padded.length) { fits = false; break; }
+            padded.set(encoded, rel);
+            if (encoded.length < room) padded.fill(0, rel + encoded.length, rel + room);
+          }
+          if (fits) {
+            newBlockBytes = padded;
+            textOffsetsInBlock.clear();
+            sortedTexts.forEach(function (item) {
+              textOffsetsInBlock.set(item.startByte, Number(item.startByte) - effectiveBlockStart);
+            });
+            for (const [key, aliases] of Array.from(textAliasMap.entries())) {
+              for (const aliasOffset of aliases) {
+                const rel = Number(aliasOffset) - effectiveBlockStart;
+                if (rel >= 0) textOffsetsInBlock.set(aliasOffset, rel);
+              }
+            }
+            relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: run of ${sortedTexts.length} page(s) written at its own offsets, slack cleared instead of moving the pages after it.`);
+          }
+        }
         const needsRelocation = newBlockBytes.length > originalBlockLength;
         let needsPointerUpdate = false;
         for (const textItem of sortedTexts) {
@@ -1648,6 +1794,15 @@ window.__PT_APP_READY__ = false;
           const newRel = textOffsetsInBlock.get(textItem.startByte);
           const oldRel = textItem.startByte - effectiveBlock.start;
           if (newRel !== oldRel) { needsPointerUpdate = true; break; }
+        }
+        /* A chained run is read by the engine from its head, page by page. When the
+           run still fits where it is, the head does not move and nothing outside
+           has to be repointed. Searching for pointers to the inner pages then only
+           finds look-alikes: on this ROM a sixteen bit tile index inside a map
+           block was rewritten and the graphics changed. The run is written in
+           place instead. */
+        if (!needsRelocation && sortedTexts.length > 1) {
+          needsPointerUpdate = false;
         }
 
         const mod = {
@@ -1662,7 +1817,12 @@ window.__PT_APP_READY__ = false;
           sortedTexts
         };
         if (needsRelocation || needsPointerUpdate) {
-          const canonicalTargetOffsets = sortedTexts
+          /* Only the head of a chained run may be repointed. The engine reaches
+             the pages after it by walking the run, and a value that looks like a
+             pointer to an inner page is a tile index far more often than it is a
+             real address. */
+          const chainHeadOnly = sortedTexts.length > 1;
+          const canonicalTargetOffsets = (chainHeadOnly ? [sortedTexts[0]] : sortedTexts)
             .map(t => t.startByte)
             .filter(v => Number.isFinite(v));
           const aliasTargetOffsets = isGbaNonPaddingProfile
@@ -1965,7 +2125,18 @@ window.__PT_APP_READY__ = false;
               romCopy.set(encoded.subarray(0, writeLen), slotStart);
             }
             if (writeLen < slotLength) {
-              fillRangeWithTerminatorPattern(slotStart + writeLen, slotStart + slotLength);
+              /* A slot that is followed by the two byte chain separator is one
+                 page of a longer message. Padding it with the end code would end
+                 that message at this page and hide every page after it, so the
+                 slack is filled with the neutral byte instead. */
+              const after = slotStart + slotLength;
+              const chainContinues = after + 1 < romCopy.length &&
+                isLikelyControlByte(romCopy[after]) && isLikelyControlByte(romCopy[after + 1]);
+              if (chainContinues) {
+                romCopy.fill(0x00, slotStart + writeLen, slotStart + slotLength);
+              } else {
+                fillRangeWithTerminatorPattern(slotStart + writeLen, slotStart + slotLength);
+              }
             }
             if (encoded.length > slotLength) truncatedCount++;
             writtenCount++;
