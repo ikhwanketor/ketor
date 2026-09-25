@@ -38,7 +38,7 @@
      that a pointer must end with, which lets a scan reject 99% of the
      words before it compares anything. */
   var CONSOLE_RULES = {
-    gba:     { name: 'GBA',     size: 4, little: true,  align: 2, base: 0x08000000, endsWith: [0x08, 0x09], romTop: 0x0A000000 },
+    gba:     { name: 'GBA',     size: 4, little: true,  align: 2, base: 0x08000000, addressMask: 0x01FFFFFF, endsWith: [0x08, 0x09], romTop: 0x0A000000 },
     /* banked consoles: the bank of the table is the bank of the data */
     nesBank: { name: 'NES', size: 2, little: true, align: 2, base: 0x8000, banked: true, bankSize: 0x4000 },
     nds:     { name: 'NDS',     size: 4, little: true,  align: 4, base: 0x02000000, endsWith: [0x02, 0x03], romTop: 0x02400000 },
@@ -52,7 +52,20 @@
     nes32:   { name: 'NES 32K', size: 2, little: true, align: 2, base: 0xC000, banked: true, bankStep: 0x4000, window: 0x4000 },
     gb:      { name: 'GB',      size: 2, little: true,  align: 2, base: 0x4000, banked: true, bankStep: 0x4000, window: 0x4000, threeByte: true },
     gbc:     { name: 'GBC',     size: 2, little: true,  align: 2, base: 0x4000, banked: true, bankStep: 0x4000, window: 0x4000, threeByte: true },
-    pce:     { name: 'PCE',     size: 2, little: true,  align: 2, base: 0x2000, banked: true, bankSize: 0x2000 }
+    pce:     { name: 'PCE',     size: 2, little: true,  align: 2, base: 0x2000, banked: true, bankStep: 0x2000, window: 0x2000 },
+    /* Consoles added in batch 73: the same model, their own rules. */
+    sms:     { name: 'SMS/GG',  size: 2, little: true,  align: 2, base: 0x0000, banked: true, bankStep: 0x4000, window: 0x8000 },
+    ngp:     { name: 'NeoGeo Pocket', size: 2, little: true, align: 2, base: 0x2000, banked: true, bankStep: 0x10000, window: 0x8000 },
+    wswan:   { name: 'WonderSwan', size: 2, little: true, align: 2, base: 0x2000, banked: true, bankStep: 0x10000, window: 0x10000 },
+    lynx:    { name: 'Atari Lynx', size: 2, little: true, align: 2, base: 0x0000, banked: true, bankStep: 0x400, window: 0x400 },
+    segacd:  { name: 'Sega CD',   size: 4, little: false, align: 2, base: 0x00000000 },
+    sega32x: { name: 'Sega 32X',   size: 4, little: false, align: 2, base: 0x00000000 },
+    saturn:  { name: 'Saturn',    size: 4, little: false, align: 4, base: 0x06000000, endsWith: [0x06] },
+    n64:     { name: 'N64',       size: 4, little: false, align: 4, base: 0x80000000, endsWith: [0x80] },
+    n64rom:  { name: 'N64 ROM offset', size: 4, little: false, align: 4, base: 0x00000000 },
+    gc:      { name: 'GameCube/Wii', size: 4, little: false, align: 4, base: 0x80000000, endsWith: [0x80] },
+    amiga:   { name: 'Amiga',     size: 4, little: false, align: 2, base: 0x00000000 },
+    c64:     { name: 'C64',       size: 2, little: true,  align: 2, base: 0x0000, banked: true, bankStep: 0x4000, window: 0x4000 }
   };
 
   function readValue(bytes, at, size, little) {
@@ -87,9 +100,12 @@
       }
       if (rules.lastByte !== undefined && ((v >>> ((size - 1) * 8)) & 0xFF) !== rules.lastByte) continue;
       if (mask && ((v & 0xFFFF) & ~mask)) v = (v & mask) >>> 0;
+      var decoded = rules.addressMask ? ((v & rules.addressMask) >>> 0) : v;
       var target = -1;
       if (mode === 'base') {
-        target = v - rules.base;
+        /* With an address mask the masked word IS the rom offset: on the GBA both
+           0x08xxxxxx and the 0x09 mirror decode to the same byte. */
+        target = rules.addressMask ? decoded : (decoded - rules.base);
       } else if (mode === 'raw') {
         target = v;
       } else if (mode === 'bank') {
