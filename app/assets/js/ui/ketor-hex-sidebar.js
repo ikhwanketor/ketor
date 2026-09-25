@@ -115,6 +115,8 @@
 
     var hasRom = !!t.romBytes;
     var patchCount = Object.keys(t.patches || {}).length;
+    // the image can be longer than the file once data has been relocated into new space
+    var appended = (K.hex && K.hex.appendedLength) ? K.hex.appendedLength() : 0;
     var resultCount = (t.searchResults || []).length;
     var resultLabel = resultCount
       ? (t.searchIndex + 1) + ' / ' + resultCount + (t.searchTruncated ? '+' : '')
@@ -129,7 +131,18 @@
               e(Row, { label: 'Size', value: formatBytes(t.romSize) }),
               e(Row, { label: 'System', value: t.romSystem || '?' }),
               e(Row, { label: 'Patches', value: patchCount }),
-              e(Row, { label: 'Cursor', value: hexLabel(t.cursorOffset), mono: true })
+              appended ? e(Row, { label: 'Grown by', value: formatBytes(appended) + ' appended' }) : null,
+              e(Row, { label: 'Cursor', value: hexLabel(t.cursorOffset), mono: true }),
+              e('button', {
+                type: 'button',
+                className: 'kt-btn small secondary',
+                style: { marginTop: 6, width: '100%' },
+                title: 'Open the tile editor at the cursor. A compressed graphic that starts here is decompressed first.',
+                onClick: function () {
+                  if (K.tile && K.tile.openAt) K.tile.openAt(t.cursorOffset);
+                  else if (K.commands && K.commands.executeCommand) K.commands.executeCommand('ketor.tile.openAt', { offset: t.cursorOffset });
+                }
+              }, 'Open in Tile Editor')
             )
           : e('div', { className: 'kt-text-dim kt-text-small' },
               'No ROM loaded. Use File > Load ROM.')

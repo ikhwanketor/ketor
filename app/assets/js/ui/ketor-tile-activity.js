@@ -389,6 +389,49 @@
     return plan;
   }
 
+  /* Any activity can hand the tile editor an offset. The Hex Editor calls this from
+     its sidebar, and the same call is registered as a command, so both views and the
+     command palette name one place. A compressed stream starting at the offset is
+     decompressed, and the alignment that scores best is used, the same nudge the
+     scanner applies. */
+  function openAt(offset, options) {
+    var C = K.core;
+    var bytes = romBytes();
+    var at = Number(offset);
+    var opts = options || {};
+    if (!bytes || !Number.isFinite(at) || at < 0 || at >= bytes.length) {
+      _set({ status: 'No ROM is loaded, or that offset is outside it.' });
+      return false;
+    }
+    var head = (opts.compressed === false || !C.compressionHeaderAt) ? null : C.compressionHeaderAt(bytes, at, {});
+    if (head) {
+      var dec = C.decompressAt(bytes, at, {});
+      if (dec) {
+        var best = 0, bestScore = -1;
+        [0, 2, 4, 8, 16].forEach(function (shift) {
+          if (shift >= dec.data.length) return;
+          var tiles = Math.min(64, Math.floor((dec.data.length - shift) / C.tileSize(_state.format)));
+          if (tiles < 2) return;
+          var score = C.scoreTileRegion(dec.data, shift, _state.format, tiles);
+          if (score > bestScore) { bestScore = score; best = shift; }
+        });
+        openCandidate({
+          kind: 'compressed', offset: at, type: head.type, size: head.size, label: head.label,
+          dataOffset: best, compressedSize: dec.end - at
+        });
+        return true;
+      }
+    }
+    _set({ region: at, graphicSource: null, status: 'Region set to 0x' + hex6(at) + ' by another activity.' });
+    return true;
+  }
+
+  function focusActivity() {
+    try {
+      global.dispatchEvent(new CustomEvent('ketor:navigate-activity', { detail: { activity: 'tile', source: 'tile-open-at' } }));
+    } catch (error) { /* the event is a nicety, not a requirement */ }
+  }
+
   function clearSource() {
     _set({ graphicSource: null, status: 'Reading the ROM again.' });
   }
@@ -1801,6 +1844,19 @@
     });
   });
 
+  /* One call for the whole application: open an offset here and come to this activity. */
+  K.tileOpenAt = function (offset, options) {
+    var ok = openAt(offset, options);
+    if (ok) focusActivity();
+    return ok;
+  };
+  if (K.commands && K.commands.registerCommand) {
+    K.commands.registerCommand('ketor.tile.openAt', function (arg) {
+      var at = arg && (arg.offset !== undefined ? arg.offset : arg);
+      return K.tileOpenAt(at, arg || {});
+    });
+  }
+
   K.ui.registerTabProvider('tile', TileTab);
   K.ui.registerSidebarProvider('tile', TileSidebar);
   K.tile = {
@@ -1819,6 +1875,7 @@
     consoleProfile: consoleProfile, mapLayoutId: mapLayoutId, openCandidate: openCandidate, clearSource: clearSource,
     repointRegion: repointRegion, romIdentity: function () { return _state.romIdentity; },
     writeBackCompressed: writeBackCompressed, scheduleCompressedWrite: scheduleCompressedWrite,
+    openAt: function (offset, options) { return K.tileOpenAt(offset, options); },
     writeMapEntry: writeMapEntry, mapBucket: mapBucket, renderMap: renderMap, bankPalette: bankPalette,
     decodeMapTile: decodeMapTile, entryTile: entryTile, entryFlipH: entryFlipH, entryFlipV: entryFlipV,
     entryBank: entryBank, setView: function (v) { _set({ view: String(v) }); },
