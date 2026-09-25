@@ -523,6 +523,29 @@
       pointerBase: (systemProfile && Number(systemProfile.pointerBase)) || 0
     };
 
+    /* A rom whose layout has been verified hands its pointer table to the engine
+       instead of letting the engine guess. This entry was checked against three
+       sources: the original rom, a build that crashed, and the indonesian
+       translation patch. 2893 four byte little endian pointers based at
+       0x08000000; each aims at the two byte header in front of a message, and
+       every record closes with 05 09 0a. */
+    var KNOWN_POINTER_TABLES = {
+      'abd71fe01ebb201bcc133074db1dd8c5253776c7': {
+        name: 'Castlevania - Aria of Sorrow (USA)',
+        at: 0x506B40, count: 2893, entrySize: 4, stride: 4,
+        endianness: 'little', base: 0x08000000
+      }
+    };
+    var knownTable = null;
+    try {
+      if (K.core && typeof K.core.identifyRom === 'function' && _state.romBytes) {
+        var romIdent = K.core.identifyRom(_state.romBytes, _state.romName || '');
+        var identKey = romIdent && romIdent.sha1 ? String(romIdent.sha1).toLowerCase() : '';
+        if (identKey && KNOWN_POINTER_TABLES[identKey]) knownTable = KNOWN_POINTER_TABLES[identKey];
+      }
+    } catch (identErr) { knownTable = null; }
+    system.knownPointerTable = knownTable;
+
     var mch = {};
     _buildMasterMap(_state.tableData, mch);
     Object.keys(mch).forEach(function (k) {

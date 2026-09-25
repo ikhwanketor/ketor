@@ -2355,6 +2355,32 @@ window.__PT_APP_READY__ = false;
       const recordTable = () => {
         if (_recordTable) return _recordTable;
         _recordTable = { entries: [] };
+        /* A verified table beats discovery: the layout of this rom was worked out
+           from the original file, from a crashing build and from the indonesian
+           translation patch, so the engine is told where the records are. */
+        const known = system && system.knownPointerTable;
+        if (known && Number.isFinite(known.at) && Number(known.count) > 1) {
+          const kSize = Number(known.entrySize) || 4;
+          const kStride = Number(known.stride) || kSize;
+          const kLittle = String(known.endianness || 'little') === 'little';
+          const kBase = Number(known.base) || 0;
+          const knownEntries = [];
+          for (let i = 0; i < Number(known.count); i++) {
+            const at = Number(known.at) + i * kStride;
+            if (at + kSize > originalRom.length) break;
+            let v = 0;
+            if (kLittle) { for (let b = kSize - 1; b >= 0; b--) v = (v * 256) + originalRom[at + b]; }
+            else { for (let b = 0; b < kSize; b++) v = (v * 256) + originalRom[at + b]; }
+            const off = (v >>> 0) - kBase;
+            if (off < 0 || off >= originalRom.length) break;
+            knownEntries.push(off);
+          }
+          if (knownEntries.length >= 8) {
+            relocationLog.push('Pointer table: known profile ' + (known.name || '') + ' at 0x' + Number(known.at).toString(16).toUpperCase() + ' with ' + knownEntries.length + ' entries, taken as given instead of guessed.');
+            _recordTable.entries = knownEntries;
+            return _recordTable;
+          }
+        }
         for (let start = 0; start + 8 * 8 <= originalRom.length; start += 2) {
           const run = [];
           for (let k = 0; k < 8; k++) {
