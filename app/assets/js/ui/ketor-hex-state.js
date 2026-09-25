@@ -988,8 +988,10 @@
     _set({ compileRelocations: [] });
     return true;
   };
+  // The list belongs to the last compile, not to a view: the editor has one
+  // buffer and the offsets stay offered until the translator hides them.
   K.hex.getRelocations = function () {
-    return isCompiledView() ? (_state.compileRelocations || []) : [];
+    return _state.compileRelocations || [];
   };
   K.hex.setViewSource = setViewSource;
   K.hex.isPatched = isPatched;
