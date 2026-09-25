@@ -431,10 +431,10 @@
       compiledAt: Number(info.at) || Date.now(),
       compiledScope: String(info.scope || ''),
       compileRelocations: Array.isArray(info.relocations) ? info.relocations.slice() : [],
-      // A compiled image exists again: showing it straight away is what makes
-      // the Translation and Hex Editor activities agree after Compile.
-      viewSource: 'compiled',
-      status: 'Compiled text ready (' + Math.round(data.length / 1024) + ' KB). Viewing the compiled bytes.'
+      // The editor stays on the loaded ROM: it is the one buffer the whole
+      // session edits. Compiling reports its result, it does not take the
+      // editor over.
+      status: 'Compiled text ready (' + Math.round(data.length / 1024) + ' KB). The Hex Editor keeps editing the loaded ROM.'
     });
     return true;
   }
@@ -984,6 +984,10 @@
   K.hex.isCompiledView = isCompiledView;
   K.hex.setCompiledRom = setCompiledRom;
   K.hex.clearCompiledRom = clearCompiledRom;
+  K.hex.clearCompiledRelocations = function () {
+    _set({ compileRelocations: [] });
+    return true;
+  };
   K.hex.getRelocations = function () {
     return isCompiledView() ? (_state.compileRelocations || []) : [];
   };

@@ -411,9 +411,11 @@
     // Batch 21: the grid can show the loaded ROM or the image the Translation
     // activity just compiled. Both are the same session; only the bytes on
     // screen change, and the compiled one is read only.
-    var compiledView = K.hex.isCompiledView();
-    var viewBytes = K.hex.viewBytes() || t.romBytes;
-    var viewPatches = K.hex.viewPatches();
+    // One ecosystem, one buffer: the grid always shows the loaded ROM with the
+    // patches made here. The compiled text stays in the Translation activity;
+    // a second read-only view only made the two disagree.
+    var viewBytes = t.romBytes;
+    var viewPatches = t.patches;
     var totalBytes = viewBytes ? viewBytes.length : 0;
     var totalRows = Math.max(1, Math.ceil(totalBytes / perRow));
 
@@ -870,30 +872,6 @@
             )
           ),
 
-          // Original or compiled: the same session, two images. Compiling in
-          // the Translation activity publishes the image here, so the two
-          // activities can no longer disagree about what the ROM contains.
-          e('label', {
-            style: {
-              display: 'flex', alignItems: 'center', gap: 4,
-              fontSize: 11, flex: '0 0 auto', whiteSpace: 'nowrap'
-            }
-          },
-            'Source',
-            e('select', {
-              className: 'kt-select',
-              value: compiledView ? 'compiled' : 'original',
-              title: t.compiledBytes
-                ? 'Original: the loaded ROM with your patches. Compiled: the text the Translation activity built.'
-                : 'No compiled text yet. Compile from the Translation activity.',
-              onChange: function (ev) { K.hex.setViewSource(ev.target.value); },
-              style: { width: 112, fontSize: 11 }
-            },
-              e('option', { value: 'original' }, 'Original'),
-              e('option', { value: 'compiled' }, 'Compiled')
-            )
-          ),
-
           e('button', {
             type: 'button', className: 'kt-btn small',
             onClick: function () { setGroupsOpen(!groupsOpen); },
@@ -941,7 +919,7 @@
           }, 'Clear')
         ),
 
-        compiledView ? e('div', {
+        (t.compileRelocations || []).length ? e('div', {
           style: {
             flex: '0 0 auto',
             padding: '3px 10px',
@@ -972,7 +950,7 @@
                 className: 'kt-btn small',
                 title: 'Moved from 0x' + Number(r.from).toString(16).toUpperCase().padStart(6, '0') +
                   (r.pointers ? ' and ' + r.pointers + ' pointer(s) updated' : '') + '. Click to jump there.',
-                onClick: function () { K.hex.setCursor(r.to); }
+                onClick: function () { K.hex.gotoOffset(r.to); }
               }, hexOff);
             })
           ) : null,
@@ -980,8 +958,9 @@
           e('span', { style: { flex: 1 } }),
           e('button', {
             type: 'button', className: 'kt-btn small secondary',
-            onClick: function () { K.hex.setViewSource('original'); }
-          }, 'Back to Original')
+            onClick: function () { K.hex.clearCompiledRelocations(); },
+            title: 'Hide this list. The ROM and your patches are not touched.'
+          }, 'Hide')
         ) : null,
 
         e('div', {
