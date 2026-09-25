@@ -563,6 +563,13 @@
 
       // Hand the compiled image to the Hex Editor so both activities show the
       // same bytes after a compile. Nothing is written into the loaded ROM.
+      // What the user sees in the Hex Editor and exports from now on is the
+      // inserted ROM, not the file that was loaded.
+      if (K.hex && typeof K.hex.adoptInsertedRom === 'function') {
+        K.hex.adoptInsertedRom(bytes, {
+          at: summary.at, scope: summary.scope, relocations: relocations
+        });
+      }
       if (K.hex && typeof K.hex.setCompiledRom === 'function') {
         K.hex.setCompiledRom(bytes, {
           at: summary.at, scope: summary.scope, relocations: relocations

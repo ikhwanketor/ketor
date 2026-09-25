@@ -469,6 +469,35 @@
     return true;
   }
 
+  /* The inserted ROM becomes the buffer this session shows and exports. The
+     loaded file stays the source for the next insert; without this the Hex
+     Editor kept showing the source ROM and Export wrote it, so an insert that
+     the log reported as done was invisible and never reached the game. */
+  function adoptInsertedRom(bytes, meta) {
+    var data = null;
+    if (bytes instanceof Uint8Array) data = bytes;
+    else if (bytes instanceof ArrayBuffer) data = new Uint8Array(bytes);
+    else if (bytes && bytes.buffer) data = new Uint8Array(bytes.buffer, bytes.byteOffset || 0, bytes.byteLength);
+    if (!data || !data.length) return false;
+    var info = meta || {};
+    _set({
+      romBytes: data,
+      romSize: data.length,
+      compiledBytes: data,
+      compileRelocations: Array.isArray(info.relocations) ? info.relocations.slice() : [],
+      compiledAt: Number(info.at) || Date.now(),
+      compiledScope: String(info.scope || ''),
+      // The build already wrote the hex patches into this buffer.
+      patches: {},
+      undoStack: [],
+      redoStack: [],
+      selection: null,
+      status: 'Inserted ROM adopted (' + Math.round(data.length / 1024) + ' KB). The Hex Editor shows it now.'
+    });
+    refreshSections();
+    return true;
+  }
+
   function currentByte(offset) {
     var off = Number(offset);
     if (isCompiledView()) {
@@ -984,6 +1013,7 @@
   K.hex.isCompiledView = isCompiledView;
   K.hex.setCompiledRom = setCompiledRom;
   K.hex.clearCompiledRom = clearCompiledRom;
+  K.hex.adoptInsertedRom = adoptInsertedRom;
   K.hex.clearCompiledRelocations = function () {
     _set({ compileRelocations: [] });
     return true;
