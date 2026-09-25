@@ -394,6 +394,7 @@
       title: 'Index ' + (props.index + 1) + ' · ' + (row.offset || ''),
       style: {
         display: 'flex', alignItems: 'baseline', gap: 4,
+        position: 'relative',
         padding: '2px 8px',
         fontFamily: MONO, fontSize: 12,
         cursor: 'pointer',
@@ -402,8 +403,15 @@
         borderBottom: '1px solid rgba(255,255,255,0.03)'
       }
     },
+      // The index is taken out of the flow and parked at the right edge: in the
+      // flow it pushed both text columns 46px to the right, so the list could
+      // never line up with the Original and Translation boxes below, which
+      // start at the row's own 8px padding.
       e('span', {
-        style: { flex: '0 0 42px', opacity: 0.6, fontSize: 10, fontFamily: MONO }
+        style: {
+          position: 'absolute', right: 8, top: 2,
+          opacity: 0.45, fontSize: 10, fontFamily: MONO
+        }
       }, pad6(props.index + 1)),
       e('span', {
         style: {
