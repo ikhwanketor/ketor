@@ -394,8 +394,7 @@
       title: 'Index ' + (props.index + 1) + ' · ' + (row.offset || ''),
       style: {
         display: 'flex', alignItems: 'baseline', gap: 8,
-        position: 'relative',
-        padding: '2px 8px',
+        padding: '2px 8px 2px 48px',
         fontFamily: MONO, fontSize: 12,
         cursor: 'pointer',
         background: active ? 'var(--kt-list-active-selection-bg)' : 'transparent',
@@ -407,11 +406,10 @@
       // flow it pushed both text columns 46px to the right, so the list could
       // never line up with the Original and Translation boxes below, which
       // start at the row's own 8px padding.
+      // Back on the left, in its own gutter. The boxes below get the same
+      // gutter, so both start their columns at the same place.
       e('span', {
-        style: {
-          position: 'absolute', right: 8, top: 2,
-          opacity: 0.45, fontSize: 10, fontFamily: MONO
-        }
+        style: { flex: '0 0 40px', opacity: 0.55, fontSize: 10, fontFamily: MONO }
       }, pad6(props.index + 1)),
       e('span', {
         style: {
@@ -1025,7 +1023,7 @@
       e('div', {
         style: {
           flex: '1 1 58%', minHeight: 0,
-          display: 'flex', gap: 8, padding: 8
+          display: 'flex', gap: 8, padding: '8px 8px 8px 48px'
         }
       },
         active
