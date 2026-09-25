@@ -1392,7 +1392,73 @@ window.__PT_APP_READY__ = false;
         return findFreeSpaceInRange(romData, 0, romData.length, requiredSize, fillers);
       };
 
-      const groupTextsIntoBlocks = (texts) => {
+
+
+let _recordTable = null;
+      const recordTable = () => {
+        if (_recordTable) return _recordTable;
+        _recordTable = { entries: [] };
+        /* A verified table beats discovery: the layout of this rom was worked out
+           from the original file, from a crashing build and from the indonesian
+           translation patch, so the engine is told where the records are. */
+        const known = system && system.knownPointerTable;
+        if (known && Number.isFinite(known.at) && Number(known.count) > 1) {
+          const kSize = Number(known.entrySize) || 4;
+          const kStride = Number(known.stride) || kSize;
+          const kLittle = String(known.endianness || 'little') === 'little';
+          const kBase = Number(known.base) || 0;
+          const knownEntries = [];
+          for (let i = 0; i < Number(known.count); i++) {
+            const at = Number(known.at) + i * kStride;
+            if (at + kSize > originalRom.length) break;
+            let v = 0;
+            if (kLittle) { for (let b = kSize - 1; b >= 0; b--) v = (v * 256) + originalRom[at + b]; }
+            else { for (let b = 0; b < kSize; b++) v = (v * 256) + originalRom[at + b]; }
+            const off = (v >>> 0) - kBase;
+            if (off < 0 || off >= originalRom.length) break;
+            knownEntries.push(off);
+          }
+          if (knownEntries.length >= 8) {
+            relocationLog.push('Pointer table: known profile ' + (known.name || '') + ' at 0x' + Number(known.at).toString(16).toUpperCase() + ' with ' + knownEntries.length + ' entries, taken as given instead of guessed.');
+            _recordTable.entries = knownEntries;
+            return _recordTable;
+          }
+        }
+        for (let start = 0; start + 8 * 8 <= originalRom.length; start += 2) {
+          const run = [];
+          for (let k = 0; k < 8; k++) {
+            const at = start + k * 4;
+            const v = (originalRom[at] | (originalRom[at + 1] << 8) | (originalRom[at + 2] << 16) | (originalRom[at + 3] << 24)) >>> 0;
+            if ((v & 0xFF000000) !== 0x08000000) break;
+            const off = v & 0x01FFFFFF;
+            if (off >= originalRom.length) break;
+            if (run.length && off <= run[run.length - 1]) break;
+            run.push(off);
+          }
+          if (run.length < 8) continue;
+          let at = start + run.length * 4;
+          while (at + 4 <= originalRom.length) {
+            const v = (originalRom[at] | (originalRom[at + 1] << 8) | (originalRom[at + 2] << 16) | (originalRom[at + 3] << 24)) >>> 0;
+            if ((v & 0xFF000000) !== 0x08000000) break;
+            const off = v & 0x01FFFFFF;
+            if (off >= originalRom.length || off <= run[run.length - 1]) break;
+            run.push(off);
+            at += 4;
+          }
+          if (run.length > _recordTable.entries.length) _recordTable.entries = run;
+          start += (run.length - 1) * 4;
+        }
+        return _recordTable;
+      };
+      const recordIndexFor = (offset) => {
+        const entries = recordTable().entries;
+        for (let k = 0; k < entries.length - 1; k++) {
+          if (offset >= entries[k] && offset < entries[k + 1]) return k;
+        }
+        return -1;
+      };
+
+            const groupTextsIntoBlocks = (texts) => {
         if (texts.length === 0) return [];
         if (isGbaNonPaddingProfile || isGbaDweSingleByteProfile || isNesProfile || isSnesProfile || isGbLikeProfile) {
           const changed = texts
@@ -1533,7 +1599,43 @@ window.__PT_APP_READY__ = false;
           if (chainBlocks.some(b => b.texts.length > 1)) {
             relocationLog.push(`Chained text run(s): ${chainBlocks.filter(b => b.texts.length > 1).length} message(s) of ${chainBlocks.filter(b => b.texts.length > 1).map(b => b.texts.length).join(', ')} page(s) will be written as one unit.`);
           }
-          return chainBlocks;
+          /* A record is the unit of work (batch 79). A page inside a record has no
+             pointer of its own, so a page that grew was written past its own span and
+             clobbered the page that follows it inside the same record; the engine then
+             read a broken conversation and skipped it while every structural check
+             passed. Blocks that share a record are merged into one block covering the
+             whole record, so the growth is paid at the record's end. */
+          const byRecord = new Map();
+          chainBlocks.forEach(function (b) {
+            const ridx = recordIndexFor(b.start);
+            const key = ridx >= 0 ? ('r' + ridx) : ('b' + b.start);
+            const hit = byRecord.get(key);
+            if (!hit) {
+              byRecord.set(key, { texts: b.texts.slice(), start: b.start, end: b.end, ridx: ridx });
+              return;
+            }
+            hit.texts = hit.texts.concat(b.texts);
+            hit.start = Math.min(hit.start, b.start);
+            hit.end = Math.max(hit.end, b.end);
+          });
+          const wholeRecords = [];
+          byRecord.forEach(function (b) {
+            if (b.ridx < 0) { wholeRecords.push({ texts: b.texts, start: b.start, end: b.end }); return; }
+            const entries = recordTable().entries;
+            const recStart = entries[b.ridx];
+            const nextStart = (b.ridx + 1 < entries.length) ? entries[b.ridx + 1] : originalRom.length;
+            const inside = allTexts.filter(function (t) {
+              return typeof t.startByte === 'number' && t.startByte >= recStart && t.startByte < nextStart;
+            });
+            const texts = inside.length ? inside : b.texts;
+            let end = b.end;
+            texts.forEach(function (t) { end = Math.max(end, Number(t.startByte) + Number(t.byteLength) - 1); });
+            if (texts.length > b.texts.length) {
+              relocationLog.push(`Record at 0x${recStart.toString(16).toUpperCase()}: written as one unit with all ${texts.length} page(s) instead of ${b.texts.length}, so the growth lands at the end of the record.`);
+            }
+            wholeRecords.push({ texts: texts, start: recStart, end: end });
+          });
+          return wholeRecords;
         }
         const sorted = [...texts].sort((a, b) => a.startByte - b.startByte);
         const blocks = [];
@@ -2351,70 +2453,6 @@ window.__PT_APP_READY__ = false;
          to 0x1297F4 while the game skipped exactly those conversations, so the rule
          is now: only the head of a record may leave its place, a page inside a
          record can only grow where it is (or be reported so it can be shortened). */
-      let _recordTable = null;
-      const recordTable = () => {
-        if (_recordTable) return _recordTable;
-        _recordTable = { entries: [] };
-        /* A verified table beats discovery: the layout of this rom was worked out
-           from the original file, from a crashing build and from the indonesian
-           translation patch, so the engine is told where the records are. */
-        const known = system && system.knownPointerTable;
-        if (known && Number.isFinite(known.at) && Number(known.count) > 1) {
-          const kSize = Number(known.entrySize) || 4;
-          const kStride = Number(known.stride) || kSize;
-          const kLittle = String(known.endianness || 'little') === 'little';
-          const kBase = Number(known.base) || 0;
-          const knownEntries = [];
-          for (let i = 0; i < Number(known.count); i++) {
-            const at = Number(known.at) + i * kStride;
-            if (at + kSize > originalRom.length) break;
-            let v = 0;
-            if (kLittle) { for (let b = kSize - 1; b >= 0; b--) v = (v * 256) + originalRom[at + b]; }
-            else { for (let b = 0; b < kSize; b++) v = (v * 256) + originalRom[at + b]; }
-            const off = (v >>> 0) - kBase;
-            if (off < 0 || off >= originalRom.length) break;
-            knownEntries.push(off);
-          }
-          if (knownEntries.length >= 8) {
-            relocationLog.push('Pointer table: known profile ' + (known.name || '') + ' at 0x' + Number(known.at).toString(16).toUpperCase() + ' with ' + knownEntries.length + ' entries, taken as given instead of guessed.');
-            _recordTable.entries = knownEntries;
-            return _recordTable;
-          }
-        }
-        for (let start = 0; start + 8 * 8 <= originalRom.length; start += 2) {
-          const run = [];
-          for (let k = 0; k < 8; k++) {
-            const at = start + k * 4;
-            const v = (originalRom[at] | (originalRom[at + 1] << 8) | (originalRom[at + 2] << 16) | (originalRom[at + 3] << 24)) >>> 0;
-            if ((v & 0xFF000000) !== 0x08000000) break;
-            const off = v & 0x01FFFFFF;
-            if (off >= originalRom.length) break;
-            if (run.length && off <= run[run.length - 1]) break;
-            run.push(off);
-          }
-          if (run.length < 8) continue;
-          let at = start + run.length * 4;
-          while (at + 4 <= originalRom.length) {
-            const v = (originalRom[at] | (originalRom[at + 1] << 8) | (originalRom[at + 2] << 16) | (originalRom[at + 3] << 24)) >>> 0;
-            if ((v & 0xFF000000) !== 0x08000000) break;
-            const off = v & 0x01FFFFFF;
-            if (off >= originalRom.length || off <= run[run.length - 1]) break;
-            run.push(off);
-            at += 4;
-          }
-          if (run.length > _recordTable.entries.length) _recordTable.entries = run;
-          start += (run.length - 1) * 4;
-        }
-        return _recordTable;
-      };
-      const recordIndexFor = (offset) => {
-        const entries = recordTable().entries;
-        for (let k = 0; k < entries.length - 1; k++) {
-          if (offset >= entries[k] && offset < entries[k + 1]) return k;
-        }
-        return -1;
-      };
-
       const growByBorrowingFollowingPadding = (list) => {
           if (!needsRelocation) return null;
           const grow = Number(newBlockBytes.length) - Number(originalBlockLength);
