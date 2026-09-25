@@ -34,8 +34,25 @@
   var MONO = 'var(--kt-font-mono)';
   var PALETTE_COLOURS = 16;
 
+  /* Which console the loaded ROM is, so the format list, the map layout and the
+     compression schemes come from its profile instead of from a guess. */
+  function consoleProfile() {
+    var h = K.hex && K.hex.getState ? K.hex.getState() : null;
+    var name = h ? h.romSystem : '';
+    if (!K.core || !K.core.consoleProfile) return { id: 'unknown', label: 'Unknown', tileFormats: ['gba-4bpp'], defaultFormat: 'gba-4bpp', mapLayout: 'gba-text', compression: [] };
+    return K.core.consoleProfile(name);
+  }
+
+  function mapLayoutId() {
+    var p = consoleProfile();
+    return p.mapLayout || 'gba-text';
+  }
+
   var _state = {
     region: null,
+    // a compressed graphic the user picked: the editor then reads the
+    // decompressed bytes instead of the ROM
+    graphicSource: null,
     format: 'gba-4bpp',
     palette: null,
     paletteOffset: null,
@@ -135,8 +152,21 @@
   /* The visible tiles with the current patches applied. Without this the canvas
      would redraw the untouched ROM and a painted pixel would vanish. */
   function regionWindow() {
-    var src = romBytes();
     var C = K.core;
+    var gs = _state.graphicSource;
+    if (gs && gs.data) {
+      var gsSize = C.tileSize(_state.format);
+      var from = gs.dataOffset || 0;
+      var visible = Math.min(gs.data.length - from, gsSize * _state.tiles);
+      var slice = gs.data.slice(from, from + visible);
+      return {
+        start: gs.offset,
+        bytes: slice,
+        compressed: { offset: gs.offset, label: gs.label, size: gs.size, dataOffset: gs.dataOffset || 0 },
+        key: 'compressed:' + gs.offset + ':' + slice.length
+      };
+    }
+    var src = romBytes();
     if (!src || !C || typeof C.tileSize !== 'function') return null;
     var start = windowStart();
     var size = C.tileSize(_state.format) * _state.tiles;
@@ -175,6 +205,10 @@
   /* Writes one pixel through the Hex Editor patch layer. */
   function setPixel(tileIndex, x, y, colour) {
     var C = K.core;
+    if (_state.graphicSource) {
+      _set({ status: 'This is a compressed graphic. Rewriting it means compressing the result again and moving it, which the next step adds; paint in a raw region for now.' });
+      return false;
+    }
     var win = regionWindow();
     if (!win || !C || typeof C.encodeTile !== 'function') return false;
     var fmt = _state.format;
@@ -219,28 +253,79 @@
 
   /* Score every 64 KiB step and keep the best few, so detection proposes a
      region instead of silently choosing one. */
+  /* Detection follows what the console actually does. On a GBA or a DS almost
+     every graphic is LZ77 or RLE compressed, and the tools the ROM hacking
+     community uses find them by their four byte header - searching raw regions
+     there means scoring padding and packed tables. On a Game Boy, NES, SNES or
+     Mega Drive the tiles sit in the ROM as they are, so a raw region scan is the
+     right tool. Both are run when both make sense, and the result says which is
+     which. */
   function detect() {
     var bytes = romBytes();
     if (!bytes) { _set({ status: 'Load a ROM first.' }); return; }
-    if (!K.core || typeof K.core.scoreTileRegion !== 'function') { _set({ status: 'Tile codec missing.' }); return; }
-    _set({ scanning: true, status: 'Scoring regions...' });
-    var found = [];
+    var C = K.core;
+    if (!C || typeof C.scanTileRegions !== 'function') { _set({ status: 'Tile codec missing.' }); return; }
+    var prof = consoleProfile();
     var fmt = _state.format;
-    var step = 0x10000;
-    for (var off = 0; off + 64 * K.core.tileSize(fmt) < bytes.length; off += step) {
-      var score = K.core.scoreTileRegion(bytes, off, fmt, 64);
-      found.push({ offset: off, score: score });
+    _set({ scanning: true, graphicSource: null, status: 'Scanning ' + prof.label + ' for ' + fmt + ' graphics...' });
+    var candidates = [];
+    var decodedBlocks = 0;
+    if (prof.compression && prof.compression.length && typeof C.scanCompressed === 'function') {
+      var comp = C.scanCompressed(bytes, {
+        maxResults: 40,
+        score: function (data, at) {
+          var tiles = Math.min(64, Math.floor((data.length - at) / C.tileSize(fmt)));
+          return tiles >= 2 ? C.scoreTileRegion(data, at, fmt, tiles) : 0;
+        }
+      });
+      decodedBlocks = comp.decoded;
+      comp.top.forEach(function (b) {
+        candidates.push({
+          offset: b.offset, score: b.score, kind: 'compressed', type: b.type,
+          size: b.size, dataOffset: b.dataOffset,
+          label: b.label + ' ' + (b.size < 1024 ? b.size + 'B' : Math.round(b.size / 1024) + 'K')
+        });
+      });
     }
-    found.sort(function (a, b) { return b.score - a.score; });
-    var best = found.slice(0, 8);
+    var raw = C.scanTileRegions(bytes, { format: fmt, maxResults: 40 });
+    raw.top.forEach(function (r) {
+      candidates.push({ offset: r.offset, score: r.score, kind: 'raw', label: 'raw' });
+    });
+    candidates.sort(function (a, b) { return b.score - a.score || a.offset - b.offset; });
+    var top = candidates.slice(0, 12);
     _set({
       scanning: false,
-      candidates: best,
-      region: best.length ? best[0].offset : null,
-      status: best.length
-        ? 'Best region 0x' + hex6(best[0].offset) + ' (score ' + best[0].score.toFixed(2) + '), ' + (best.length - 1) + ' other candidate(s).'
+      candidates: top,
+      region: top.length ? top[0].offset : null,
+      status: top.length
+        ? prof.label + ': best 0x' + hex6(top[0].offset) + ' (' + top[0].label + ', score ' + top[0].score.toFixed(2) + ')'
+          + (decodedBlocks ? ', ' + decodedBlocks + ' compressed block(s) decoded.' : '.')
         : 'No candidate found.'
     });
+  }
+
+  /* Opening a compressed candidate decompresses it once and hands the editor the
+     decompressed bytes, which is what a tile viewer shows for these consoles. */
+  function openCandidate(cand) {
+    if (!cand) return;
+    var bytes = romBytes();
+    if (!bytes) return;
+    if (cand.kind === 'compressed') {
+      var dec = K.core.decompressAt(bytes, cand.offset, {});
+      if (!dec) { _set({ status: 'That block does not decompress any more.' }); return; }
+      _set({
+        region: cand.offset,
+        graphicSource: { offset: cand.offset, label: cand.label, size: dec.size, dataOffset: cand.dataOffset || 0, data: dec.data },
+        status: 'Opened ' + cand.label + ' at 0x' + hex6(cand.offset) + ': ' + dec.size + ' bytes decompressed'
+          + (cand.dataOffset ? ', tiles start ' + cand.dataOffset + ' byte(s) in.' : '.')
+      });
+      return;
+    }
+    _set({ region: cand.offset, graphicSource: null, status: 'Raw region 0x' + hex6(cand.offset) + ' (score ' + cand.score.toFixed(2) + ').' });
+  }
+
+  function clearSource() {
+    _set({ graphicSource: null, status: 'Reading the ROM again.' });
   }
 
   /* ---------- palette ---------- */
@@ -508,7 +593,20 @@
     return out;
   }
 
-  function mapSize() { return MAP_SIZES[_state.mapSize] || MAP_SIZES['32x32']; }
+  function mapSizes() {
+    if (K.core && K.core.mapSizes) return K.core.mapSizes(mapLayoutId());
+    return MAP_SIZES;
+  }
+
+  function mapSize() {
+    var sizes = mapSizes();
+    return sizes[_state.mapSize] || sizes[Object.keys(sizes)[0]];
+  }
+
+  function entryBytes() {
+    if (K.core && K.core.mapLayout) return K.core.mapLayout(mapLayoutId()).entryBytes;
+    return 2;
+  }
 
   /* The map bytes with the current patches applied, exactly like regionWindow. */
   function mapWindow() {
@@ -518,8 +616,9 @@
     var start = Number(_state.mapScreenBase);
     if (!Number.isFinite(start)) return null;
     var dim = mapSize();
+    var width = entryBytes();
     var count = dim[0] * dim[1];
-    var end = Math.min(src.length, start + count * 2);
+    var end = Math.min(src.length, start + count * width);
     if (!(end > start)) return null;
     var out = src.slice(start, end);
     var patches = patchesMap();
@@ -533,7 +632,8 @@
     });
     return {
       start: start, bytes: out, cols: dim[0], rows: dim[1],
-      count: Math.min(count, Math.floor(out.length / 2)),
+      count: Math.min(count, Math.floor(out.length / width)),
+      entryBytes: width,
       key: start + ':' + out.length + ':' + keyParts.join(',')
     };
   }
@@ -570,13 +670,17 @@
     return { start: start, bytes: out, key: start + ':' + out.length + ':' + keyParts.join(',') };
   }
 
-  function entryTile(v) { return v & 0x3FF; }
-  function entryFlipH(v) { return (v & 0x400) !== 0; }
-  function entryFlipV(v) { return (v & 0x800) !== 0; }
-  function entryBank(v) { return (v >> 12) & 0xF; }
+  /* The bit layout of a cell belongs to the console, so it comes from the map
+     codec: GBA and SNES use two bytes, Game Boy and NES one, and the flips and
+     palette bits sit in different places in each of them. */
+  function entryTile(v) { return K.core.entryTile(v, mapLayoutId()); }
+  function entryFlipH(v) { return K.core.entryFlipH(v, mapLayoutId()); }
+  function entryFlipV(v) { return K.core.entryFlipV(v, mapLayoutId()); }
+  function entryBank(v) { return K.core.entryPalette(v, mapLayoutId()); }
+
   function mapEntry(win, cell) {
     if (!win || cell < 0 || cell >= win.count) return null;
-    return (win.bytes[cell * 2] & 0xFF) | ((win.bytes[cell * 2 + 1] & 0xFF) << 8);
+    return K.core.readMapEntry(win.bytes, cell * (win.entryBytes || entryBytes()), mapLayoutId());
   }
 
   /* Sixteen colours for one palette bank. The loaded palette is bank 0 and the
@@ -626,8 +730,9 @@
     var img = ctx.createImageData(w, h);
     var cache = {};
     var palCache = {};
+    var width = win.entryBytes || 2;
     for (var cell = 0; cell < win.count; cell++) {
-      var v = (win.bytes[cell * 2] & 0xFF) | ((win.bytes[cell * 2 + 1] & 0xFF) << 8);
+      var v = K.core.readMapEntry(win.bytes, cell * width, mapLayoutId());
       var tile = entryTile(v);
       var bank = entryBank(v);
       var key = tile + ':' + (entryFlipH(v) ? 1 : 0) + (entryFlipV(v) ? 1 : 0);
@@ -655,7 +760,14 @@
      almost every cell its own tile number. That difference is what this scan
      measures, together with how often a cell claims a high palette bank, which
      a text mode map rarely does. Screen bases are 2 KiB aligned in the GBA. */
+  /* Kept as a thin wrapper so the tile activity and the tests share one rule:
+     the score itself lives in the map codec next to the layouts it has to know. */
   function scoreMapBlock(bytes, offset, cells, cols) {
+    if (K.core && K.core.scoreMapBlock) return K.core.scoreMapBlock(bytes, offset, cells, cols, mapLayoutId());
+    return scoreMapBlockLocal(bytes, offset, cells, cols);
+  }
+
+  function scoreMapBlockLocal(bytes, offset, cells, cols) {
     if (offset < 0 || offset + cells * 2 > bytes.length) return null;
     var width = cols || 32;
     var seen = {};
@@ -726,16 +838,25 @@
     var win = mapWindow();
     if (!win || cell < 0 || cell >= win.count) return false;
     var v = mapEntry(win, cell);
-    var next = (Number(tile) & 0x3FF)
-      | ((flipH == null ? entryFlipH(v) : !!flipH) ? 0x400 : 0)
-      | ((flipV == null ? entryFlipV(v) : !!flipV) ? 0x800 : 0)
-      | ((bank == null ? entryBank(v) : (Number(bank) & 0xF)) << 12);
-    var lo = next & 0xFF, hi = (next >> 8) & 0xFF;
+    var next = K.core.buildEntry({
+      tile: Number(tile),
+      flipH: flipH == null ? entryFlipH(v) : !!flipH,
+      flipV: flipV == null ? entryFlipV(v) : !!flipV,
+      palette: bank == null ? entryBank(v) : (Number(bank) & 0xF)
+    }, mapLayoutId(), v);
+    var width = win.entryBytes || entryBytes();
+    var bytesOut = K.core.entryBytesOf(next, mapLayoutId());
+    var base = win.start + cell * width;
     var wrote = 0;
-    if ((win.bytes[cell * 2] & 0xFF) !== lo && K.hex.setByte(win.start + cell * 2, lo)) wrote++;
-    if ((win.bytes[cell * 2 + 1] & 0xFF) !== hi && K.hex.setByte(win.start + cell * 2 + 1, hi)) wrote++;
+    for (var i = 0; i < bytesOut.length; i++) {
+      if ((win.bytes[cell * width + i] & 0xFF) === bytesOut[i]) continue;
+      if (K.hex.setByte(base + i, bytesOut[i])) wrote++;
+    }
     if (wrote) {
-      _set({ status: 'Map cell ' + (cell % win.cols) + ',' + Math.floor(cell / win.cols) + ' = tile ' + (Number(tile) & 0x3FF) + ' (' + wrote + ' byte(s) at 0x' + hex6(win.start + cell * 2) + ').' });
+      _set({
+        status: 'Map cell ' + (cell % win.cols) + ',' + Math.floor(cell / win.cols) + ' = tile '
+          + entryTile(next) + ' (' + wrote + ' byte(s) at 0x' + hex6(base) + ').'
+      });
     }
     return wrote > 0;
   }
@@ -1012,7 +1133,8 @@
       var cell = mapCellAt(ev, ev.currentTarget);
       if (cell === null) return;
       setMapCursor(cell);
-      if (K.hex.setSelection) K.hex.setSelection(mapWin.start + cell * 2, mapWin.start + cell * 2 + 1);
+      var width = mapWin.entryBytes || entryBytes();
+      if (K.hex.setSelection) K.hex.setSelection(mapWin.start + cell * width, mapWin.start + cell * width + width - 1);
       if (ev.altKey) { swapMapTile(cell); return; }
       if (ev.shiftKey) { mapBucket(cell, currentDrawTile(selected)); return; }
       if (ev.ctrlKey || ev.metaKey) { pickMapTile(cell); return; }
@@ -1363,15 +1485,23 @@
     var rowStyle = { display: 'flex', gap: 4, alignItems: 'center' };
     var inputStyle = { flex: '1 1 auto', fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' };
 
+    var prof = consoleProfile();
+    // The formats of this console come first; the rest stay reachable, because a
+    // ROM can always surprise you.
+    var preferred = (prof.tileFormats || []).filter(function (id) { return !!formats[id]; });
+    var others = Object.keys(formats).filter(function (id) { return preferred.indexOf(id) === -1; });
+    var formatIds = preferred.concat(others);
     return e('div', { style: { padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 } },
       e('div', { style: { fontWeight: 600 } }, 'Tiles'),
+      e('div', { style: { opacity: 0.75 } }, 'Console: ' + prof.label
+        + (prof.compression && prof.compression.length ? ' (compressed graphics)' : ' (raw tile data)')),
       e('label', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
         'Format',
         e('select', {
           className: 'kt-select', value: st.format,
-          onChange: function (ev) { _set({ format: ev.target.value, region: null, candidates: [] }); },
+          onChange: function (ev) { _set({ format: ev.target.value, region: null, candidates: [], graphicSource: null }); },
           style: { fontSize: 11 }
-        }, Object.keys(formats).map(function (id) {
+        }, formatIds.map(function (id) {
           return e('option', { key: id, value: id }, formats[id].label);
         }))
       ),
@@ -1395,7 +1525,9 @@
         type: 'button', className: 'kt-btn',
         disabled: !hex || !hex.romBytes || st.scanning,
         onClick: detect,
-        title: 'Score the ROM in 64 KiB steps and propose the best tile region'
+        title: (prof.compression && prof.compression.length)
+          ? 'Find compressed ' + prof.label + ' graphics by their LZ77 / RLE header, plus raw tile regions'
+          : 'Scan for raw ' + prof.label + ' tile data at this format'
       }, st.scanning ? 'Scanning...' : 'Detect tiles'),
       st.candidates.length ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3, marginTop: 2 } },
         e('div', { style: { opacity: 0.75 } }, 'Candidates (score)'),
@@ -1405,9 +1537,21 @@
             type: 'button',
             className: 'kt-btn small' + (st.region === c.offset ? '' : ' secondary'),
             style: { fontFamily: MONO, justifyContent: 'flex-start' },
-            onClick: function () { _set({ region: c.offset }); }
-          }, '0x' + hex6(c.offset) + '  ' + c.score.toFixed(2));
+            title: c.kind === 'compressed'
+              ? 'Decompress this ' + c.label + ' block and open it'
+              : 'Read this raw region of the ROM',
+            onClick: function () { openCandidate(c); }
+          }, '0x' + hex6(c.offset) + '  ' + c.score.toFixed(2) + '  ' + (c.label || 'raw'));
         })
+      ) : null,
+      st.graphicSource ? e('div', {
+        style: { display: 'flex', flexDirection: 'column', gap: 3, padding: '4px 6px', border: '1px solid var(--kt-widget-border-default)', borderRadius: 3 }
+      },
+        e('div', { style: { fontFamily: MONO } }, 'Compressed: ' + st.graphicSource.label + ' at 0x' + hex6(st.graphicSource.offset)),
+        e('div', { style: { opacity: 0.7 } }, st.graphicSource.size + ' bytes decompressed'
+          + (st.graphicSource.dataOffset ? ', tiles start ' + st.graphicSource.dataOffset + ' byte(s) in' : '')
+          + '. Painting a compressed graphic comes back once rewriting the stream is in.'),
+        e('button', { type: 'button', className: 'kt-btn small secondary', onClick: clearSource }, 'Read the ROM again')
       ) : null,
       e('div', { style: { height: 1, background: 'var(--kt-widget-border-default)', margin: '2px 0' } }),
       e('div', { style: { fontWeight: 600 } }, 'Region'),
@@ -1471,7 +1615,7 @@
           className: 'kt-select', value: st.mapSize,
           onChange: function (ev) { _set({ mapSize: ev.target.value }); },
           style: { fontSize: 11 }
-        }, Object.keys(MAP_SIZES).map(function (id) { return e('option', { key: id, value: id }, id); }))
+        }, Object.keys(mapSizes()).map(function (id) { return e('option', { key: id, value: id }, id); }))
       ),
       e('div', { style: rowStyle },
         e('input', {
@@ -1515,6 +1659,21 @@
     );
   }
 
+  // A new ROM can be a different console, so the format and any opened compressed
+  // source are dropped when one arrives.
+  global.addEventListener('ketor:rom-loaded', function () {
+    var prof = consoleProfile();
+    _set({
+      graphicSource: null,
+      candidates: [],
+      region: null,
+      format: prof.defaultFormat || _state.format,
+      status: prof.label + ' loaded: ' + (prof.tileFormats || []).length + ' tile format(s)'
+        + ((prof.compression && prof.compression.length) ? ', graphics are compressed' : ', tiles are stored raw')
+        + '.'
+    });
+  });
+
   K.ui.registerTabProvider('tile', TileTab);
   K.ui.registerSidebarProvider('tile', TileSidebar);
   K.tile = {
@@ -1530,6 +1689,7 @@
     pixelSpanForByte: pixelSpanForByte, fromBgr555: fromBgr555, toBgr555: toBgr555,
     MAP_SIZES: MAP_SIZES, mapWindow: mapWindow, charWindow: charWindow, mapEntry: mapEntry,
     detectMap: detectMap, scoreMapBlock: scoreMapBlock, charBase: charBase,
+    consoleProfile: consoleProfile, mapLayoutId: mapLayoutId, openCandidate: openCandidate, clearSource: clearSource,
     writeMapEntry: writeMapEntry, mapBucket: mapBucket, renderMap: renderMap, bankPalette: bankPalette,
     decodeMapTile: decodeMapTile, entryTile: entryTile, entryFlipH: entryFlipH, entryFlipV: entryFlipV,
     entryBank: entryBank, setView: function (v) { _set({ view: String(v) }); },
