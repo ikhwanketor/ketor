@@ -1289,16 +1289,98 @@ window.__PT_APP_READY__ = false;
         return matches;
       };
 
+      /* A run of filler bytes is not automatically free space. On this ROM three
+         of the four zero runs in the dialogue bank are live structures that a
+         pointer aims at - 0xE81F4 is the target of the word at 0xE8880, and the
+         run is one object of zeros, not padding. Writing a relocated message into
+         one of them deleted game data, and the game then ran abnormally. A run
+         only counts as free when no pointer anywhere in the file lands inside it. */
+      /* Every console spells a pointer differently, so the set of addresses the ROM
+         itself points at is built per profile: GBA and NDS use a 32 bit word with a
+         bus base, Genesis and SNES HiROM use big endian words, and the 16 bit
+         consoles (NES, SNES LoROM, GB, PCE) use a CPU address whose bank is not in
+         the word at all - every bank is therefore treated as a possible target. The
+         last rule is deliberately generous: it may refuse a run that was free, and
+         the price of that is a longer search or ROM expansion, never a game that
+         breaks because its data was overwritten. */
+      const consoleBank = (() => {
+        const name = String(system.name || '').toLowerCase();
+        /* The order matters: 'gba' contains 'gb', so a Game Boy test first turned
+           every GBA build into a 16 bit console and the reference scan then marked
+           almost the whole file as pointed at, which refused every relocation. */
+        if (name.indexOf('gba') >= 0) return { kind: 'gba' };
+        if (name.indexOf('nds') >= 0 || name.indexOf('nintendo ds') >= 0) return { kind: 'nds' };
+        if (name.indexOf('genesis') >= 0 || name.indexOf('mega drive') >= 0 || name.indexOf('mega-drive') >= 0) return { kind: 'linear32' };
+        if (name.indexOf('gb') >= 0) return { kind: 'cpu16', window: 0x4000, step: 0x4000, cpuBase: 0x4000 };
+        if (name.indexOf('snes') >= 0 || name.indexOf('super') >= 0) return { kind: 'cpu16', window: 0x8000, step: 0x8000, cpuBase: 0x8000 };
+        if (name.indexOf('nes') >= 0) return { kind: 'cpu16', window: 0x8000, step: 0x4000, cpuBase: 0x8000 };
+        if (name.indexOf('pce') >= 0 || name.indexOf('turbografx') >= 0) return { kind: 'cpu16', window: 0x2000, step: 0x2000, cpuBase: 0x2000 };
+        return { kind: 'gba' };
+      })();
+      const referencedOffsets = (() => {
+        const targets = new Set();
+        const size = originalRom.length;
+        const add = (offset) => {
+          if (Number.isFinite(offset) && offset >= 0 && offset < size) targets.add(offset | 0);
+        };
+        const little = String(system.pointerEndianness || 'little') === 'little';
+        for (let i = 0; i + 4 <= size; i += 2) {
+          const le = (originalRom[i] | (originalRom[i + 1] << 8) | (originalRom[i + 2] << 16) | (originalRom[i + 3] << 24)) >>> 0;
+          const be = ((originalRom[i] << 24) | (originalRom[i + 1] << 16) | (originalRom[i + 2] << 8) | originalRom[i + 3]) >>> 0;
+          if (consoleBank.kind !== 'cpu16') {
+            if ((le & 0xFF000000) === 0x08000000 && little) add(le & 0x01FFFFFF);
+            if ((le & 0xFF000000) === 0x02000000 && little) add(le & 0x01FFFFFF);
+            if ((le & 0xFF000000) === 0x02200000 && little) add(le & 0x01FFFFFF);
+            if ((be & 0xFF000000) === 0x08000000 && !little) add(be & 0x01FFFFFF);
+            if (!little && be < size) add(be);
+            if (consoleBank.kind === 'gba' || consoleBank.kind === 'nds') {
+              if ((le & 0xFF000000) === 0x08000000) add(le & 0x01FFFFFF);
+            }
+          }
+          const base = Number(system.pointerBase) || 0;
+          if (base > 0 && le >= base && (le - base) < size) add(le - base);
+        }
+        if (consoleBank.kind === 'cpu16') {
+          const banks = Math.min(256, Math.ceil(size / consoleBank.step));
+          for (let i = 0; i + 2 <= size; i += 2) {
+            const w = little ? (originalRom[i] | (originalRom[i + 1] << 8)) : ((originalRom[i] << 8) | originalRom[i + 1]);
+            const hi = w - consoleBank.cpuBase;
+            if (hi < 0 || hi >= consoleBank.window) continue;
+            for (let b = 0; b < banks; b++) add(b * consoleBank.step + hi);
+          }
+        }
+        return targets;
+      })();
+      const rangeIsReferenced = (from, to) => {
+        if (referencedOffsets.size === 0) return false;
+        const lo = Math.max(0, from);
+        const hi = Math.min(originalRom.length, to);
+        for (let t = lo; t < hi; t++) {
+          if (referencedOffsets.has(t)) return true;
+        }
+        return false;
+      };
       const findFreeSpaceInRange = (romData, start, end, requiredSize, fillerBytes) => {
         if (requiredSize === 0) return start;
         const fillers = new Set(fillerBytes || [0xFF]);
-        let consecutive = 0;
-        for (let i = end - 1; i >= start; i--) {
-          if (fillers.has(romData[i])) {
-            consecutive++;
-            if (consecutive >= requiredSize + 4) return i;
-          } else {
-            consecutive = 0;
+        const need = requiredSize + 4;
+        /* One pass, one verdict per run. Checking the run again for every byte it
+           contains made the search quadratic and a real 8 MB rom with megabyte
+           sized filler areas never finished. The whole filler run has to be
+           unreferenced, not only the bytes about to be written: a pointer to the
+           start of the run makes the rest of the run that object's data. */
+        let runEnd = -1;
+        for (let i = end - 1; i >= start - 1; i--) {
+          if (i >= start && fillers.has(romData[i])) {
+            if (runEnd < 0) runEnd = i + 1;
+            continue;
+          }
+          if (runEnd >= 0) {
+            const runStart = i + 1;
+            if (runEnd - runStart >= need && !rangeIsReferenced(runStart, runEnd)) {
+              return runEnd - need;
+            }
+            runEnd = -1;
           }
         }
         return -1;
@@ -1341,9 +1423,23 @@ window.__PT_APP_READY__ = false;
             if (!isLikelyControlByte(b0) || !isLikelyControlByte(b1)) return null;
             return (b0 << 8) | b1;
           };
+          /* Pages of one message are joined by the same control pair, and a
+             message boundary can be written with several pairs in a row (the intro
+             message is followed by three of them before the next message begins).
+             The pages join when the whole gap is nothing but repetitions of the
+             same pair, so the run reaches the real end of the message - a run that
+             stopped short would leave the pages after it behind when it moves. */
           const linkGap = (left, right) => {
             const gap = Number(right.startByte) - (Number(left.startByte) + Number(left.byteLength));
-            return (gap >= 2 && gap <= 4) ? gap : 0;
+            if (gap < 2 || gap > 8 || gap % 2 !== 0) return 0;
+            const hi = originalRom[right.startByte - 2];
+            const lo = originalRom[right.startByte - 1];
+            if (!isLikelyControlByte(hi) || !isLikelyControlByte(lo)) return 0;
+            for (let k = 0; k < gap; k += 2) {
+              if (originalRom[right.startByte - 2 - k] !== hi) return 0;
+              if (originalRom[right.startByte - 1 - k] !== lo) return 0;
+            }
+            return gap;
           };
           /* The room of a page stops where the separator in front of the next
              known text begins. The stored byteLength can be two bytes short (a
