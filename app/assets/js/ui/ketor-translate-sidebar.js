@@ -120,19 +120,6 @@
 
       e(Section, { title: 'Project' },
         e(Action, {
-          label: 'Compile Selected Group' + (selectedGroup ? ' (' + selectedCount + ')' : ''),
-          first: true,
-          title: 'Compiles, recalculates and inserts the text of the selected group only.',
-          disabled: !t.romBytes || !selectedGroupId || t.isBusy,
-          onClick: onCompileGroup
-        }),
-        e(Action, {
-          label: 'Compile All Groups',
-          title: 'Recomputes and inserts the text of every group in the project at once.',
-          disabled: !t.romBytes || !hasTexts || t.isBusy,
-          onClick: onCompileAll
-        }),
-        e(Action, {
           label: 'Save Project (.ketor)',
           title: 'Saves the whole translation progress, groups and translations, as <rom>.ketor.',
           disabled: !hasTexts && groups.length === 0,
@@ -160,13 +147,10 @@
             (t.buildSummary.warnings.length
               ? ', ' + t.buildSummary.warnings.length + ' warning(s)'
               : '') + '.') : null,
-          e('div', { style: { marginTop: 6, display: 'flex', gap: 6 } },
-            e('button', {
-              type: 'button', className: 'kt-btn small secondary',
-              onClick: function () { K.translate.showCompiledInHex(); },
-              title: 'Open the compiled text in the Hex Editor and compare it byte by byte'
-            }, 'Show in Hex Editor')
-          )
+          t.buildSummary && t.buildSummary.relocations.length ? e('div', { style: { marginTop: 4 } },
+            'New offset: ' + t.buildSummary.relocations.map(function (r) {
+              return '0x' + Number(r.to).toString(16).toUpperCase().padStart(6, '0');
+            }).join(', ')) : null
         ) : null,
         t.isBusy ? e('div', {
           style: {
