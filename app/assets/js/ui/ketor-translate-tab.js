@@ -75,7 +75,7 @@
      no table tokens and no marker characters. A row grows with its text, the
      way Kruptar's list does. */
   function listText(text) {
-    return K.translate.toDisplay(text);
+    return String(text == null ? '' : text);
   }
 
   function overflowOf(byteLen, originalLen) {
@@ -184,7 +184,7 @@
      the translator is looking at. That position is what the game's own line
      width has to be compared against. */
   function SourceBox(props) {
-    var text = K.translate.toDisplay(props.text);
+    var text = String(props.text == null ? '' : props.text);
     var caretSt = uS(0);
     var caretPos = caretSt[0];
     var setCaretPos = caretSt[1];
@@ -271,7 +271,7 @@
 
   function TargetBox(props) {
     var lineTok = K.translate.lineToken();
-    var st = uS(K.translate.toDisplay(props.value));
+    var st = uS(String(props.value == null ? '' : props.value));
     var local = st[0];
     var setLocal = st[1];
     var caretSt = uS(0);
@@ -285,7 +285,7 @@
     // value unless the user is typing in this box right now.
     uE(function () {
       if (editingRef.current) return;
-      var next = K.translate.toDisplay(props.value);
+      var next = String(props.value == null ? '' : props.value);
       latestRef.current = next;
       setLocal(next);
     }, [props.value, props.offset]);
@@ -302,7 +302,7 @@
       if (pendingRef.current) clearTimeout(pendingRef.current);
       pendingRef.current = setTimeout(function () {
         pendingRef.current = null;
-        commit(K.translate.fromDisplay(latestRef.current));
+        commit(latestRef.current);
       }, 350);
     }, [commit]);
 
@@ -310,13 +310,13 @@
       if (!pendingRef.current) return;
       clearTimeout(pendingRef.current);
       pendingRef.current = null;
-      commit(K.translate.fromDisplay(latestRef.current));
+      commit(latestRef.current);
     }, [commit]);
 
     var caret = caretInfo(local, caretPos);
     // The box shows line breaks, the ROM stores the line token: measure the
     // stored form, which is what the build will encode.
-    var size = props.measure(K.translate.fromDisplay(local));
+    var size = props.measure(local);
     var overflow = overflowOf(size, props.originalSize);
 
     return e('div', {

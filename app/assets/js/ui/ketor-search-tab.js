@@ -245,11 +245,7 @@
           wordBreak: 'break-word',
           maxWidth: 0
         })
-      }, (K.translate && typeof K.translate.toDisplay === 'function')
-        // Table tokens are control codes: the list shows the text the way the
-        // editor and the group manager do, as line breaks, never as "[LINE]".
-        ? K.translate.toDisplay(t.originalText || '')
-        : String(t.originalText || '')),
+      }, String(t.originalText || '')),
       group ? e('td', { style: Object.assign(tdStyle('left'), { width: 120 }) }, groupBadge) : e('td', { style: tdStyle('left') }, '')
     );
   }
