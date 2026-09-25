@@ -139,7 +139,7 @@
             color: 'var(--kt-sidebar-fg)', opacity: 0.85, lineHeight: 1.5
           }
         },
-          e('div', null, 'Compiled ROM ready (' + formatBytes(t.modifiedRom.length) +
+          e('div', null, 'Inserted ROM ready (' + formatBytes(t.modifiedRom.length) +
             '). Exporting it belongs to the Patch & Export activity.'),
           t.buildSummary ? e('div', { style: { marginTop: 2 } },
             t.buildSummary.relocated + ' text(s) relocated and repointed, ' +

@@ -555,7 +555,7 @@
       _set({
         modifiedRom: bytes, isBusy: false, progress: 100,
         buildLog: log, buildSummary: summary,
-        status: 'Compiled text' + scopeNote + ': ' + _pendingBuildCount + ' text(s), ' +
+        status: 'Inserted into ROM' + scopeNote + ': ' + _pendingBuildCount + ' text(s), ' +
           Math.round(bytes.length / 1024) + ' KB' + patchNote +
           (relocated ? ', ' + relocated + ' text(s) relocated and repointed' : ', no relocation needed') +
           (warnings.length ? ', ' + warnings.length + ' warning(s)' : '')

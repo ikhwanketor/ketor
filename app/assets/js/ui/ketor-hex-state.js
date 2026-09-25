@@ -434,7 +434,7 @@
       // The editor stays on the loaded ROM: it is the one buffer the whole
       // session edits. Compiling reports its result, it does not take the
       // editor over.
-      status: 'Compiled text ready (' + Math.round(data.length / 1024) + ' KB). The Hex Editor keeps editing the loaded ROM.'
+      status: 'Inserted ROM ready (' + Math.round(data.length / 1024) + ' KB). The Hex Editor keeps editing the loaded ROM.'
     });
     return true;
   }
@@ -447,7 +447,7 @@
     _set({
       compiledBytes: null, compiledAt: 0, compiledScope: '', compileRelocations: [],
       viewSource: 'original',
-      status: _state.compiledBytes ? 'Compiled view discarded.' : _state.status
+      status: _state.compiledBytes ? 'Inserted result discarded.' : _state.status
     });
     return true;
   }
@@ -455,7 +455,7 @@
   function setViewSource(source) {
     var next = source === 'compiled' ? 'compiled' : 'original';
     if (next === 'compiled' && !_state.compiledBytes) {
-      _set({ status: 'No compiled text yet. Compile from the Translation activity first.' });
+      _set({ status: 'Nothing inserted yet. Use Insert in the Translation activity first.' });
       return false;
     }
     if (next === _state.viewSource) return true;
@@ -463,7 +463,7 @@
       viewSource: next,
       selection: null,
       status: next === 'compiled'
-        ? 'Viewing the compiled text. Editing is disabled on this view.'
+        ? 'Viewing the inserted ROM.'
         : 'Viewing the loaded ROM.'
     });
     return true;
@@ -491,7 +491,7 @@
     // The compiled image is a read-only view: a byte typed here would vanish
     // on the next compile, so the edit is refused with a reason instead.
     if (isCompiledView()) {
-      _set({ status: 'This is the compiled text. Switch to Original to patch bytes.' });
+      _set({ status: 'This is the inserted ROM.' });
       return false;
     }
     if (!_state.romBytes || !Number.isFinite(off) || off < 0 || off >= _state.romBytes.length) return false;

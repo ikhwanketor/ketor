@@ -736,14 +736,14 @@
           style: TOOL_BTN,
           onClick: function () { K.translate.buildModifiedRom('group'); },
           disabled: !activeGroupId || t.isBusy,
-          title: 'Insert: recalculates the pointers and writes the text of this group into the ROM (Kruptar F9)'
+          title: 'Insert: recalculates the pointers and writes the text of this group into the ROM'
         }, t.isBusy && t.compileScope === 'group' ? 'Inserting...' : 'Insert'),
         e('button', {
           type: 'button', className: 'kt-btn small secondary',
           style: TOOL_BTN,
           onClick: function () { K.translate.buildModifiedRom('all'); },
           disabled: !entries.length || t.isBusy,
-          title: 'Insert every group at once (Kruptar Ctrl+F9)'
+          title: 'Insert every group at once'
         }, t.isBusy && t.compileScope === 'all' ? 'Inserting all...' : 'Insert All'),
         active ? e('span', {
           style: { fontSize: 10, opacity: 0.6, fontFamily: MONO, whiteSpace: 'nowrap' }
