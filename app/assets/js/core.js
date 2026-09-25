@@ -1806,9 +1806,30 @@ window.__PT_APP_READY__ = false;
              came along only because a neighbour was translated would have been
              rewritten with the wrong control code. */
           const hasTranslation = !!(textData && typeof textData.translatedText === 'string' && textData.translatedText.length > 0);
-          const encoded = hasTranslation
+          let encoded = hasTranslation
             ? smartTextParse(textData.translatedText, tokenizer, masterCharToHex, usePaddingByte, encodeOptions)
             : originalRom.slice(Number(textItem.startByte), Number(textItem.startByte) + Number(textItem.byteLength));
+          /* A record's room holds the text PLUS the control bytes that close it: the
+             page separator and the end code (05 09 0a on this rom). Writing only the
+             encoded translation dropped them, so the record had no end and the engine
+             read straight into the next record - the dialogue was skipped and the game
+             froze, while every structural check still passed because the table and the
+             spans looked right. The reference indonesian patch keeps those bytes at the
+             end of every record, so they are part of the format. The trailer is exactly
+             the room left over after the original text, which is how it is derived here
+             - no guess about the record format. */
+          if (hasTranslation && textData && typeof textData.originalText === 'string') {
+            const roomLen = Number(textItem.byteLength);
+            const startByte = Number(textItem.startByte);
+            const originalEncoded = smartTextParse(textData.originalText, tokenizer, masterCharToHex, usePaddingByte, encodeOptions);
+            if (roomLen > originalEncoded.length && originalEncoded.length > 0) {
+              const trailer = originalRom.slice(startByte + originalEncoded.length, startByte + roomLen);
+              const merged = new Uint8Array(encoded.length + trailer.length);
+              merged.set(encoded, 0);
+              merged.set(trailer, encoded.length);
+              encoded = merged;
+            }
+          }
           if (typeof textItem.startByte === 'number' && typeof textItem.byteLength === 'number') {
             textRanges.push({ start: textItem.startByte, end: textItem.startByte + textItem.byteLength - 1 });
           }
@@ -2635,7 +2656,7 @@ window.__PT_APP_READY__ = false;
              moves: a page that needs more room than its record has is reported and
              left alone. Shifting stays available behind an explicit request, for
              testing or for games whose format has been worked out. */
-          if (needsRelocation && !system.allowMessageShift && !system.allowRelocation) {
+          if (needsRelocation && system.allowMessageShift === false && system.allowRelocation !== true) {
             relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: [WARNING] Needs ${Number(newBlockBytes.length) - Number(originalBlockLength)} byte(s) more than this record has. Nothing was written because moving text in this game corrupts the dialogue. Shorten the page, or set allowMessageShift to try the shift path.`);
             continue;
           }
