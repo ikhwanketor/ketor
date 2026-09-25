@@ -134,14 +134,29 @@
     return sites;
   }
 
-  function spanIsRecord(bytes, from, to, termSet) {
+  /* A NES or SNES string can end with any code in a control range rather than one
+     exact byte, so the terminator test accepts a range as well. */
+  function spanCloses(bytes, at, termSet, termRange) {
+    if (at < 0 || at >= bytes.length) return false;
+    var limit = Math.min(bytes.length, at + 0x10000);
+    for (var p = at; p < limit; p++) {
+      if (termSet[bytes[p]]) return true;
+      if (termRange && bytes[p] >= termRange[0] && bytes[p] <= termRange[1]) return true;
+    }
+    return false;
+  }
+
+  function spanIsRecord(bytes, from, to, termSet, termRange) {
     if (to <= from || to > bytes.length) return false;
     if (to - from > 0x10000) return true;   /* a record is never 64K long: treat as its own thing */
     /* The gate is the terminator. Padding after it is a bonus: several consoles
        pack their strings back to back with no padding at all, and requiring it
        made every table on NES, SNES, GB and GBC fail. */
     var limit = Math.max(from, to - 4096);   /* the closure sits at the end */
-    for (var p = to - 1; p >= limit; p--) { if (termSet[bytes[p]]) return true; }
+    for (var p = to - 1; p >= limit; p--) {
+      if (termSet[bytes[p]]) return true;
+      if (termRange && bytes[p] >= termRange[0] && bytes[p] <= termRange[1]) return true;
+    }
     return false;
   }
 
@@ -149,7 +164,7 @@
   /* A table can contain an entry that is not a pointer at all (a zero, a flag
      word), which used to cut one table into two. A run therefore tolerates a few
      missing sites as long as every step stays a multiple of the stride. */
-  function tableRunsFrom(bytes, sites, minEntries, missingAllowed, termSet) {
+  function tableRunsFrom(bytes, sites, minEntries, missingAllowed, termSet, termRange) {
     var runs = [];
     var i = 0;
     while (i < sites.length - 1) {
@@ -163,7 +178,7 @@
            when the records on both sides still read like records: the structure
            decides, not the distance. */
         if (step > stride && step <= stride * (missingAllowed + 1) &&
-            (step % stride === 0 || spanIsRecord(bytes, sites[end].target, sites[end + 1].target, termSet))) { end++; continue; }
+            (step % stride === 0 || spanIsRecord(bytes, sites[end].target, sites[end + 1].target, termSet, termRange))) { end++; continue; }
         break;
       }
       var count = end - i + 1;
@@ -180,6 +195,8 @@
     var term = (opts.terminator && opts.terminator.length) ? opts.terminator : [0x00];
     var termSet = Object.create(null);
     term.forEach(function (c) { termSet[c & 0xFF] = true; });
+    var termRange = opts.terminatorRange;
+    var inTermRange = (b) => termRange && b >= termRange[0] && b <= termRange[1];
     var minEntries = Number(opts.minEntries) || 16;
     var texts = (opts.textOffsets || []).filter(function (o) { return Number.isFinite(o) && o >= 0 && o < bytes.length; });
     var textSet = Object.create(null);
@@ -191,7 +208,7 @@
     modes.forEach(function (mode) {
       var sites = candidateSites(bytes, rules, mode);
       if (sites.length < minEntries) return;
-      var runs = tableRunsFrom(bytes, sites, minEntries, 4, termSet);
+      var runs = tableRunsFrom(bytes, sites, minEntries, 4, termSet, termRange);
       runs.forEach(function (run) {
         var stride = run.stride;
         var lo = sites[run.from].at;
@@ -209,7 +226,7 @@
         var ok = 0, bad = 0, irregular = 0;
         for (var s = 0; s < entries.length - 1; s++) {
           if (entries[s + 1] <= entries[s]) { irregular++; continue; }
-          if (spanIsRecord(bytes, entries[s], entries[s + 1], termSet)) ok++; else bad++;
+          if (spanIsRecord(bytes, entries[s], entries[s + 1], termSet, termRange)) ok++; else bad++;
         }
         if (ok < minEntries || bad > 0) return;
         /* Walk the entries and ask whether a mapped text sits there, instead of walking
@@ -235,7 +252,7 @@
         if (texts.length >= 8 && !confirmed) return;
         results.push({
           console: rules.name, at: lo, stride: stride, entrySize: rules.size,
-          fromIndex: run.from, toIndex: run.to,
+          fromIndex: run.from, toIndex: run.to, entries: entries.slice(),
           dominantDelta: dominantDelta, deltaConsensus: consensus, confirmed: confirmed,
           endianness: rules.little ? 'little' : 'big', base: mode === 'raw' ? 0 : rules.base, mode: mode,
           count: entries.length, regionStart: entries[0], regionEnd: entries[entries.length - 1],
@@ -260,6 +277,7 @@
            where the table holds 2893. */
         last.count = r.toIndex - last.fromIndex + 1;
         last.toIndex = r.toIndex;
+        if (r.entries) last.entries = (last.entries || []).concat(r.entries);
         last.regionEnd = Math.max(last.regionEnd, r.regionEnd);
         last.spansOk += r.spansOk;
         last.spansBad += r.spansBad;
@@ -270,6 +288,26 @@
         return;
       }
       clustered.push(r);
+    });
+    /* Trim the edges by the record test. A merged range can start one entry too
+       early or end a few entries too late, because the sites around a table belong
+       to the table before or after it: that is where the extra ten entries on Aria
+       of Sorrow came from. The structure decides where the table starts and stops. */
+    clustered.forEach(function (r) {
+      var list = r.entries || [];
+      var head = 0;
+      while (head + 1 < list.length && !spanIsRecord(bytes, list[head], list[head + 1], termSet, termRange)) head++;
+      var tail = list.length - 1;
+      while (tail > head && !spanCloses(bytes, list[tail], termSet, termRange)) tail--;
+      if (head > 0 || tail < list.length - 1) {
+        if (tail - head + 1 >= minEntries) {
+          r.entries = list.slice(head, tail + 1);
+          r.count = r.entries.length;
+          r.regionStart = r.entries[0];
+          r.regionEnd = r.entries[r.entries.length - 1];
+          r.trimmed = (head) + (list.length - 1 - tail);
+        }
+      }
     });
     results = clustered;
     results.sort(function (a, b) {
