@@ -165,7 +165,7 @@
         start: gs.offset,
         bytes: slice,
         compressed: { offset: gs.offset, label: gs.label, size: gs.size, dataOffset: gs.dataOffset || 0 },
-        key: 'compressed:' + gs.offset + ':' + slice.length
+        key: 'compressed:' + gs.offset + ':' + slice.length + ':' + (gs.version || 0)
       };
     }
     var src = romBytes();
@@ -207,10 +207,6 @@
   /* Writes one pixel through the Hex Editor patch layer. */
   function setPixel(tileIndex, x, y, colour) {
     var C = K.core;
-    if (_state.graphicSource) {
-      _set({ status: 'This is a compressed graphic. Rewriting it means compressing the result again and moving it, which the next step adds; paint in a raw region for now.' });
-      return false;
-    }
     var win = regionWindow();
     if (!win || !C || typeof C.encodeTile !== 'function') return false;
     var fmt = _state.format;
@@ -219,8 +215,31 @@
     if (rel < 0 || rel + size > win.bytes.length) return false;
     var px = C.decodeTile(win.bytes, rel, fmt);
     var value = (Number(colour) || 0) & (C.tileFormat(fmt).colors - 1);
+    if (px[y][x] === value) return false;
     px[y][x] = value;
     var encoded = C.encodeTile(px, fmt);
+
+    /* A compressed graphic is edited in its decompressed copy first; the write back
+       compresses it again and either fits it where it was or moves the whole thing
+       and redirects the pointers to it. */
+    if (win.compressed) {
+      var gs = _state.graphicSource;
+      var from = gs.dataOffset || 0;
+      var changed = 0;
+      for (var i = 0; i < encoded.length; i++) {
+        if (gs.data[from + rel + i] === encoded[i]) continue;
+        gs.data[from + rel + i] = encoded[i];
+        changed++;
+      }
+      if (!changed) return false;
+      _set({
+        graphicSource: Object.assign({}, gs, { version: (gs.version || 0) + 1, dirty: true }),
+        status: 'Pixel (' + x + ',' + y + ') colour ' + value + ' drawn on the decompressed copy; writing back...'
+      });
+      scheduleCompressedWrite();
+      return true;
+    }
+
     var base = win.start + rel;
     var written = 0;
     for (var i = 0; i < encoded.length; i++) {
@@ -308,13 +327,66 @@
       if (!dec) { _set({ status: 'That block does not decompress any more.' }); return; }
       _set({
         region: cand.offset,
-        graphicSource: { offset: cand.offset, label: cand.label, size: dec.size, dataOffset: cand.dataOffset || 0, data: dec.data },
+        graphicSource: {
+          offset: cand.offset, label: cand.label, size: dec.size, dataOffset: cand.dataOffset || 0,
+          data: Uint8Array.from(dec.data), type: cand.type || 0x10,
+          // how many bytes the original stream occupies: the budget for writing in place
+          budget: cand.compressedSize || Math.max(1, (cand.size || dec.size)),
+          compressedSize: cand.compressedSize || 0, version: 0, dirty: false
+        },
         status: 'Opened ' + cand.label + ' at 0x' + hex6(cand.offset) + ': ' + dec.size + ' bytes decompressed'
           + (cand.dataOffset ? ', tiles start ' + cand.dataOffset + ' byte(s) in.' : '.')
       });
       return;
     }
     _set({ region: cand.offset, graphicSource: null, status: 'Raw region 0x' + hex6(cand.offset) + ' (score ' + cand.score.toFixed(2) + ').' });
+  }
+
+  /* Writing a compressed graphic back to the ROM. Two outcomes, both through the
+     patch layer: the new stream fits where the old one was, or the whole block moves
+     to free space and every pointer that named the old address is redirected. */
+  var _writeTimer = null;
+
+  function scheduleCompressedWrite() {
+    if (_writeTimer) global.clearTimeout(_writeTimer);
+    _writeTimer = global.setTimeout(function () { _writeTimer = null; writeBackCompressed(); }, 450);
+  }
+
+  function writeBackCompressed() {
+    var C = K.core;
+    var gs = _state.graphicSource;
+    var bytes = romBytes();
+    if (!gs || !gs.data || !bytes || !C.encodeLike) return null;
+    var enc = C.encodeLike(gs.type || 0x10, gs.data);
+    if (!enc || !enc.verified) {
+      _set({ status: 'Write back refused: the compressed result did not read back the same, so nothing was written.' });
+      return null;
+    }
+    if (enc.compressedSize <= gs.budget) {
+      var wrote = 0;
+      for (var i = 0; i < enc.bytes.length; i++) if (K.hex.setByte(gs.offset + i, enc.bytes[i])) wrote++;
+      _set({
+        graphicSource: Object.assign({}, gs, { dirty: false, compressedSize: enc.compressedSize }),
+        status: 'Written in place at 0x' + hex6(gs.offset) + ': ' + enc.compressedSize + ' of ' + gs.budget
+          + ' byte(s) used, ' + wrote + ' byte(s) changed.'
+      });
+      return { inPlace: true, wrote: wrote, compressedSize: enc.compressedSize };
+    }
+    var plan = C.planRelocation(bytes, enc.bytes, { system: consoleProfile().id, oldOffset: gs.offset, align: 4 });
+    if (!plan.ok) {
+      _set({ status: 'The new stream is ' + enc.compressedSize + ' bytes and no longer fits at 0x' + hex6(gs.offset) + '. It could not be moved: ' + plan.reason + '. The edit stays in the editor; nothing was written.' });
+      return plan;
+    }
+    var written = C.applyPlan(plan, function (offset, value) { return K.hex.setByte(offset, value); });
+    _set({
+      graphicSource: Object.assign({}, gs, {
+        offset: plan.newOffset, budget: enc.compressedSize, compressedSize: enc.compressedSize, dirty: false
+      }),
+      status: 'Graphic moved to 0x' + hex6(plan.newOffset) + ' (' + enc.compressedSize + ' bytes, was ' + gs.budget
+        + ' at 0x' + hex6(gs.offset) + '). ' + plan.pointers.length + ' pointer(s) redirected, ' + written
+        + ' byte(s) written as patches. Undo or Clear discards the move.'
+    });
+    return plan;
   }
 
   function clearSource() {
@@ -1568,7 +1640,13 @@
         e('div', { style: { opacity: 0.7 } }, st.graphicSource.size + ' bytes decompressed'
           + (st.graphicSource.dataOffset ? ', tiles start ' + st.graphicSource.dataOffset + ' byte(s) in' : '')
           + '. Painting a compressed graphic comes back once rewriting the stream is in.'),
-        e('button', { type: 'button', className: 'kt-btn small secondary', onClick: clearSource }, 'Read the ROM again')
+        e('div', { style: { opacity: 0.7 } }, st.graphicSource.compressedSize
+          ? (st.graphicSource.compressedSize + ' of ' + st.graphicSource.budget + ' byte(s) used' + (st.graphicSource.dirty ? ', waiting to write back' : ', written'))
+          : 'not written back yet'),
+        e('div', { style: { display: 'flex', gap: 4 } },
+          e('button', { type: 'button', className: 'kt-btn small', onClick: function () { writeBackCompressed(); } }, 'Write back now'),
+          e('button', { type: 'button', className: 'kt-btn small secondary', onClick: clearSource }, 'Read the ROM again')
+        )
       ) : null,
       e('div', { style: { height: 1, background: 'var(--kt-widget-border-default)', margin: '2px 0' } }),
       e('div', { style: { fontWeight: 600 } }, 'Region'),
@@ -1586,6 +1664,25 @@
         title: 'Copy this region into free space and rewrite every pointer that named the old address. The move is kept as patches, so Undo or Clear discards it.',
         onClick: function () { repointRegion(64); }
       }, 'Move region to free space'),
+      e('button', {
+        type: 'button', className: 'kt-btn small secondary',
+        disabled: !hex || !hex.romBytes,
+        title: 'Take the offset the Hex Editor cursor sits on as the region, and open it as a compressed graphic when a stream starts there',
+        onClick: function () {
+          var at = Number(K.hex.getState().cursorOffset) || 0;
+          var src = K.hex.getSourceBytes();
+          var head = (K.core.compressionHeaderAt && src) ? K.core.compressionHeaderAt(src, at, {}) : null;
+          if (head) {
+            var dec = K.core.decompressAt(src, at, {});
+            openCandidate({
+              kind: 'compressed', offset: at, type: head.type, size: head.size, label: head.label,
+              dataOffset: 0, compressedSize: dec ? (dec.end - at) : 0
+            });
+            return;
+          }
+          _set({ region: at, graphicSource: null, status: 'Region set to the hex cursor: 0x' + hex6(at) + '.' });
+        }
+      }, 'Region = hex cursor'),
       e('div', { style: { height: 1, background: 'var(--kt-widget-border-default)', margin: '2px 0' } }),
       e('div', { style: { fontWeight: 600 } }, 'Map'),
       e('div', { style: { opacity: 0.7, lineHeight: 1.45 } }, 'GBA text mode map: one 2 byte entry per cell, tile number in bits 0-9, flips in 10-11, palette bank in 12-15. Click places the current tile, Ctrl+click picks it, Alt+click swaps it, Shift+click fills, middle drag scrolls.'),
@@ -1721,6 +1818,7 @@
     detectMap: detectMap, scoreMapBlock: scoreMapBlock, charBase: charBase,
     consoleProfile: consoleProfile, mapLayoutId: mapLayoutId, openCandidate: openCandidate, clearSource: clearSource,
     repointRegion: repointRegion, romIdentity: function () { return _state.romIdentity; },
+    writeBackCompressed: writeBackCompressed, scheduleCompressedWrite: scheduleCompressedWrite,
     writeMapEntry: writeMapEntry, mapBucket: mapBucket, renderMap: renderMap, bankPalette: bankPalette,
     decodeMapTile: decodeMapTile, entryTile: entryTile, entryFlipH: entryFlipH, entryFlipV: entryFlipV,
     entryBank: entryBank, setView: function (v) { _set({ view: String(v) }); },

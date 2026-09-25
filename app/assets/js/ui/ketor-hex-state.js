@@ -35,6 +35,8 @@
 
   var _state = {
     romBytes: null, romName: '', romSystem: '', romSize: 0, romKey: '',
+    // bytes grown past the end of the loaded file, used when data is relocated
+    appended: null,
     // Batch 21: the compiled image from the Translation activity. It is a
     // second view over the same session, never a replacement: patches,
     // bookmarks and the ROM key stay attached to the loaded file.
@@ -290,6 +292,8 @@
   function reset() {
     _set({
       romBytes: null, romName: '', romSystem: '', romSize: 0, romKey: '',
+    // bytes grown past the end of the loaded file, used when data is relocated
+    appended: null,
       cursorOffset: 0, selection: null, bookmarks: [], patches: {},
       undoStack: [], redoStack: [], sections: [],
       compiledBytes: null, compiledAt: 0, compiledScope: '', compileRelocations: [], viewSource: 'original',
@@ -525,6 +529,10 @@
     }
     var patch = _state.patches[off];
     if (patch !== undefined) return patch & 0xFF;
+    if (_state.romBytes && _state.appended && off >= _state.romBytes.length) {
+      var index = off - _state.romBytes.length;
+      return index < _state.appended.length ? (_state.appended[index] & 0xFF) : null;
+    }
     if (!_state.romBytes || off < 0 || off >= _state.romBytes.length) return null;
     return _state.romBytes[off] & 0xFF;
   }
@@ -542,10 +550,23 @@
       _set({ status: 'This is the inserted ROM.' });
       return false;
     }
-    if (!_state.romBytes || !Number.isFinite(off) || off < 0 || off >= _state.romBytes.length) return false;
+    if (!_state.romBytes || !Number.isFinite(off) || off < 0 || off >= imageLength()) return false;
     if (!Number.isFinite(Number(value))) return false;
     var before = currentByte(off);
     if (before === val) return false;
+
+    if (off >= _state.romBytes.length) {
+      var tail = _state.appended ? _state.appended.slice() : new Uint8Array(0);
+      tail[off - _state.romBytes.length] = val;
+      _set({
+        appended: tail,
+        undoStack: _state.undoStack.concat([{ offset: off, from: before, to: val }]),
+        redoStack: [],
+        status: 'Patched ' + _hex(off) + ': ' + _hex2(before) + ' -> ' + _hex2(val)
+      });
+      _persist();
+      return true;
+    }
 
     var patches = Object.assign({}, _state.patches);
     if (val === (_state.romBytes[off] & 0xFF)) delete patches[off];
@@ -563,7 +584,38 @@
     return true;
   }
 
+  /* Appended bytes. Relocating data means the image has to grow, and the patch
+     layer is where the whole application writes, so it accepts an offset past the
+     end of the loaded file. The original bytes are never touched and Export writes
+     the grown image. */
+  function appendedLength() {
+    return _state.appended ? _state.appended.length : 0;
+  }
+
+  function imageLength() {
+    return (_state.romBytes ? _state.romBytes.length : 0) + appendedLength();
+  }
+
+  function appendBytes(data) {
+    if (!_state.romBytes || !data || !data.length) return null;
+    var extra = data instanceof Uint8Array ? data : Uint8Array.from(data);
+    var at = _state.romBytes.length + appendedLength();
+    var next = new Uint8Array(appendedLength() + extra.length);
+    if (_state.appended) next.set(_state.appended);
+    next.set(extra, appendedLength());
+    _set({ appended: next, status: 'ROM expanded by ' + extra.length + ' byte(s), starting at ' + _hex(at) + '.' });
+    return at;
+  }
+
   function _applyPatchEntry(offset, value) {
+    if (_state.romBytes && offset >= _state.romBytes.length) {
+      // an appended byte is its own record: there is no original to compare with
+      var tail = _state.appended ? _state.appended.slice() : new Uint8Array(0);
+      var index = offset - _state.romBytes.length;
+      if (index >= 0 && index < tail.length) tail[index] = value & 0xFF;
+      _set({ appended: tail });
+      return _state.patches;
+    }
     var patches = Object.assign({}, _state.patches);
     if (value === (_state.romBytes[offset] & 0xFF)) delete patches[offset];
     else patches[offset] = value & 0xFF;
@@ -603,6 +655,7 @@
   }
 
   function clearPatches() {
+    if (appendedLength()) _set({ appended: null });
     // The insert is a patch layer too, so clearing patches clears it.
     _state = Object.assign({}, _state, { insertedOffsets: {} });
     if (!Object.keys(_state.patches).length) { _set({ status: 'No patches to clear.' }); return; }
@@ -616,8 +669,9 @@
 
   function getPatchedBytes() {
     if (!_state.romBytes) return null;
-    var out = new Uint8Array(_state.romBytes.length);
+    var out = new Uint8Array(imageLength());
     out.set(_state.romBytes);
+    if (_state.appended) out.set(_state.appended, _state.romBytes.length);
     Object.keys(_state.patches).forEach(function (k) {
       var off = parseInt(k, 10);
       if (off >= 0 && off < out.length) out[off] = _state.patches[k] & 0xFF;
@@ -1060,6 +1114,10 @@
      to start from it, otherwise every press of Insert writes another copy of
      the same text into the next free run of the ROM. */
   K.hex.getSourceBytes = function () { return _state.romBytes; };
+  K.hex.appendBytes = appendBytes;
+  K.hex.appendedLength = appendedLength;
+  K.hex.imageLength = imageLength;
+  K.hex.getAppended = function () { return _state.appended; };
   K.hex.getInsertedOffsets = function () { return _state.insertedOffsets || {}; };
   K.hex.clearCompiledRelocations = function () {
     _set({ compileRelocations: [] });
