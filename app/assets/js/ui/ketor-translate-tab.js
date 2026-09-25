@@ -402,23 +402,37 @@
         borderBottom: '1px solid rgba(255,255,255,0.03)'
       }
     },
-      e('span', { style: { flex: '0 0 auto', opacity: 0.6, fontSize: 10 } }, pad6(props.index + 1)),
+      e('span', {
+        style: { flex: '0 0 46px', opacity: 0.6, fontSize: 10, fontFamily: MONO }
+      }, pad6(props.index + 1)),
       e('span', {
         style: {
           flex: '1 1 auto', minWidth: 0,
           whiteSpace: 'pre-wrap', wordBreak: 'break-word'
         }
       }, original),
+      // The arrow sits between the two texts and the columns are the same size
+      // as the Original and Translation boxes below.
+      e('span', {
+        style: {
+          flex: '0 0 24px', textAlign: 'center', opacity: 0.55,
+          fontFamily: MONO, fontWeight: 600
+        }
+      }, '\u2192'),
       translation ? e('span', {
         style: {
-          flex: '0 1 34%', minWidth: 0, opacity: 0.75,
+          flex: '1 1 0', minWidth: 0, opacity: 0.85,
           whiteSpace: 'pre-wrap', wordBreak: 'break-word'
         }
-      }, '\u2192 ' + translation) : null,
+      }, translation) : e('span', { style: { flex: '1 1 0' } }),
       overflow ? e('span', {
-        style: { flex: '0 0 auto', color: 'var(--kt-error-fg)', fontSize: 10 },
-        title: 'Translation is longer than the original'
-      }, '!') : null
+        style: {
+          flex: '0 0 auto', fontFamily: MONO, fontSize: 9, fontWeight: 700,
+          color: 'var(--kt-editor-bg)', background: 'var(--kt-error-fg)',
+          padding: '0 4px', borderRadius: 2, letterSpacing: '0.04em'
+        },
+        title: 'The translation needs more bytes than the original text'
+      }, 'OVER') : null
     );
   }
 

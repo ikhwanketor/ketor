@@ -585,14 +585,9 @@
           at: summary.at, scope: summary.scope, relocations: relocations
         });
       }
-      // The ROM holds these translations now, so the registry says so at once:
-      // the group manager follows the insert without a hand edit, and because
-      // the text comes from the build there is no control code to read back.
-      if (K.search && typeof K.search.setOriginalText === 'function') {
-        Object.keys(_lastBuiltTexts).forEach(function (off) {
-          K.search.setOriginalText(Number(off), _lastBuiltTexts[off]);
-        });
-      }
+      // The original text is never overwritten by an insert: it is the
+      // translator's reference and the source for the next insert. What the
+      // ROM holds now is visible in the Hex Editor.
       if (K.hex && typeof K.hex.setCompiledRom === 'function') {
         K.hex.setCompiledRom(bytes, {
           at: summary.at, scope: summary.scope, relocations: relocations
