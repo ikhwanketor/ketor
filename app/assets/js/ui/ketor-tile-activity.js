@@ -42,6 +42,15 @@
     paletteName: '',
     paletteCandidates: [],
     colour: 1,
+    view: 'tiles',
+    mapScreenBase: null,
+    mapCharBase: null,
+    mapSize: '32x32',
+    mapDrawTile: null,
+    mapCandidates: [],
+    mapScanning: false,
+    mapFlipH: false,
+    mapFlipV: false,
     zoom: 3,
     tiles: 128,
     candidates: [],
@@ -135,11 +144,15 @@
     if (!(end > start)) return null;
     var out = src.slice(start, end);
     var patches = patchesMap();
+    var keyParts = [];
     Object.keys(patches).forEach(function (k) {
       var off = parseInt(k, 10);
-      if (off >= start && off < end) out[off - start] = patches[k] & 0xFF;
+      if (off >= start && off < end) {
+        out[off - start] = patches[k] & 0xFF;
+        keyParts.push(k + '=' + (patches[k] & 0xFF));
+      }
     });
-    return { start: start, bytes: out };
+    return { start: start, bytes: out, key: start + ':' + out.length + ':' + keyParts.join(',') };
   }
 
   function tileWindowOffset(tileIndex, C) {
@@ -468,11 +481,304 @@
     return wrote;
   }
 
+  /* ---------- tile map ---------- */
+
+  /* GBA text mode background map, as documented in GBATEK: a 2 byte entry per
+     cell, bits 0-9 the tile number inside the character block, bit 10 and 11 the
+     horizontal and vertical flip, bits 12-15 the palette bank. */
+  var MAP_SIZES = {
+    '32x32': [32, 32],
+    '64x32': [64, 32],
+    '32x64': [32, 64],
+    '64x64': [64, 64]
+  };
+
+  function patchedByteAt(abs) {
+    var patches = patchesMap();
+    var v = patches[abs];
+    if (v !== undefined) return v & 0xFF;
+    var src = romBytes();
+    if (!src || abs < 0 || abs >= src.length) return 0;
+    return src[abs] & 0xFF;
+  }
+
+  function patchedWordsAt(offset, count) {
+    var out = [];
+    for (var i = 0; i < count; i++) out.push(patchedByteAt(offset + i) & 0xFF);
+    return out;
+  }
+
+  function mapSize() { return MAP_SIZES[_state.mapSize] || MAP_SIZES['32x32']; }
+
+  /* The map bytes with the current patches applied, exactly like regionWindow. */
+  function mapWindow() {
+    var src = romBytes();
+    var C = K.core;
+    if (!src || !C) return null;
+    var start = Number(_state.mapScreenBase);
+    if (!Number.isFinite(start)) return null;
+    var dim = mapSize();
+    var count = dim[0] * dim[1];
+    var end = Math.min(src.length, start + count * 2);
+    if (!(end > start)) return null;
+    var out = src.slice(start, end);
+    var patches = patchesMap();
+    var keyParts = [];
+    Object.keys(patches).forEach(function (k) {
+      var off = parseInt(k, 10);
+      if (off >= start && off < end) {
+        out[off - start] = patches[k] & 0xFF;
+        keyParts.push(k + '=' + (patches[k] & 0xFF));
+      }
+    });
+    return {
+      start: start, bytes: out, cols: dim[0], rows: dim[1],
+      count: Math.min(count, Math.floor(out.length / 2)),
+      key: start + ':' + out.length + ':' + keyParts.join(',')
+    };
+  }
+
+  /* The GBA character base is a 16 KiB block chosen by BGxCNT, and in a ROM it
+     is wherever the graphics live. Until the user names one, the block of the
+     detected tile region is used, because that is the art they are looking at. */
+  function charBase() {
+    var explicit = Number(_state.mapCharBase);
+    if (_state.mapCharBase !== null && _state.mapCharBase !== undefined && Number.isFinite(explicit)) return explicit;
+    var region = Number(_state.region);
+    return Number.isFinite(region) ? (region & ~0x3FFF) : null;
+  }
+
+  /* 16 KiB covers 512 four bit per pixel tiles, one whole character block. */
+  function charWindow() {
+    var src = romBytes();
+    var C = K.core;
+    if (!src || !C) return null;
+    var start = charBase();
+    if (start === null || !Number.isFinite(start)) return null;
+    var end = Math.min(src.length, start + 0x4000);
+    if (!(end > start)) return null;
+    var out = src.slice(start, end);
+    var patches = patchesMap();
+    var keyParts = [];
+    Object.keys(patches).forEach(function (k) {
+      var off = parseInt(k, 10);
+      if (off >= start && off < end) {
+        out[off - start] = patches[k] & 0xFF;
+        keyParts.push(k + '=' + (patches[k] & 0xFF));
+      }
+    });
+    return { start: start, bytes: out, key: start + ':' + out.length + ':' + keyParts.join(',') };
+  }
+
+  function entryTile(v) { return v & 0x3FF; }
+  function entryFlipH(v) { return (v & 0x400) !== 0; }
+  function entryFlipV(v) { return (v & 0x800) !== 0; }
+  function entryBank(v) { return (v >> 12) & 0xF; }
+  function mapEntry(win, cell) {
+    if (!win || cell < 0 || cell >= win.count) return null;
+    return (win.bytes[cell * 2] & 0xFF) | ((win.bytes[cell * 2 + 1] & 0xFF) << 8);
+  }
+
+  /* Sixteen colours for one palette bank. The loaded palette is bank 0 and the
+     banks after it are read from the ROM at 32 byte steps, which is how a GBA
+     palette block is laid out. */
+  function bankPalette(bank) {
+    var b = Number(bank) || 0;
+    var base = Number(_state.paletteOffset);
+    if (!_state.palette || !Number.isFinite(base)) return null;
+    if (b === 0) return _state.palette;
+    var words = patchedWordsAt(base + b * 32, PALETTE_COLOURS * 2);
+    var out = [];
+    for (var i = 0; i < PALETTE_COLOURS; i++) out.push(fromBgr555(words[i * 2], words[i * 2 + 1]));
+    return out;
+  }
+
+  function decodeMapTile(charWin, tileNumber, flipH, flipV, C) {
+    if (!charWin || !C) return null;
+    var fmt = _state.format;
+    var size = C.tileSize(fmt);
+    var off = tileNumber * size;
+    if (off < 0 || off + size > charWin.bytes.length) return null;
+    var px = C.decodeTile(charWin.bytes, off, fmt);
+    if (!flipH && !flipV) return px;
+    var out = [];
+    for (var y = 0; y < 8; y++) {
+      out.push([]);
+      for (var x = 0; x < 8; x++) {
+        var sx = flipH ? 7 - x : x;
+        var sy = flipV ? 7 - y : y;
+        out[y].push(px[sy][sx]);
+      }
+    }
+    return out;
+  }
+
+  /* The whole map drawn into one offscreen canvas at 1:1. Every pixel of the
+     map is written once, which a rectangle per pixel could not do at 64x64. */
+  function renderMap(win, charWin) {
+    var C = K.core;
+    if (!win || !charWin || !C) return null;
+    var w = win.cols * 8, h = win.rows * 8;
+    var cv = document.createElement('canvas');
+    cv.width = w;
+    cv.height = h;
+    var ctx = cv.getContext('2d');
+    var img = ctx.createImageData(w, h);
+    var cache = {};
+    var palCache = {};
+    for (var cell = 0; cell < win.count; cell++) {
+      var v = (win.bytes[cell * 2] & 0xFF) | ((win.bytes[cell * 2 + 1] & 0xFF) << 8);
+      var tile = entryTile(v);
+      var bank = entryBank(v);
+      var key = tile + ':' + (entryFlipH(v) ? 1 : 0) + (entryFlipV(v) ? 1 : 0);
+      var px = cache[key];
+      if (px === undefined) { px = decodeMapTile(charWin, tile, entryFlipH(v), entryFlipV(v), C) || false; cache[key] = px; }
+      var pal = palCache[bank];
+      if (pal === undefined) { pal = bankPalette(bank) || null; palCache[bank] = pal; }
+      var gx = (cell % win.cols) * 8;
+      var gy = Math.floor(cell / win.cols) * 8;
+      if (!px) continue;
+      for (var y = 0; y < 8; y++) {
+        for (var x = 0; x < 8; x++) {
+          var idx = px[y][x];
+          var c = pal && pal[idx] ? pal[idx] : rampColour(idx);
+          var o = ((gy + y) * w + (gx + x)) * 4;
+          img.data[o] = c.r; img.data[o + 1] = c.g; img.data[o + 2] = c.b; img.data[o + 3] = 255;
+        }
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return cv;
+  }
+
+  /* A real map reuses a small set of tiles over its cells; random data gives
+     almost every cell its own tile number. That difference is what this scan
+     measures, together with how often a cell claims a high palette bank, which
+     a text mode map rarely does. Screen bases are 2 KiB aligned in the GBA. */
+  function scoreMapBlock(bytes, offset, cells, cols) {
+    if (offset < 0 || offset + cells * 2 > bytes.length) return null;
+    var width = cols || 32;
+    var seen = {};
+    var distinct = 0;
+    var bankHigh = 0;
+    var runs = 0;
+    for (var c = 0; c < cells; c++) {
+      var v = (bytes[offset + c * 2] & 0xFF) | ((bytes[offset + c * 2 + 1] & 0xFF) << 8);
+      var t = v & 0x3FF;
+      if (!seen[t]) { seen[t] = true; distinct++; }
+      if (((v >> 12) & 0xF) > 3) bankHigh++;   // text mode maps stay in the low banks
+      // a map is made of stretches: floors, walls, ceilings repeat sideways
+      if (c % width === 0) runs++;
+      else {
+        var p = (bytes[offset + (c - 1) * 2] & 0xFF) | ((bytes[offset + (c - 1) * 2 + 1] & 0xFF) << 8);
+        if ((p & 0x3FF) !== t) runs++;
+      }
+    }
+    var share = distinct / cells;
+    var bankShare = bankHigh / cells;
+    var meanRun = cells / Math.max(1, runs);
+    var runTerm = Math.max(0, Math.min(1, (meanRun - 1) / 3));
+    /* How many different tiles a map uses matters as much as the runs. The first
+       version of this score rewarded repetition alone, and the top candidates on
+       the test ROM became stripe patterns: 9 distinct tiles stretched over 1024
+       cells with a mean run of 17, which is a texture, not a level. A real screen
+       block sits between the two extremes. */
+    var band;
+    if (share < 0.02) band = 0.2;
+    else if (share < 0.05) band = 0.6;
+    else if (share <= 0.35) band = 1;
+    else band = 0.3;
+    var score = runTerm * 0.4 + band * 0.4 + (1 - bankShare) * 0.2;
+    if (distinct < 4) score *= 0.3;
+    return {
+      offset: offset, score: Math.max(0, Math.min(1, score)), distinct: distinct,
+      bankShare: bankShare, share: share, meanRun: meanRun
+    };
+  }
+
+  function detectMap() {
+    var bytes = romBytes();
+    if (!bytes) { _set({ status: 'Load a ROM first.' }); return null; }
+    var dim = mapSize();
+    var cells = dim[0] * dim[1];
+    _set({ mapScanning: true, status: 'Scoring 2 KiB blocks for map entries...' });
+    var found = [];
+    for (var off = 0; off + cells * 2 <= bytes.length; off += 0x800) {
+      var s = scoreMapBlock(bytes, off, cells, dim[0]);
+      if (s) found.push(s);
+    }
+    found.sort(function (a, b) { return b.score - a.score; });
+    var top = found.slice(0, 8);
+    if (!top.length) { _set({ mapScanning: false, status: 'No map candidate found.' }); return null; }
+    _set({
+      mapScanning: false,
+      mapCandidates: top,
+      mapScreenBase: top[0].offset,
+      status: 'Map: best screen base 0x' + hex6(top[0].offset) + ' (score ' + top[0].score.toFixed(2)
+        + ', ' + top[0].distinct + ' distinct tiles, mean run ' + top[0].meanRun.toFixed(1) + ' cells).'
+    });
+    return top[0];
+  }
+
+  /* Placing a tile keeps the flip and palette bits of the entry unless the
+     caller asks for them, so painting the map does not silently reset them. */
+  function writeMapEntry(cell, tile, flipH, flipV, bank) {
+    var win = mapWindow();
+    if (!win || cell < 0 || cell >= win.count) return false;
+    var v = mapEntry(win, cell);
+    var next = (Number(tile) & 0x3FF)
+      | ((flipH == null ? entryFlipH(v) : !!flipH) ? 0x400 : 0)
+      | ((flipV == null ? entryFlipV(v) : !!flipV) ? 0x800 : 0)
+      | ((bank == null ? entryBank(v) : (Number(bank) & 0xF)) << 12);
+    var lo = next & 0xFF, hi = (next >> 8) & 0xFF;
+    var wrote = 0;
+    if ((win.bytes[cell * 2] & 0xFF) !== lo && K.hex.setByte(win.start + cell * 2, lo)) wrote++;
+    if ((win.bytes[cell * 2 + 1] & 0xFF) !== hi && K.hex.setByte(win.start + cell * 2 + 1, hi)) wrote++;
+    if (wrote) {
+      _set({ status: 'Map cell ' + (cell % win.cols) + ',' + Math.floor(cell / win.cols) + ' = tile ' + (Number(tile) & 0x3FF) + ' (' + wrote + ' byte(s) at 0x' + hex6(win.start + cell * 2) + ').' });
+    }
+    return wrote > 0;
+  }
+
+  function currentDrawTile(selected) {
+    var t = _state.mapDrawTile;
+    if (t === null || t === undefined) return selected;
+    return Number(t);
+  }
+
+  /* Flood fill over cells that hold the same entry as the one clicked. */
+  function mapBucket(cell, tile) {
+    var win = mapWindow();
+    if (!win || cell < 0 || cell >= win.count) return 0;
+    var from = mapEntry(win, cell);
+    var stack = [cell];
+    var seen = {};
+    var wrote = 0;
+    while (stack.length) {
+      var c = stack.pop();
+      if (c < 0 || c >= win.count || seen[c]) continue;
+      seen[c] = true;
+      if (mapEntry(win, c) !== from) continue;
+      if (writeMapEntry(c, tile, null, null, null)) wrote++;
+      var col = c % win.cols;
+      if (col > 0) stack.push(c - 1);
+      if (col < win.cols - 1) stack.push(c + 1);
+      stack.push(c - win.cols, c + win.cols);
+    }
+    return wrote;
+  }
+
   /* ---------- canvas ---------- */
+
 
   function TileCanvas(props) {
     var ref = uR(null);
+    // The window object is rebuilt on every render, so the effect reads the
+    // latest props through a ref and only redraws when the key changes.
+    var propsRef = uR(props);
+    propsRef.current = props;
     uE(function () {
+      var props = propsRef.current;
       var canvas = ref.current;
       if (!canvas || !props.bytes || !K.core) return;
       var C = K.core;
@@ -531,7 +837,53 @@
         ctx.strokeRect(ptx + 0.5, pty + 0.5, z - 1, z - 1);
       }
       if (props.onDrawn) props.onDrawn(drawn);
-    }, [props.bytes, props.windowKey, props.format, props.zoom, props.tiles, props.selected, props.selPixel, props.cursorTile, props.cursorByte, props.palette, props.width]);
+    }, [props.windowKey, props.format, props.zoom, props.tiles, props.selected, props.selPixel, props.cursorTile, props.cursorByte, props.palette, props.width]);
+    return e('canvas', {
+      ref: ref,
+      onMouseDown: props.onClick,
+      onMouseMove: props.onMove,
+      onMouseUp: props.onUp,
+      onMouseLeave: props.onUp,
+      onContextMenu: props.onContext,
+      style: { display: 'block', imageRendering: 'pixelated', cursor: 'crosshair' }
+    });
+  }
+
+  function MapCanvas(props) {
+    var ref = uR(null);
+    var propsRef = uR(props);
+    propsRef.current = props;
+    uE(function () {
+      var p = propsRef.current;
+      var canvas = ref.current;
+      if (!canvas || !p.win || !p.charWin) return;
+      var off = renderMap(p.win, p.charWin);
+      if (!off) return;
+      var z = p.zoom;
+      var w = p.win.cols * 8, h = p.win.rows * 8;
+      var ctx = canvas.getContext('2d');
+      canvas.width = w * z;
+      canvas.height = h * z;
+      ctx.imageSmoothingEnabled = false;
+      ctx.webkitImageSmoothingEnabled = false;
+      ctx.drawImage(off, 0, 0, w * z, h * z);
+      if (z >= 2) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (var c = 0; c <= p.win.cols; c++) { ctx.moveTo(c * 8 * z + 0.5, 0); ctx.lineTo(c * 8 * z + 0.5, h * z); }
+        for (var r = 0; r <= p.win.rows; r++) { ctx.moveTo(0, r * 8 * z + 0.5); ctx.lineTo(w * z, r * 8 * z + 0.5); }
+        ctx.stroke();
+      }
+      if (p.hexCell >= 0 && p.hexCell < p.win.count) {
+        ctx.strokeStyle = '#ffcc00';
+        ctx.strokeRect((p.hexCell % p.win.cols) * 8 * z + 0.5, Math.floor(p.hexCell / p.win.cols) * 8 * z + 0.5, 8 * z - 1, 8 * z - 1);
+      }
+      if (p.cursor >= 0 && p.cursor < p.win.count) {
+        ctx.strokeStyle = '#4daafc';
+        ctx.strokeRect((p.cursor % p.win.cols) * 8 * z + 0.5, Math.floor(p.cursor / p.win.cols) * 8 * z + 0.5, 8 * z - 1, 8 * z - 1);
+      }
+    }, [props.winKey, props.charKey, props.zoom, props.cursor, props.hexCell, props.palette]);
     return e('canvas', {
       ref: ref,
       onMouseDown: props.onClick,
@@ -585,9 +937,12 @@
     var hexPanelSt = uS(false); var hexPanel = hexPanelSt[0]; var setHexPanel = hexPanelSt[1];
     var pasteSt = uS(''); var pasteText = pasteSt[0]; var setPasteText = pasteSt[1];
     var targetSt = uS('tile'); var pasteTarget = targetSt[0]; var setPasteTarget = targetSt[1];
+    var mapCursorSt = uS(-1); var mapCursor = mapCursorSt[0]; var setMapCursor = mapCursorSt[1];
     var dragRef = uR(null);
+    var panRef = uR(null);
     var clipRef = uR(null);
     var wrapRef = uR(null);
+    var bodyRef = uR(null);
     var widthSt = uS(800); var width = widthSt[0];
 
     uE(function () {
@@ -598,13 +953,84 @@
     }, []);
 
     var win = regionWindow();
-    var windowKey = win ? (win.start + ':' + win.bytes.length + ':' + (hex && hex.patches ? Object.keys(hex.patches).length : 0)) : 'none';
+    var mapWin = mapWindow();
+    var charWin = charWindow();
+    var windowKey = win ? win.key : 'none';
+    var mapKey = mapWin ? mapWin.key : 'none';
+    var charKey = charWin ? charWin.key : 'none';
+    var hexCell = -1;
+    if (hex && mapWin) {
+      var mapRel = Number(hex.cursorOffset) - mapWin.start;
+      if (mapRel >= 0 && mapRel < mapWin.count * 2) hexCell = Math.floor(mapRel / 2);
+    }
 
     var cursorTile = -1, cursorByte = 0;
     if (hex && win && K.core) {
       var size = K.core.tileSize(st.format);
       var rel = Number(hex.cursorOffset) - win.start;
       if (rel >= 0 && rel < st.tiles * size) { cursorTile = Math.floor(rel / size); cursorByte = rel % size; }
+    }
+
+    /* ---- map view handlers ---- */
+
+    function mapCellAt(ev, canvas) {
+      var rect = canvas.getBoundingClientRect();
+      var z = st.zoom;
+      var col = Math.floor((ev.clientX - rect.left) / (8 * z));
+      var row = Math.floor((ev.clientY - rect.top) / (8 * z));
+      if (!mapWin || col < 0 || row < 0 || col >= mapWin.cols || row >= mapWin.rows) return null;
+      return row * mapWin.cols + col;
+    }
+    function placeMapTile(cell) {
+      var tile = currentDrawTile(selected);
+      if (!Number.isFinite(tile) || tile < 0) { _set({ status: 'Pick a tile in the Tiles view first, or type a tile number in the sidebar.' }); return; }
+      writeMapEntry(cell, tile, st.mapFlipH, st.mapFlipV, null);
+    }
+    function pickMapTile(cell) {
+      var v = mapEntry(mapWin, cell);
+      if (v === null) return;
+      _set({
+        mapDrawTile: entryTile(v), mapFlipH: entryFlipH(v), mapFlipV: entryFlipV(v),
+        status: 'Picked tile ' + entryTile(v) + ' from cell ' + (cell % mapWin.cols) + ',' + Math.floor(cell / mapWin.cols)
+          + (entryBank(v) ? ' (palette bank ' + entryBank(v) + ')' : '') + '.'
+      });
+    }
+    function swapMapTile(cell) {
+      var v = mapEntry(mapWin, cell);
+      if (v === null) return;
+      var current = currentDrawTile(selected);
+      var inCell = entryTile(v);
+      writeMapEntry(cell, Number.isFinite(current) ? current : inCell, null, null, null);
+      _set({ mapDrawTile: inCell, status: 'Swapped: the cell now holds tile ' + (Number.isFinite(current) ? current : inCell) + ', you draw tile ' + inCell + '.' });
+    }
+    function onMapDown(ev) {
+      if (ev.button === 1) {
+        panRef.current = { x: ev.clientX, y: ev.clientY, left: bodyRef.current ? bodyRef.current.scrollLeft : 0, top: bodyRef.current ? bodyRef.current.scrollTop : 0 };
+        ev.preventDefault();
+        return;
+      }
+      var cell = mapCellAt(ev, ev.currentTarget);
+      if (cell === null) return;
+      setMapCursor(cell);
+      if (K.hex.setSelection) K.hex.setSelection(mapWin.start + cell * 2, mapWin.start + cell * 2 + 1);
+      if (ev.altKey) { swapMapTile(cell); return; }
+      if (ev.shiftKey) { mapBucket(cell, currentDrawTile(selected)); return; }
+      if (ev.ctrlKey || ev.metaKey) { pickMapTile(cell); return; }
+      placeMapTile(cell);
+    }
+    function onMapMove(ev) {
+      var pan = panRef.current;
+      if (!pan || !bodyRef.current) return;
+      bodyRef.current.scrollLeft = pan.left - (ev.clientX - pan.x);
+      bodyRef.current.scrollTop = pan.top - (ev.clientY - pan.y);
+    }
+    function onMapUp() { panRef.current = null; }
+    function onMapContext(ev) {
+      ev.preventDefault();
+      var cell = mapCellAt(ev, ev.currentTarget);
+      if (cell === null) return;
+      setMapCursor(cell);
+      pickMapTile(cell);
     }
 
     // Pixel under the pointer: which tile, and which of its 64 pixels.
@@ -754,6 +1180,22 @@
       if (k === ']') { _set({ colour: (st.colour + 1) % 16 }); ev.preventDefault(); return; }
       var upper = String(k).toUpperCase();
       for (var i = 0; i < TOOLS.length; i++) if (TOOLS[i].key === upper) { setTool(TOOLS[i].id); ev.preventDefault(); return; }
+      if (st.view === 'map') {
+        if (k === 'Enter' || k === ' ') { if (mapCursor >= 0) placeMapTile(mapCursor); ev.preventDefault(); return; }
+        if (upper === 'X') { _set({ mapFlipH: !st.mapFlipH }); ev.preventDefault(); return; }
+        if (upper === 'Y') { _set({ mapFlipV: !st.mapFlipV }); ev.preventDefault(); return; }
+        var mcols = mapWin ? mapWin.cols : 32;
+        var mstep2 = 0;
+        if (k === 'ArrowLeft') mstep2 = -1;
+        else if (k === 'ArrowRight') mstep2 = 1;
+        else if (k === 'ArrowUp') mstep2 = -mcols;
+        else if (k === 'ArrowDown') mstep2 = mcols;
+        if (mstep2 !== 0) {
+          var limit = (mapWin ? mapWin.count : 1) - 1;
+          setMapCursor(Math.max(0, Math.min(limit, (mapCursor < 0 ? 0 : mapCursor) + mstep2)));
+          ev.preventDefault(); return;
+        }
+      }
       if (k === 'Delete' || k === 'Backspace') {
         if (selected >= 0) for (var y = 0; y < 8; y++) for (var x = 0; x < 8; x++) setPixel(selected, x, y, 0);
         ev.preventDefault(); return;
@@ -798,6 +1240,11 @@
           title: 'Copy this tile as hex, or paste bytes from an emulator (tile, region, palette)',
           onClick: function () { setHexPanel(!hexPanel); }
         }, 'Hex'),
+        e('span', { style: { opacity: 0.25 } }, '|'),
+        e('button', { type: 'button', className: TB + (st.view === 'tiles' ? '' : ' secondary'), onClick: function () { _set({ view: 'tiles' }); } }, 'Tiles'),
+        e('button', { type: 'button', className: TB + (st.view === 'map' ? '' : ' secondary'), onClick: function () { _set({ view: 'map' }); } }, 'Map'),
+        st.view === 'map' ? e('button', { type: 'button', className: TB + (st.mapFlipH ? '' : ' secondary'), title: 'Flip horizontally when placing (X)', onClick: function () { _set({ mapFlipH: !st.mapFlipH }); } }, 'H') : null,
+        st.view === 'map' ? e('button', { type: 'button', className: TB + (st.mapFlipV ? '' : ' secondary'), title: 'Flip vertically when placing (Y)', onClick: function () { _set({ mapFlipV: !st.mapFlipV }); } }, 'V') : null,
         e('span', { style: { flex: 1 } }),
         e('span', { style: { fontFamily: MONO, opacity: 0.85 } }, st.region === null ? 'no region' : '0x' + hex6(st.region)),
         e('span', { style: { opacity: 0.6 } }, st.format),
@@ -824,8 +1271,14 @@
             e('button', { type: 'button', className: TB + ' secondary', onClick: function () { setPasteText(''); } }, 'Clear'))
         )
       ) : null,
-      e('div', { style: { flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: 8 } },
-        win ? e(TileCanvas, {
+      e('div', { ref: bodyRef, style: { flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: 8 } },
+        st.view === 'map'
+          ? (mapWin && charWin ? e(MapCanvas, {
+              win: mapWin, charWin: charWin, winKey: mapKey, charKey: charKey,
+              zoom: st.zoom, cursor: mapCursor, hexCell: hexCell, palette: st.palette,
+              onClick: onMapDown, onMove: onMapMove, onUp: onMapUp, onContext: onMapContext
+            }) : e('div', { style: { opacity: 0.7 } }, 'Set a screen base and a character base in the sidebar, then load a palette to see the map in colour.'))
+          : win ? e(TileCanvas, {
           bytes: win.bytes,
           windowKey: windowKey,
           format: st.format, zoom: st.zoom, tiles: st.tiles,
@@ -871,6 +1324,36 @@
       if (!Number.isFinite(v)) { _set({ status: 'Region must be a hex offset.' }); return; }
       _set({ region: v });
     }
+    var mapScreenSt = uS(st.mapScreenBase === null ? '' : hex6(st.mapScreenBase));
+    var mapCharSt = uS(hex6(st.mapCharBase));
+    var mapTileSt = uS(st.mapDrawTile === null ? '' : Number(st.mapDrawTile).toString(16).toUpperCase());
+
+    uE(function () { mapScreenSt[1](st.mapScreenBase === null ? '' : hex6(st.mapScreenBase)); }, [st.mapScreenBase]);
+    uE(function () { mapCharSt[1](hex6(charBase())); }, [st.mapCharBase, st.region]);
+    uE(function () { mapTileSt[1](st.mapDrawTile === null ? '' : Number(st.mapDrawTile).toString(16).toUpperCase()); }, [st.mapDrawTile]);
+
+    function commitMapScreen() {
+      var raw = String(mapScreenSt[0]).trim();
+      if (!raw) { _set({ mapScreenBase: null, status: 'No screen base: use Detect map or type one.' }); return; }
+      var v = parseInt(raw.replace(/^0x/i, ''), 16);
+      if (!Number.isFinite(v)) { _set({ status: 'Screen base must be a hex offset.' }); return; }
+      _set({ mapScreenBase: v & ~0x7FF });
+    }
+    function commitMapChar() {
+      var raw = String(mapCharSt[0]).trim();
+      if (!raw) { _set({ mapCharBase: null, status: 'Character base follows the tile region block again.' }); return; }
+      var v = parseInt(raw.replace(/^0x/i, ''), 16);
+      if (!Number.isFinite(v)) { _set({ status: 'Character base must be a hex offset.' }); return; }
+      _set({ mapCharBase: v & ~0x3FFF });
+    }
+    function commitMapTile() {
+      var raw = String(mapTileSt[0]).trim();
+      if (!raw) { _set({ mapDrawTile: null, status: 'Placing the tile selected in the Tiles view.' }); return; }
+      var v = parseInt(raw.replace(/^0x/i, ''), 16);
+      if (!Number.isFinite(v) || v < 0 || v > 0x3FF) { _set({ status: 'Tile number must be 0x000 - 0x3FF.' }); return; }
+      _set({ mapDrawTile: v, status: 'Placing tile 0x' + Number(v).toString(16).toUpperCase() + '.' });
+    }
+
     function commitPalette() {
       var v = parseInt(String(palSt[0]).replace(/^0x/i, ''), 16);
       if (!Number.isFinite(v)) { _set({ status: 'Palette offset must be a hex offset.' }); return; }
@@ -937,6 +1420,68 @@
         e('button', { type: 'button', className: 'kt-btn small', onClick: commitRegion }, 'Go')
       ),
       e('div', { style: { height: 1, background: 'var(--kt-widget-border-default)', margin: '2px 0' } }),
+      e('div', { style: { fontWeight: 600 } }, 'Map'),
+      e('div', { style: { opacity: 0.7, lineHeight: 1.45 } }, 'GBA text mode map: one 2 byte entry per cell, tile number in bits 0-9, flips in 10-11, palette bank in 12-15. Click places the current tile, Ctrl+click picks it, Alt+click swaps it, Shift+click fills, middle drag scrolls.'),
+      e('button', {
+        type: 'button', className: 'kt-btn',
+        disabled: !hex || !hex.romBytes || st.mapScanning,
+        onClick: detectMap,
+        title: 'Scan 2 KiB aligned blocks for one whose cells reuse few tile numbers'
+      }, st.mapScanning ? 'Scanning...' : 'Detect map'),
+      st.mapCandidates.length ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+        e('div', { style: { opacity: 0.75 } }, 'Screen base candidates (score)'),
+        st.mapCandidates.map(function (c) {
+          return e('button', {
+            key: 'map' + c.offset,
+            type: 'button',
+            className: 'kt-btn small' + (st.mapScreenBase === c.offset ? '' : ' secondary'),
+            style: { fontFamily: MONO, justifyContent: 'flex-start' },
+            onClick: function () { _set({ mapScreenBase: c.offset }); }
+          }, '0x' + hex6(c.offset) + '  ' + c.score.toFixed(2) + '  ' + c.distinct + ' tiles');
+        })
+      ) : null,
+      e('div', { style: rowStyle },
+        e('input', {
+          style: inputStyle, value: mapScreenSt[0], spellCheck: false, placeholder: 'screen base (hex)',
+          onChange: function (ev) { mapScreenSt[1](ev.target.value); },
+          onKeyDown: function (ev) { if (ev.key === 'Enter') commitMapScreen(); }
+        }),
+        e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapScreen }, 'Go')
+      ),
+      e('div', { style: rowStyle },
+        e('input', {
+          style: inputStyle, value: mapCharSt[0], spellCheck: false, placeholder: 'character base (empty = tile block)',
+          onChange: function (ev) { mapCharSt[1](ev.target.value); },
+          onKeyDown: function (ev) { if (ev.key === 'Enter') commitMapChar(); }
+        }),
+        e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapChar }, 'Go')
+      ),
+      e('button', {
+        type: 'button', className: 'kt-btn small secondary',
+        title: 'A GBA character base is a 16 KiB block: take the block the current tile region lives in',
+        disabled: st.region === null,
+        onClick: function () {
+          var base = Number(st.region) & ~0x3FFF;
+          _set({ mapCharBase: base, status: 'Character base set to 0x' + hex6(base) + ', the 16 KiB block of the tile region.' });
+        }
+      }, 'Character block of the tile region'),
+      e('label', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+        'Map size',
+        e('select', {
+          className: 'kt-select', value: st.mapSize,
+          onChange: function (ev) { _set({ mapSize: ev.target.value }); },
+          style: { fontSize: 11 }
+        }, Object.keys(MAP_SIZES).map(function (id) { return e('option', { key: id, value: id }, id); }))
+      ),
+      e('div', { style: rowStyle },
+        e('input', {
+          style: inputStyle, value: mapTileSt[0], spellCheck: false, placeholder: 'tile to place (hex, empty = selected)',
+          onChange: function (ev) { mapTileSt[1](ev.target.value); },
+          onKeyDown: function (ev) { if (ev.key === 'Enter') commitMapTile(); }
+        }),
+        e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapTile }, 'Set')
+      ),
+      e('div', { style: { height: 1, background: 'var(--kt-widget-border-default)', margin: '2px 0' } }),
       e('div', { style: { fontWeight: 600 } }, 'Palette'),
       e('div', { style: { opacity: 0.7, lineHeight: 1.45 } }, 'BGR555, 16 colours (32 bytes). Load from the ROM, edit a colour (written as a patch), or paste 32 bytes from an emulator in the Hex panel.'),
       e('div', { style: rowStyle },
@@ -983,6 +1528,12 @@
     parsePaletteText: parsePaletteText, paletteText: paletteText,
     parseHexString: parseHexString, applyHex: applyHex, tileHexText: tileHexText,
     pixelSpanForByte: pixelSpanForByte, fromBgr555: fromBgr555, toBgr555: toBgr555,
+    MAP_SIZES: MAP_SIZES, mapWindow: mapWindow, charWindow: charWindow, mapEntry: mapEntry,
+    detectMap: detectMap, scoreMapBlock: scoreMapBlock, charBase: charBase,
+    writeMapEntry: writeMapEntry, mapBucket: mapBucket, renderMap: renderMap, bankPalette: bankPalette,
+    decodeMapTile: decodeMapTile, entryTile: entryTile, entryFlipH: entryFlipH, entryFlipV: entryFlipV,
+    entryBank: entryBank, setView: function (v) { _set({ view: String(v) }); },
+    setMap: function (o) { _set(o || {}); },
     PALETTE_COLOURS: PALETTE_COLOURS
   };
 })(window);
