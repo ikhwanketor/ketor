@@ -98,15 +98,61 @@
      table points at. */
   function graphicsClassifier(bytes, options) {
     var opts = options || {};
+    var system = opts.system || 'gba';
+    /* The value in a table is a bus address, not a file offset. Reading a GBA
+       pointer as an offset is why the first version of this classified no table at
+       all: 0x08200000 is far past the end of an 8 MiB file. */
     return function (value) {
       if (!K.core.compressionHeaderAt) return 'rom';
-      var head = K.core.compressionHeaderAt(bytes, value, { minSize: opts.minSize || 0x40 });
+      var off = value;
+      if (K.core.toRomOffset) {
+        off = K.core.toRomOffset(system, value, opts);
+        if (off === null) return 'rom';
+      }
+      if (off < 0 || off >= bytes.length) return 'rom';
+      var head = K.core.compressionHeaderAt(bytes, off, { minSize: opts.minSize || 0x40 });
       if (!head) return 'rom';
       if (head.size % (opts.tileSize || 32) !== 0) return 'rom';
       return 'graphics';
     };
   }
 
+  /* A word that names a compressed block is the game telling us where its data is,
+     and that is stronger evidence than any score: the ROM's own code or data points
+     there. It is also why a long table scan can miss everything. On the test ROM the
+     longest run of consecutive references is three words, so a table scanner that
+     wants six in a row finds nothing, while 83 words name a block of whole tiles and
+     2014 name a compressed block of some kind. */
+  function scanReferencedBlocks(bytes, options) {
+    var opts = options || {};
+    var system = opts.system || 'gba';
+    var step = Math.max(1, Number(opts.step) || 4);
+    var minSize = opts.minSize === undefined ? 0x40 : opts.minSize;
+    var maxSize = opts.maxSize || 0x20000;
+    var byTarget = {};
+    var order = [];
+    for (var at = 0; at + 4 <= bytes.length; at += step) {
+      var off = K.core.toRomOffset ? K.core.toRomOffset(system, readU32(bytes, at), opts) : null;
+      if (off === null || off < 0 || off >= bytes.length) continue;
+      var head = K.core.compressionHeaderAt ? K.core.compressionHeaderAt(bytes, off, { minSize: minSize }) : null;
+      if (!head || head.size > maxSize) continue;
+      if (opts.tileOnly !== false && head.size % (opts.tileSize || 32) !== 0) continue;
+      if (!byTarget[off]) {
+        byTarget[off] = { offset: off, size: head.size, type: head.type, label: head.label, count: 0, refs: [] };
+        order.push(off);
+      }
+      byTarget[off].count++;
+      if (byTarget[off].refs.length < 8) byTarget[off].refs.push(at);
+    }
+    var out = order.map(function (off) { return byTarget[off]; });
+    out.sort(function (a, b) { return b.count - a.count || a.offset - b.offset; });
+    return {
+      blocks: out,
+      references: out.reduce(function (n, b) { return n + b.count; }, 0)
+    };
+  }
+
+  K.core.scanReferencedBlocks = scanReferencedBlocks;
   K.core.readU32 = readU32;
   K.core.readU16 = readU16;
   K.core.findU32 = writeU32List;

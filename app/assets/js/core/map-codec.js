@@ -158,6 +158,49 @@
     };
   }
 
+  /* Corroboration for a map candidate, and it is the question a reverse engineer
+     asks out loud: does what this map points at make sense? The tiles a real map
+     references are the art of that screen, so together they score like art. Packed
+     data references tile numbers that lead nowhere in particular, and the tiles it
+     would draw do not read as a drawing at all.
+     The referenced tiles are gathered into one buffer and measured with the same
+     tile score the tile editor uses, so both detectors agree on what art is. */
+  function mapUsageScore(bytes, mapOffset, cells, cols, options) {
+    var opts = options || {};
+    var layoutId = opts.layout || 'gba-text';
+    var L = layoutOf(layoutId);
+    var format = opts.format || 'gba-4bpp';
+    var charBase = opts.charBase;
+    if (!bytes || charBase === undefined || charBase === null) return null;
+    var tileSize = (K.core.tileSize ? K.core.tileSize(format) : 32);
+    var used = {};
+    var order = [];
+    for (var c = 0; c < cells; c++) {
+      var v = readEntry(bytes, mapOffset + c * L.entryBytes, layoutId);
+      var t = entryTile(v, layoutId);
+      if (!used[t]) { used[t] = true; order.push(t); }
+    }
+    var limit = Math.min(order.length, 96);
+    var gathered = new Uint8Array(limit * tileSize);
+    var kept = 0;
+    for (var i = 0; i < limit; i++) {
+      var at = charBase + order[i] * tileSize;
+      if (at < 0 || at + tileSize > bytes.length) continue;
+      for (var j = 0; j < tileSize; j++) gathered[kept * tileSize + j] = bytes[at + j] & 0xFF;
+      kept++;
+    }
+    if (kept < 2 || !K.core.scoreTileRegion) return { distinct: order.length, tiles: kept, artScore: 0, verified: false };
+    var art = K.core.scoreTileRegion(gathered, 0, format, Math.min(64, kept));
+    return {
+      distinct: order.length,
+      tiles: kept,
+      artScore: art,
+      // a map whose tiles read as art is corroborated; a block of data is not
+      verified: art >= 0.6
+    };
+  }
+
+  K.core.mapUsageScore = mapUsageScore;
   K.core.MAP_LAYOUTS = LAYOUTS;
   K.core.mapLayout = layoutOf;
   K.core.mapSizes = sizesOf;

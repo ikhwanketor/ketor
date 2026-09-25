@@ -55,6 +55,7 @@
     // decompressed bytes instead of the ROM
     graphicSource: null,
     romIdentity: null,
+    inspector: true,
     format: 'gba-4bpp',
     palette: null,
     paletteOffset: null,
@@ -282,6 +283,41 @@
     _set({ scanning: true, graphicSource: null, status: 'Scanning ' + prof.label + ' for ' + fmt + ' graphics...' });
     var candidates = [];
     var decodedBlocks = 0;
+    var referenced = 0;
+
+    /* The strongest evidence available: a word in the ROM that names this block.
+       The game points at its own graphics, so these are graphics whatever a score
+       thinks, and they are also the ones a blind scan misses. Measured on the test
+       ROM: 63 referenced blocks, 18 of them art, and the blind scan ranks none of
+       them in its top forty. */
+    // the console needs a bus the pointer map knows; asking whether offset 0 converts
+    // is the wrong question, because offset 0 is not a bus address
+    var busKnown = !!(C.pointerSystem && C.pointerSystem(prof.id)) && prof.compression && prof.compression.length > 0;
+    if (typeof C.scanReferencedBlocks === 'function' && busKnown) {
+      var ref = C.scanReferencedBlocks(bytes, { system: prof.id, tileOnly: true, minSize: 0x40, maxSize: 0x20000 });
+      referenced = ref.blocks.length;
+      ref.blocks.forEach(function (b) {
+        var dec = C.decompressAt(bytes, b.offset, {});
+        if (!dec) return;
+        var tiles = Math.min(64, Math.floor(dec.size / C.tileSize(fmt)));
+        if (tiles < 2) return;
+        var bestShift = 0, bestScore = -1;
+        [0, 2, 4, 8, 16].forEach(function (shift) {
+          if (shift >= dec.data.length) return;
+          var n = Math.min(64, Math.floor((dec.data.length - shift) / C.tileSize(fmt)));
+          if (n < 2) return;
+          var sc = C.scoreTileRegion(dec.data, shift, fmt, n);
+          if (sc > bestScore) { bestScore = sc; bestShift = shift; }
+        });
+        candidates.push({
+          offset: b.offset, score: bestScore, kind: 'compressed', type: b.type, size: b.size,
+          compressedSize: (function () { var d = C.decompressAt(bytes, b.offset, {}); return d ? d.end - b.offset : b.size; })(),
+          dataOffset: bestShift, verified: true, refs: b.count, refAt: b.refs[0],
+          label: b.label + ' ' + (b.size < 1024 ? b.size + 'B' : Math.round(b.size / 1024) + 'K') + ' ref' + (b.count > 1 ? 'x' + b.count : '')
+        });
+      });
+    }
+
     if (prof.compression && prof.compression.length && typeof C.scanCompressed === 'function') {
       var comp = C.scanCompressed(bytes, {
         maxResults: 40,
@@ -303,7 +339,12 @@
     raw.top.forEach(function (r) {
       candidates.push({ offset: r.offset, score: r.score, kind: 'raw', label: 'raw' });
     });
-    candidates.sort(function (a, b) { return b.score - a.score || a.offset - b.offset; });
+    // a referenced block outranks a guessed one, then the score decides
+    candidates.sort(function (a, b) {
+      var av = a.verified ? 1 : 0, bv = b.verified ? 1 : 0;
+      if (av !== bv) return bv - av;
+      return b.score - a.score || a.offset - b.offset;
+    });
     var top = candidates.slice(0, 12);
     _set({
       scanning: false,
@@ -311,6 +352,7 @@
       region: top.length ? top[0].offset : null,
       status: top.length
         ? prof.label + ': best 0x' + hex6(top[0].offset) + ' (' + top[0].label + ', score ' + top[0].score.toFixed(2) + ')'
+          + (referenced ? ', ' + referenced + ' block(s) the ROM itself points at' : '')
           + (decodedBlocks ? ', ' + decodedBlocks + ' compressed block(s) decoded.' : '.')
         : 'No candidate found.'
     });
@@ -1190,9 +1232,7 @@
     var toolSt = uS('pencil'); var tool = toolSt[0]; var setTool = toolSt[1];
     var tileSt = uS(-1); var selected = tileSt[0]; var setSelected = tileSt[1];
     var selSt = uS(null); var sel = selSt[0]; var setSel = selSt[1];
-    var hexPanelSt = uS(false); var hexPanel = hexPanelSt[0]; var setHexPanel = hexPanelSt[1];
-    var pasteSt = uS(''); var pasteText = pasteSt[0]; var setPasteText = pasteSt[1];
-    var targetSt = uS('tile'); var pasteTarget = targetSt[0]; var setPasteTarget = targetSt[1];
+
     var mapCursorSt = uS(-1); var mapCursor = mapCursorSt[0]; var setMapCursor = mapCursorSt[1];
     var dragRef = uR(null);
     var panRef = uR(null);
@@ -1398,32 +1438,7 @@
       if (!clip || selected < 0) { _set({ status: 'Copy a tile first.' }); return; }
       for (var yy = 0; yy < 8; yy++) for (var xx = 0; xx < 8; xx++) setPixel(selected, xx, yy, clip[yy][xx]);
     }
-    function copyHexText() {
-      var text = selected >= 0 ? tileHexText(selected) : '';
-      if (!text) { _set({ status: 'Nothing to copy.' }); return; }
-      if (global.navigator && global.navigator.clipboard && global.navigator.clipboard.writeText) {
-        global.navigator.clipboard.writeText(text).then(function () {
-          _set({ status: 'Tile ' + selected + ' bytes copied as hex text.' });
-        }, function () { _set({ status: 'Tile ' + selected + ' bytes: ' + text }); });
-      } else {
-        _set({ status: 'Tile ' + selected + ' bytes: ' + text });
-      }
-    }
-    function applyPaste() {
-      var limit = pasteTarget === 'tile' && K.core ? K.core.tileSize(st.format) : 0;
-      var off = pasteTarget === 'tile' && K.core ? tileAbsoluteOffset(Math.max(0, selected), K.core) : null;
-      if (pasteTarget === 'tile' || pasteTarget === 'region') {
-        var bytes = parseHexString(pasteText);
-        if (!bytes || !bytes.length) { _set({ status: 'No hex bytes found in the text.' }); return; }
-        var start = pasteTarget === 'tile' ? off : windowStart();
-        var wrote = 0, n = limit > 0 ? Math.min(bytes.length, limit) : bytes.length;
-        for (var i = 0; i < n; i++) if (K.hex.setByte(start + i, bytes[i])) wrote++;
-        _set({ status: 'Pasted ' + wrote + ' byte(s) at 0x' + hex6(start) + '.' });
-        return;
-      }
-      if (pasteTarget === 'palette') { parsePaletteText(pasteText); return; }
-      applyHex(pasteText, 'palette-rom');
-    }
+
 
     function onKey(ev) {
       var k = ev.key;
@@ -1488,10 +1503,10 @@
         e('button', { type: 'button', className: TB + ' secondary', disabled: selected < 0, onClick: copyTile }, 'Copy'),
         e('button', { type: 'button', className: TB + ' secondary', disabled: selected < 0, onClick: pasteTile }, 'Paste'),
         e('button', {
-          type: 'button', className: TB + (hexPanel ? '' : ' secondary'),
-          title: 'Copy this tile as hex, or paste bytes from an emulator (tile, region, palette)',
-          onClick: function () { setHexPanel(!hexPanel); }
-        }, 'Hex'),
+          type: 'button', className: TB + (st.inspector === false ? ' secondary' : ''),
+          title: 'Show or hide the inspector: palette, paste box and the state of a compressed graphic',
+          onClick: function () { _set({ inspector: st.inspector === false }); }
+        }, 'Inspector'),
         e('span', { style: { opacity: 0.25 } }, '|'),
         e('button', { type: 'button', className: TB + (st.view === 'tiles' ? '' : ' secondary'), onClick: function () { _set({ view: 'tiles' }); } }, 'Tiles'),
         e('button', { type: 'button', className: TB + (st.view === 'map' ? '' : ' secondary'), onClick: function () { _set({ view: 'map' }); } }, 'Map'),
@@ -1503,27 +1518,9 @@
         e('span', { style: { opacity: 0.6 } }, selected < 0 ? 'no tile' : 'tile ' + selected),
         e('span', { style: { opacity: 0.6 } }, st.palette ? 'palette 0x' + hex6(st.paletteOffset) : 'no palette')
       ),
-      hexPanel ? e('div', { style: { flex: '0 0 auto', display: 'flex', gap: 6, alignItems: 'flex-start', padding: '6px 10px', borderBottom: '1px solid var(--kt-widget-border-default)', background: 'var(--kt-editor-bg, #1e1e1e)' } },
-        e('textarea', {
-          value: pasteText,
-          onChange: function (ev) { setPasteText(ev.target.value); },
-          placeholder: 'Paste hex from an emulator: 20 21 22 ... (tile bytes, or 32 bytes of BGR555 for a palette)',
-          spellCheck: false,
-          style: { flex: '1 1 auto', minHeight: 46, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: 4, resize: 'vertical' }
-        }),
-        e('div', { style: { display: 'flex', flexDirection: 'column', gap: 4, flex: '0 0 auto' } },
-          e('select', { className: 'kt-select', value: pasteTarget, onChange: function (ev) { setPasteTarget(ev.target.value); }, style: { fontSize: 11 } },
-            e('option', { value: 'tile' }, 'Write at selected tile'),
-            e('option', { value: 'region' }, 'Write at region start'),
-            e('option', { value: 'palette' }, 'Load as palette'),
-            e('option', { value: 'palette-rom' }, 'Write at palette offset')),
-          e('div', { style: { display: 'flex', gap: 4 } },
-            e('button', { type: 'button', className: TB, onClick: applyPaste }, 'Apply'),
-            e('button', { type: 'button', className: TB + ' secondary', onClick: copyHexText, disabled: selected < 0 }, 'Copy hex'),
-            e('button', { type: 'button', className: TB + ' secondary', onClick: function () { setPasteText(''); } }, 'Clear'))
-        )
-      ) : null,
-      e('div', { ref: bodyRef, style: { flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: 8 } },
+
+      e('div', { style: { flex: '1 1 auto', minHeight: 0, display: 'flex', alignItems: 'stretch' } },
+      e('div', { ref: bodyRef, style: { flex: '1 1 auto', minWidth: 0, overflow: 'auto', padding: 8 } },
         st.view === 'map'
           ? (mapWin && charWin ? e(MapCanvas, {
               win: mapWin, charWin: charWin, winKey: mapKey, charKey: charKey,
@@ -1539,6 +1536,8 @@
           width: Math.max(200, width - 16),
           onClick: onDown, onMove: onMove, onUp: onUp, onContext: onContext
         }) : e('div', { style: { opacity: 0.7 } }, 'No region selected. Detect tiles or type a region offset in the sidebar.')
+      ),
+      st.inspector === false ? null : e(TileInspector, null)
       ),
       e('div', { style: { flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '5px 10px', borderTop: '1px solid var(--kt-widget-border-default)', background: 'var(--kt-statusbar-bg)', color: 'var(--kt-statusbar-fg)', fontSize: 11 } },
         e('span', null, 'Colour'),
@@ -1557,6 +1556,137 @@
         e('button', { type: 'button', className: 'kt-btn small', disabled: selected < 0, onClick: function () { K.hex.gotoOffset(tileAbsoluteOffset(selected, K.core)); } }, 'Goto Hex'),
         e('span', { style: { flex: 1 } }),
         e('span', { style: { opacity: 0.75 } }, st.status)
+      )
+    );
+  }
+
+  /* The inspector holds what supports the drawing but is not needed while drawing:
+     the palette, the paste box and the state of a compressed graphic. It sits to the
+     right of the canvas so the left sidebar stays short enough to scan. */
+  function TileInspector() {
+    var st = useTile();
+    var hex = K.hex ? K.hex.useHex() : null;
+    var palSt = uS(st.paletteOffset === null ? '' : hex6(st.paletteOffset));
+    var pasteSt = uS('');
+    var targetSt = uS('tile');
+
+    uE(function () { palSt[1](st.paletteOffset === null ? '' : hex6(st.paletteOffset)); }, [st.paletteOffset]);
+
+    function commitPalette() {
+      var v = parseInt(String(palSt[0]).replace(/^0x/i, ''), 16);
+      if (!Number.isFinite(v)) { _set({ status: 'Palette offset must be a hex offset.' }); return; }
+      loadPalette(v);
+    }
+
+    function applyPaste() {
+      var text = pasteSt[0];
+      var target = targetSt[0];
+      if (target === 'palette') { parsePaletteText(text); return; }
+      var bytes = parseHexString(text);
+      if (!bytes || !bytes.length) { _set({ status: 'No hex bytes found in the text.' }); return; }
+      var offset = target === 'palette-rom' ? Number(st.paletteOffset) : windowStart();
+      if (!Number.isFinite(offset)) { _set({ status: 'Set a palette offset first.' }); return; }
+      var limit = target === 'tile' ? K.core.tileSize(st.format) : bytes.length;
+      var wrote = 0, n = Math.min(bytes.length, limit);
+      for (var i = 0; i < n; i++) if (K.hex.setByte(offset + i, bytes[i])) wrote++;
+      _set({ status: 'Pasted ' + wrote + ' byte(s) at 0x' + hex6(offset) + (n < bytes.length ? ' (' + (bytes.length - n) + ' ignored, over one tile)' : '') + '.' });
+    }
+
+    function copyHexText() {
+      var selected = -1;
+      var tile = st.region === null ? '' : tileHexText(0);
+      if (!tile) { _set({ status: 'Nothing to copy.' }); return; }
+      if (global.navigator && global.navigator.clipboard && global.navigator.clipboard.writeText) {
+        global.navigator.clipboard.writeText(tile).then(function () { _set({ status: 'Tile 0 bytes copied as hex text.' }); }, function () { _set({ status: 'Tile 0 bytes: ' + tile }); });
+      } else {
+        _set({ status: 'Tile 0 bytes: ' + tile });
+      }
+      return selected;
+    }
+
+    var rowStyle = { display: 'flex', gap: 4, alignItems: 'center' };
+    var inputStyle = { flex: '1 1 auto', fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' };
+    var head = { fontWeight: 600, marginTop: 2 };
+
+    return e('div', {
+      style: {
+        flex: '0 0 auto', width: 268, overflowY: 'auto', padding: '8px 10px',
+        display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12,
+        borderLeft: '1px solid var(--kt-widget-border-default)', background: 'var(--kt-sidebar-bg)'
+      }
+    },
+      st.graphicSource ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3, padding: '4px 6px', border: '1px solid var(--kt-widget-border-default)', borderRadius: 3 } },
+        e('div', { style: head }, 'Compressed graphic'),
+        e('div', { style: { fontFamily: MONO } }, st.graphicSource.label + ' at 0x' + hex6(st.graphicSource.offset)),
+        e('div', { style: { opacity: 0.7 } }, st.graphicSource.size + ' bytes decompressed'
+          + (st.graphicSource.dataOffset ? ', tiles start ' + st.graphicSource.dataOffset + ' byte(s) in' : '') + '.'),
+        e('div', { style: { opacity: 0.7 } }, st.graphicSource.compressedSize
+          ? (st.graphicSource.compressedSize + ' of ' + st.graphicSource.budget + ' byte(s) used' + (st.graphicSource.dirty ? ', waiting to write back' : ', written'))
+          : 'not written back yet'),
+        e('div', { style: { display: 'flex', gap: 4 } },
+          e('button', { type: 'button', className: 'kt-btn small', onClick: function () { writeBackCompressed(); } }, 'Write back'),
+          e('button', { type: 'button', className: 'kt-btn small secondary', onClick: clearSource }, 'Read ROM')
+        )
+      ) : null,
+
+      e('div', { style: head }, 'Palette'),
+      e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'BGR555, 16 colours. An edit is written to the ROM as a patch.'),
+      e('div', { style: rowStyle },
+        e('input', {
+          style: inputStyle, value: palSt[0], spellCheck: false, placeholder: 'palette offset',
+          onChange: function (ev) { palSt[1](ev.target.value); },
+          onKeyDown: function (ev) { if (ev.key === 'Enter') commitPalette(); }
+        }),
+        e('button', { type: 'button', className: 'kt-btn small', onClick: commitPalette, disabled: !hex || !hex.romBytes }, 'Load')
+      ),
+      e('div', { style: { display: 'flex', gap: 4 } },
+        e('button', { type: 'button', className: 'kt-btn small secondary', style: { flex: '1 1 auto' }, disabled: !hex || !hex.romBytes, onClick: findPalette, title: 'Search around the region for an uncompressed 16 colour palette' }, 'Find'),
+        e('button', { type: 'button', className: 'kt-btn small secondary', disabled: !st.palette, onClick: exportPalette }, 'Export .pal'),
+        e('button', { type: 'button', className: 'kt-btn small secondary', onClick: importPaletteDialog }, 'Import')
+      ),
+      st.paletteCandidates && st.paletteCandidates.length ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+        e('div', { style: { opacity: 0.75 } }, 'Palette candidates'),
+        st.paletteCandidates.map(function (c) {
+          return e('button', {
+            key: 'pal' + c.offset,
+            type: 'button',
+            className: 'kt-btn small' + (st.paletteOffset === c.offset ? '' : ' secondary'),
+            style: { fontFamily: MONO, justifyContent: 'flex-start' },
+            onClick: function () { loadPalette(c.offset); }
+          }, '0x' + hex6(c.offset) + '  ' + c.score.toFixed(2));
+        })
+      ) : null,
+      st.palette ? e('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+        e('span', { style: { opacity: 0.75 } }, 'Colour ' + st.colour),
+        e('input', {
+        type: 'color', value: colourHex(paletteColour(st.colour)),
+        title: 'Edit palette colour ' + st.colour + ' (written as a patch)',
+        onChange: function (ev) {
+          var m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(ev.target.value);
+          if (!m) return;
+          writePaletteColour(st.colour, { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) });
+        },
+          style: { width: 46, height: 22, padding: 0, background: 'transparent', border: '1px solid var(--kt-widget-border-default)' }
+        })
+      ) : null,
+
+      e('div', { style: head }, 'Paste hex from an emulator'),
+      e('textarea', {
+        value: pasteSt[0],
+        onChange: function (ev) { pasteSt[1](ev.target.value); },
+        placeholder: '20 21 22 ... tile bytes, or 32 bytes of BGR555 for a palette',
+        spellCheck: false,
+        style: { minHeight: 54, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: 4, resize: 'vertical' }
+      }),
+      e('select', { className: 'kt-select', value: targetSt[0], onChange: function (ev) { targetSt[1](ev.target.value); }, style: { fontSize: 11 } },
+        e('option', { value: 'tile' }, 'Write at tile 0 of the region'),
+        e('option', { value: 'region' }, 'Write at the region start'),
+        e('option', { value: 'palette' }, 'Load as palette'),
+        e('option', { value: 'palette-rom' }, 'Write at the palette offset')),
+      e('div', { style: { display: 'flex', gap: 4 } },
+        e('button', { type: 'button', className: 'kt-btn small', onClick: applyPaste }, 'Apply'),
+        e('button', { type: 'button', className: 'kt-btn small secondary', onClick: copyHexText }, 'Copy tile 0'),
+        e('button', { type: 'button', className: 'kt-btn small secondary', onClick: function () { pasteSt[1](''); } }, 'Clear')
       )
     );
   }
@@ -1673,7 +1803,8 @@
               ? 'Decompress this ' + c.label + ' block and open it'
               : 'Read this raw region of the ROM',
             onClick: function () { openCandidate(c); }
-          }, '0x' + hex6(c.offset) + '  ' + c.score.toFixed(2) + '  ' + (c.label || 'raw'));
+          }, '0x' + hex6(c.offset) + '  ' + c.score.toFixed(2) + '  ' + (c.label || 'raw')
+            + (c.verified ? '  \u2022 pointed at from 0x' + hex6(c.refAt) : ''));
         })
       ) : null,
       st.graphicSource ? e('div', {
@@ -1788,36 +1919,7 @@
         }),
         e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapTile }, 'Set')
       ),
-      e('div', { style: { height: 1, background: 'var(--kt-widget-border-default)', margin: '2px 0' } }),
-      e('div', { style: { fontWeight: 600 } }, 'Palette'),
-      e('div', { style: { opacity: 0.7, lineHeight: 1.45 } }, 'BGR555, 16 colours (32 bytes). Load from the ROM, edit a colour (written as a patch), or paste 32 bytes from an emulator in the Hex panel.'),
-      e('div', { style: rowStyle },
-        e('input', {
-          style: inputStyle, value: palSt[0], spellCheck: false, placeholder: 'palette offset',
-          onChange: function (ev) { palSt[1](ev.target.value); },
-          onKeyDown: function (ev) { if (ev.key === 'Enter') commitPalette(); }
-        }),
-        e('button', { type: 'button', className: 'kt-btn small', onClick: commitPalette, disabled: !hex || !hex.romBytes }, 'Load')
-      ),
-      e('div', { style: { display: 'flex', gap: 4 } },
-        e('button', { type: 'button', className: 'kt-btn small secondary', style: { flex: '1 1 auto' }, disabled: !hex || !hex.romBytes, onClick: findPalette, title: 'Search +-0x40000 around the region for an uncompressed 16 colour palette' }, 'Find near region'),
-        e('button', { type: 'button', className: 'kt-btn small secondary', disabled: !st.palette, onClick: exportPalette }, 'Export .pal'),
-        e('button', { type: 'button', className: 'kt-btn small secondary', onClick: importPaletteDialog }, 'Import')
-      ),
-      st.paletteCandidates && st.paletteCandidates.length ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-        e('div', { style: { opacity: 0.75 } }, 'Palette candidates (score)'),
-        st.paletteCandidates.map(function (c) {
-          return e('button', {
-            key: 'pal' + c.offset,
-            type: 'button',
-            className: 'kt-btn small' + (st.paletteOffset === c.offset ? '' : ' secondary'),
-            style: { fontFamily: MONO, justifyContent: 'flex-start' },
-            title: 'Load the 16 colours at this offset',
-            onClick: function () { loadPalette(c.offset); }
-          }, '0x' + hex6(c.offset) + '  ' + c.score.toFixed(2));
-        })
-      ) : null,
-      st.palette ? e(PaletteSwatches, { palette: st.palette, colour: st.colour, onPick: function (i) { _set({ colour: i }); } }) : null,
+      e('div', { style: { opacity: 0.7, lineHeight: 1.45 } }, 'Palette, map and hex controls live in the inspector panel on the right of the canvas.'),
       e('div', { style: { opacity: 0.7, lineHeight: 1.45 } }, st.status || 'Detect a region, then click a tile and paint pixels. Every pixel is written as a hex patch.')
     );
   }
