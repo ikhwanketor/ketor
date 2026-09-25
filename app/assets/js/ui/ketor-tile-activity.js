@@ -69,6 +69,7 @@
     mapSize: '32x32',
     mapDrawTile: null,
     mapCandidates: [],
+    mapCursor: -1,
     mapScanning: false,
     mapFlipH: false,
     mapFlipV: false,
@@ -1253,7 +1254,10 @@
     var tileSt = uS(-1); var selected = tileSt[0]; var setSelected = tileSt[1];
     var selSt = uS(null); var sel = selSt[0]; var setSel = selSt[1];
 
-    var mapCursorSt = uS(-1); var mapCursor = mapCursorSt[0]; var setMapCursor = mapCursorSt[1];
+    // the map cursor is in the store, not in this component: the inspector writes text
+    // at that cell, so both have to see the same one
+    var mapCursor = Number.isFinite(Number(st.mapCursor)) ? Number(st.mapCursor) : -1;
+    function setMapCursor(v) { _set({ mapCursor: Math.max(-1, Number(v) || 0) }); }
     var dragRef = uR(null);
     var panRef = uR(null);
     var clipRef = uR(null);
@@ -1620,6 +1624,184 @@
   /* The inspector holds what supports the drawing but is not needed while drawing:
      the palette, the paste box and the state of a compressed graphic. It sits to the
      right of the canvas so the left sidebar stays short enough to scan. */
+  /* The map controls, moved out of the left sidebar. Setting a screen base and
+     detecting a map are occasional things: they belong beside the canvas, not in the
+     column you scan while drawing. */
+  function MapInspector() {
+    var st = useTile();
+    var hex = K.hex ? K.hex.useHex() : null;
+    var mapScreenSt = uS(st.mapScreenBase === null ? '' : hex6(st.mapScreenBase));
+    var mapCharSt = uS(hex6(charBase()));
+    var mapTileSt = uS(st.mapDrawTile === null ? '' : Number(st.mapDrawTile).toString(16).toUpperCase());
+    var textSt = uS('');
+    var startSt = uS('');
+
+    uE(function () { mapScreenSt[1](st.mapScreenBase === null ? '' : hex6(st.mapScreenBase)); }, [st.mapScreenBase]);
+    uE(function () { mapCharSt[1](hex6(charBase())); }, [st.mapCharBase, st.region]);
+    uE(function () { mapTileSt[1](st.mapDrawTile === null ? '' : Number(st.mapDrawTile).toString(16).toUpperCase()); }, [st.mapDrawTile]);
+
+    function commitMapScreen() {
+      var raw = String(mapScreenSt[0]).trim();
+      if (!raw) { _set({ mapScreenBase: null, status: 'No screen base: use Detect map or type one.' }); return; }
+      var v = parseInt(raw.replace(/^0x/i, ''), 16);
+      if (!Number.isFinite(v)) { _set({ status: 'Screen base must be a hex offset.' }); return; }
+      _set({ mapScreenBase: v & ~0x7FF });
+    }
+    function commitMapChar() {
+      var raw = String(mapCharSt[0]).trim();
+      if (!raw) { _set({ mapCharBase: null, status: 'Character base follows the tile region block again.' }); return; }
+      var v = parseInt(raw.replace(/^0x/i, ''), 16);
+      if (!Number.isFinite(v)) { _set({ status: 'Character base must be a hex offset.' }); return; }
+      _set({ mapCharBase: v & ~0x3FFF });
+    }
+    function commitMapTile() {
+      var raw = String(mapTileSt[0]).trim();
+      if (!raw) { _set({ mapDrawTile: null, status: 'Placing the tile selected in the Tiles view.' }); return; }
+      var v = parseInt(raw.replace(/^0x/i, ''), 16);
+      if (!Number.isFinite(v) || v < 0 || v > 0x3FF) { _set({ status: 'Tile number must be 0x000 - 0x3FF.' }); return; }
+      _set({ mapDrawTile: v, status: 'Placing tile 0x' + Number(v).toString(16).toUpperCase() + '.' });
+    }
+
+    /* Writing a line of text onto the screen: the table says which code means which
+       character, the font base says which tile holds code 0, and the cells are written
+       as patches. This is how a name gets onto a title screen. */
+    function writeText() {
+      var table = K.hex.activeTable ? K.hex.activeTable() : null;
+      var text = String(textSt[0] || '');
+      var win = mapWindow();
+      if (!table) { _set({ status: 'Load a table first: the text tool needs to know which code is which character.' }); return; }
+      if (!text.trim()) { _set({ status: 'Type the text to write.' }); return; }
+      if (!win) { _set({ status: 'Set a screen base first, or press Detect map.' }); return; }
+      var start = String(startSt[0]).trim() === ''
+        ? Math.max(0, Number(st.mapCursor) >= 0 ? Number(st.mapCursor) : 0)
+        : parseInt(String(startSt[0]).replace(/^0x/i, ''), 16);
+      if (!Number.isFinite(start)) { _set({ status: 'Start cell must be a number.' }); return; }
+      var plan = K.core.planTextOnMap(text, {
+        table: table, base: Number(st.fontBase) || 0, cols: win.cols, startCell: start
+      });
+      var wrote = 0, skipped = 0;
+      plan.cells.forEach(function (one) {
+        if (one.tile === null) { skipped++; return; }
+        if (writeMapEntry(one.cell, one.tile, null, null, null)) wrote++;
+      });
+      _set({
+        status: 'Wrote ' + wrote + ' cell(s) from cell ' + start + ' with font base ' + (Number(st.fontBase) || 0)
+          + (skipped ? ', ' + skipped + ' character(s) not in the table were skipped' : '')
+          + (plan.missing.length ? ' (missing: ' + plan.missing.join(' ') + ')' : '') + '.'
+          + (wrote ? ' Undo discards it.' : '')
+      });
+    }
+
+    var rowStyle = { display: 'flex', gap: 4, alignItems: 'center' };
+    var inputStyle = { flex: '1 1 auto', fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' };
+    var head = { fontWeight: 600, marginTop: 4 };
+
+    return e('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+      e('div', { style: head }, 'Map'),
+      e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'One entry per cell: tile number in bits 0-9, flips in 10-11, palette bank in 12-15. Click places the current tile, Ctrl+click picks it, Alt+click swaps it, Shift+click fills, middle drag scrolls.'),
+      e('button', {
+        type: 'button', className: 'kt-btn',
+        disabled: !hex || !hex.romBytes || st.mapScanning,
+        onClick: detectMap,
+        title: 'Scan 2 KiB aligned blocks for one whose cells reuse few tile numbers'
+      }, st.mapScanning ? 'Scanning...' : 'Detect map'),
+      st.mapCandidates.length ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+        e('div', { style: { opacity: 0.75 } }, 'Screen base candidates'),
+        st.mapCandidates.slice(0, 6).map(function (c) {
+          return e('button', {
+            key: 'map' + c.offset,
+            type: 'button',
+            className: 'kt-btn small' + (st.mapScreenBase === c.offset ? '' : ' secondary'),
+            style: { fontFamily: MONO, justifyContent: 'flex-start' },
+            onClick: function () { _set({ mapScreenBase: c.offset }); }
+          }, '0x' + hex6(c.offset) + '  ' + c.score.toFixed(2) + '  ' + c.distinct + ' tiles');
+        })
+      ) : null,
+      e('div', { style: rowStyle },
+        e('input', {
+          style: inputStyle, value: mapScreenSt[0], spellCheck: false, placeholder: 'screen base (hex)',
+          onChange: function (ev) { mapScreenSt[1](ev.target.value); },
+          onKeyDown: function (ev) { if (ev.key === 'Enter') commitMapScreen(); }
+        }),
+        e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapScreen }, 'Go')
+      ),
+      e('div', { style: rowStyle },
+        e('input', {
+          style: inputStyle, value: mapCharSt[0], spellCheck: false, placeholder: 'character base (empty = tile block)',
+          onChange: function (ev) { mapCharSt[1](ev.target.value); },
+          onKeyDown: function (ev) { if (ev.key === 'Enter') commitMapChar(); }
+        }),
+        e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapChar }, 'Go')
+      ),
+      e('button', {
+        type: 'button', className: 'kt-btn small secondary',
+        title: 'A GBA character base is a 16 KiB block: take the block the current tile region lives in',
+        disabled: st.region === null,
+        onClick: function () {
+          var base = Number(st.region) & ~0x3FFF;
+          _set({ mapCharBase: base, status: 'Character base set to 0x' + hex6(base) + ', the 16 KiB block of the tile region.' });
+        }
+      }, 'Character block of the tile region'),
+      e('label', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+        'Map size',
+        e('select', {
+          className: 'kt-select', value: st.mapSize,
+          onChange: function (ev) { _set({ mapSize: ev.target.value }); },
+          style: { fontSize: 11 }
+        }, Object.keys(mapSizes()).map(function (id) { return e('option', { key: id, value: id }, id); }))
+      ),
+      e('div', { style: rowStyle },
+        e('input', {
+          style: inputStyle, value: mapTileSt[0], spellCheck: false, placeholder: 'tile to place (hex, empty = selected)',
+          onChange: function (ev) { mapTileSt[1](ev.target.value); },
+          onKeyDown: function (ev) { if (ev.key === 'Enter') commitMapTile(); }
+        }),
+        e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapTile }, 'Set')
+      ),
+
+      e('div', { style: head }, 'Write text on this screen'),
+      e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'The table gives the code of each character and the font base gives the tile that holds code 0, so this writes the tile numbers a screen needs. A newline starts the next row.'),
+      e('textarea', {
+        value: textSt[0],
+        onChange: function (ev) { textSt[1](ev.target.value); },
+        placeholder: 'your name, or two lines',
+        spellCheck: false,
+        style: { minHeight: 44, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: 4, resize: 'vertical' }
+      }),
+      e('div', { style: rowStyle },
+        e('input', {
+          style: inputStyle, value: startSt[0], spellCheck: false, placeholder: 'start cell (empty = map cursor)',
+          onChange: function (ev) { startSt[1](ev.target.value); }
+        }),
+        e('button', { type: 'button', className: 'kt-btn small', onClick: writeText }, 'Write')
+      ),
+      e('div', { style: { display: 'flex', gap: 4 } },
+        e('button', {
+          type: 'button', className: 'kt-btn small secondary',
+          disabled: st.region === null || !hex || !hex.romBytes,
+          title: 'Copy this region into free space and rewrite every pointer that named the old address',
+          onClick: function () { repointRegion(64); }
+        }, 'Move region'),
+        e('button', {
+          type: 'button', className: 'kt-btn small secondary',
+          disabled: !hex || !hex.romBytes,
+          title: 'Take the offset the Hex Editor cursor sits on as the region, and open it as a compressed graphic when a stream starts there',
+          onClick: function () {
+            var at = Number(K.hex.getState().cursorOffset) || 0;
+            var src = K.hex.getSourceBytes();
+            var head2 = (K.core.compressionHeaderAt && src) ? K.core.compressionHeaderAt(src, at, {}) : null;
+            if (head2) {
+              var dec = K.core.decompressAt(src, at, {});
+              openCandidate({ kind: 'compressed', offset: at, type: head2.type, size: head2.size, label: head2.label, dataOffset: 0, compressedSize: dec ? (dec.end - at) : 0 });
+              return;
+            }
+            _set({ region: at, graphicSource: null, status: 'Region set to the hex cursor: 0x' + hex6(at) + '.' });
+          }
+        }, 'Region = cursor')
+      )
+    );
+  }
+
   function TileInspector() {
     var st = useTile();
     var hex = K.hex ? K.hex.useHex() : null;
@@ -1744,7 +1926,8 @@
         e('button', { type: 'button', className: 'kt-btn small', onClick: applyPaste }, 'Apply'),
         e('button', { type: 'button', className: 'kt-btn small secondary', onClick: copyHexText }, 'Copy tile 0'),
         e('button', { type: 'button', className: 'kt-btn small secondary', onClick: function () { pasteSt[1](''); } }, 'Clear')
-      )
+      ),
+      e(MapInspector, null)
     );
   }
 
@@ -1753,50 +1936,12 @@
     var hex = K.hex ? K.hex.useHex() : null;
     var formats = (K.core && K.core.TILE_FORMATS) || {};
     var regionSt = uS(st.region === null ? '' : hex6(st.region));
-    var palSt = uS(st.paletteOffset === null ? '' : hex6(st.paletteOffset));
 
     uE(function () { regionSt[1](st.region === null ? '' : hex6(st.region)); }, [st.region]);
-    uE(function () { palSt[1](st.paletteOffset === null ? '' : hex6(st.paletteOffset)); }, [st.paletteOffset]);
-
     function commitRegion() {
       var v = parseInt(String(regionSt[0]).replace(/^0x/i, ''), 16);
       if (!Number.isFinite(v)) { _set({ status: 'Region must be a hex offset.' }); return; }
       _set({ region: v });
-    }
-    var mapScreenSt = uS(st.mapScreenBase === null ? '' : hex6(st.mapScreenBase));
-    var mapCharSt = uS(hex6(st.mapCharBase));
-    var mapTileSt = uS(st.mapDrawTile === null ? '' : Number(st.mapDrawTile).toString(16).toUpperCase());
-
-    uE(function () { mapScreenSt[1](st.mapScreenBase === null ? '' : hex6(st.mapScreenBase)); }, [st.mapScreenBase]);
-    uE(function () { mapCharSt[1](hex6(charBase())); }, [st.mapCharBase, st.region]);
-    uE(function () { mapTileSt[1](st.mapDrawTile === null ? '' : Number(st.mapDrawTile).toString(16).toUpperCase()); }, [st.mapDrawTile]);
-
-    function commitMapScreen() {
-      var raw = String(mapScreenSt[0]).trim();
-      if (!raw) { _set({ mapScreenBase: null, status: 'No screen base: use Detect map or type one.' }); return; }
-      var v = parseInt(raw.replace(/^0x/i, ''), 16);
-      if (!Number.isFinite(v)) { _set({ status: 'Screen base must be a hex offset.' }); return; }
-      _set({ mapScreenBase: v & ~0x7FF });
-    }
-    function commitMapChar() {
-      var raw = String(mapCharSt[0]).trim();
-      if (!raw) { _set({ mapCharBase: null, status: 'Character base follows the tile region block again.' }); return; }
-      var v = parseInt(raw.replace(/^0x/i, ''), 16);
-      if (!Number.isFinite(v)) { _set({ status: 'Character base must be a hex offset.' }); return; }
-      _set({ mapCharBase: v & ~0x3FFF });
-    }
-    function commitMapTile() {
-      var raw = String(mapTileSt[0]).trim();
-      if (!raw) { _set({ mapDrawTile: null, status: 'Placing the tile selected in the Tiles view.' }); return; }
-      var v = parseInt(raw.replace(/^0x/i, ''), 16);
-      if (!Number.isFinite(v) || v < 0 || v > 0x3FF) { _set({ status: 'Tile number must be 0x000 - 0x3FF.' }); return; }
-      _set({ mapDrawTile: v, status: 'Placing tile 0x' + Number(v).toString(16).toUpperCase() + '.' });
-    }
-
-    function commitPalette() {
-      var v = parseInt(String(palSt[0]).replace(/^0x/i, ''), 16);
-      if (!Number.isFinite(v)) { _set({ status: 'Palette offset must be a hex offset.' }); return; }
-      loadPalette(v);
     }
 
     var rowStyle = { display: 'flex', gap: 4, alignItems: 'center' };
@@ -1889,94 +2034,7 @@
         }),
         e('button', { type: 'button', className: 'kt-btn small', onClick: commitRegion }, 'Go')
       ),
-      e('button', {
-        type: 'button', className: 'kt-btn small secondary',
-        disabled: st.region === null || !hex || !hex.romBytes,
-        title: 'Copy this region into free space and rewrite every pointer that named the old address. The move is kept as patches, so Undo or Clear discards it.',
-        onClick: function () { repointRegion(64); }
-      }, 'Move region to free space'),
-      e('button', {
-        type: 'button', className: 'kt-btn small secondary',
-        disabled: !hex || !hex.romBytes,
-        title: 'Take the offset the Hex Editor cursor sits on as the region, and open it as a compressed graphic when a stream starts there',
-        onClick: function () {
-          var at = Number(K.hex.getState().cursorOffset) || 0;
-          var src = K.hex.getSourceBytes();
-          var head = (K.core.compressionHeaderAt && src) ? K.core.compressionHeaderAt(src, at, {}) : null;
-          if (head) {
-            var dec = K.core.decompressAt(src, at, {});
-            openCandidate({
-              kind: 'compressed', offset: at, type: head.type, size: head.size, label: head.label,
-              dataOffset: 0, compressedSize: dec ? (dec.end - at) : 0
-            });
-            return;
-          }
-          _set({ region: at, graphicSource: null, status: 'Region set to the hex cursor: 0x' + hex6(at) + '.' });
-        }
-      }, 'Region = hex cursor'),
-      e('div', { style: { height: 1, background: 'var(--kt-widget-border-default)', margin: '2px 0' } }),
-      e('div', { style: { fontWeight: 600 } }, 'Map'),
-      e('div', { style: { opacity: 0.7, lineHeight: 1.45 } }, 'GBA text mode map: one 2 byte entry per cell, tile number in bits 0-9, flips in 10-11, palette bank in 12-15. Click places the current tile, Ctrl+click picks it, Alt+click swaps it, Shift+click fills, middle drag scrolls.'),
-      e('button', {
-        type: 'button', className: 'kt-btn',
-        disabled: !hex || !hex.romBytes || st.mapScanning,
-        onClick: detectMap,
-        title: 'Scan 2 KiB aligned blocks for one whose cells reuse few tile numbers'
-      }, st.mapScanning ? 'Scanning...' : 'Detect map'),
-      st.mapCandidates.length ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-        e('div', { style: { opacity: 0.75 } }, 'Screen base candidates (score)'),
-        st.mapCandidates.map(function (c) {
-          return e('button', {
-            key: 'map' + c.offset,
-            type: 'button',
-            className: 'kt-btn small' + (st.mapScreenBase === c.offset ? '' : ' secondary'),
-            style: { fontFamily: MONO, justifyContent: 'flex-start' },
-            onClick: function () { _set({ mapScreenBase: c.offset }); }
-          }, '0x' + hex6(c.offset) + '  ' + c.score.toFixed(2) + '  ' + c.distinct + ' tiles');
-        })
-      ) : null,
-      e('div', { style: rowStyle },
-        e('input', {
-          style: inputStyle, value: mapScreenSt[0], spellCheck: false, placeholder: 'screen base (hex)',
-          onChange: function (ev) { mapScreenSt[1](ev.target.value); },
-          onKeyDown: function (ev) { if (ev.key === 'Enter') commitMapScreen(); }
-        }),
-        e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapScreen }, 'Go')
-      ),
-      e('div', { style: rowStyle },
-        e('input', {
-          style: inputStyle, value: mapCharSt[0], spellCheck: false, placeholder: 'character base (empty = tile block)',
-          onChange: function (ev) { mapCharSt[1](ev.target.value); },
-          onKeyDown: function (ev) { if (ev.key === 'Enter') commitMapChar(); }
-        }),
-        e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapChar }, 'Go')
-      ),
-      e('button', {
-        type: 'button', className: 'kt-btn small secondary',
-        title: 'A GBA character base is a 16 KiB block: take the block the current tile region lives in',
-        disabled: st.region === null,
-        onClick: function () {
-          var base = Number(st.region) & ~0x3FFF;
-          _set({ mapCharBase: base, status: 'Character base set to 0x' + hex6(base) + ', the 16 KiB block of the tile region.' });
-        }
-      }, 'Character block of the tile region'),
-      e('label', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-        'Map size',
-        e('select', {
-          className: 'kt-select', value: st.mapSize,
-          onChange: function (ev) { _set({ mapSize: ev.target.value }); },
-          style: { fontSize: 11 }
-        }, Object.keys(mapSizes()).map(function (id) { return e('option', { key: id, value: id }, id); }))
-      ),
-      e('div', { style: rowStyle },
-        e('input', {
-          style: inputStyle, value: mapTileSt[0], spellCheck: false, placeholder: 'tile to place (hex, empty = selected)',
-          onChange: function (ev) { mapTileSt[1](ev.target.value); },
-          onKeyDown: function (ev) { if (ev.key === 'Enter') commitMapTile(); }
-        }),
-        e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapTile }, 'Set')
-      ),
-      e('div', { style: { opacity: 0.7, lineHeight: 1.45 } }, 'Palette, map and hex controls live in the inspector panel on the right of the canvas.'),
+      e('div', { style: { opacity: 0.7, lineHeight: 1.45 } }, 'Palette, map, text and hex controls live in the inspector on the right of the canvas.'),
       e('div', { style: { opacity: 0.7, lineHeight: 1.45 } }, st.status || 'Detect a region, then click a tile and paint pixels. Every pixel is written as a hex patch.')
     );
   }
