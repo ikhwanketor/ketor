@@ -46,10 +46,12 @@
     ps2:     { name: 'PS2',     size: 4, little: true,  align: 4, base: 0x00100000 },
     psp:     { name: 'PSP',     size: 4, little: true,  align: 4, base: 0x08800000 },
     genesis: { name: 'Genesis', size: 4, little: false, align: 2, base: 0x00000000 },
-    snes:    { name: 'SNES',    size: 2, little: true,  align: 2, base: 0x8000, banked: true, bankSize: 0x8000, flagMask: 0x7FFF },
-    nes:     { name: 'NES',     size: 2, little: true,  align: 2, base: 0x8000, banked: true, bankSize: 0x4000, flagMask: 0x7FFF },
-    gb:      { name: 'GB',      size: 2, little: true,  align: 2, base: 0x4000, banked: true, bankSize: 0x4000 },
-    gbc:     { name: 'GBC',     size: 2, little: true,  align: 2, base: 0x4000, banked: true, bankSize: 0x4000 },
+    snes:    { name: 'SNES',    size: 2, little: true,  align: 2, base: 0x8000, banked: true, bankStep: 0x8000, window: 0x8000, threeByte: true },
+    snesHi:  { name: 'SNES HiROM', size: 2, little: true, align: 2, base: 0x8000, banked: true, bankStep: 0x10000, window: 0x8000 },
+    nes:     { name: 'NES',     size: 2, little: true,  align: 2, base: 0x8000, banked: true, bankStep: 0x4000, window: 0x8000, flagMask: 0x7FFF },
+    nes32:   { name: 'NES 32K', size: 2, little: true, align: 2, base: 0xC000, banked: true, bankStep: 0x4000, window: 0x4000 },
+    gb:      { name: 'GB',      size: 2, little: true,  align: 2, base: 0x4000, banked: true, bankStep: 0x4000, window: 0x4000, threeByte: true },
+    gbc:     { name: 'GBC',     size: 2, little: true,  align: 2, base: 0x4000, banked: true, bankStep: 0x4000, window: 0x4000, threeByte: true },
     pce:     { name: 'PCE',     size: 2, little: true,  align: 2, base: 0x2000, banked: true, bankSize: 0x2000 }
   };
 
@@ -92,11 +94,22 @@
         target = v;
       } else if (mode === 'bank') {
         /* A 16 bit pointer carries no bank: the bank is the one the table itself
-           lives in, which is how NES, SNES, GB and PCE engines address their data.
-           The target is therefore bankStart + (value - cpuBase). */
-        var bankStart = Math.floor(at / rules.bankSize) * rules.bankSize;
+           lives in. The window is the CPU window (32K on NES and SNES LoROM, 16K
+           on GB) and the bank step is how far the file advances per bank, so a
+           pointer into the upper half of a NES window lands in the next 16K bank. */
+        var bankStep = rules.bankStep || rules.bankSize || 0x4000;
+        var window = rules.window || bankStep;
+        var bankStart = Math.floor(at / bankStep) * bankStep;
         var within = v - rules.base;
-        if (within >= 0 && within < rules.bankSize) target = bankStart + within;
+        if (within >= 0 && within < window) target = bankStart + within;
+      } else if (mode === 'bank3') {
+        /* Three byte pointers (bank plus address), as SNES and GB writers use them. */
+        if (at + 3 > bytes.length) continue;
+        var addr3 = bytes[at] | (bytes[at + 1] << 8);
+        var bank3v = bytes[at + 2];
+        var step3 = rules.bankStep || 0x8000;
+        if (addr3 < rules.base) continue;
+        target = bank3v * step3 + (addr3 - rules.base);
       }
       if (target < 0 || target >= bytes.length) continue;
       if (rules.romTop && size === 4 && v >= rules.romTop) continue;
@@ -118,7 +131,7 @@
   /* A table can contain an entry that is not a pointer at all (a zero, a flag
      word), which used to cut one table into two. A run therefore tolerates a few
      missing sites as long as every step stays a multiple of the stride. */
-  function tableRunsFrom(sites, minEntries, missingAllowed) {
+  function tableRunsFrom(bytes, sites, minEntries, missingAllowed, termSet) {
     var runs = [];
     var i = 0;
     while (i < sites.length - 1) {
@@ -128,7 +141,11 @@
       while (end + 1 < sites.length) {
         var step = sites[end + 1].at - sites[end].at;
         if (step === stride) { end++; continue; }
-        if (step > stride && step <= stride * (missingAllowed + 1) && step % stride === 0) { end++; continue; }
+        /* A hole (an entry that is not a pointer at all) may be crossed, but only
+           when the records on both sides still read like records: the structure
+           decides, not the distance. */
+        if (step > stride && step <= stride * (missingAllowed + 1) &&
+            (step % stride === 0 || spanIsRecord(bytes, sites[end].target, sites[end + 1].target, termSet))) { end++; continue; }
         break;
       }
       var count = end - i + 1;
@@ -152,11 +169,11 @@
     var deltaWindow = Number.isFinite(opts.deltaWindow) ? opts.deltaWindow : 4;
 
     var results = [];
-    var modes = rules.banked ? ['bank', 'base', 'raw'] : ['base', 'raw'];
+    var modes = rules.banked ? (rules.threeByte ? ['bank', 'bank3', 'base', 'raw'] : ['bank', 'base', 'raw']) : ['base', 'raw'];
     modes.forEach(function (mode) {
       var sites = candidateSites(bytes, rules, mode);
       if (sites.length < minEntries) return;
-      var runs = tableRunsFrom(sites, minEntries, 4);
+      var runs = tableRunsFrom(bytes, sites, minEntries, 4, termSet);
       runs.forEach(function (run) {
         var stride = run.stride;
         var lo = sites[run.from].at;
