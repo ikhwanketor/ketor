@@ -56,6 +56,7 @@
     graphicSource: null,
     romIdentity: null,
     inspector: true,
+    fontBase: 0,
     format: 'gba-4bpp',
     palette: null,
     paletteOffset: null,
@@ -1092,8 +1093,12 @@
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       var drawn = 0;
       for (var t = 0; t < props.tiles; t++) {
-        var off = t * size;
-        if (off < 0 || off + size > props.bytes.length) break;
+        // a font view draws the sheet in character order, so the drawn slot and the
+        // tile in the buffer are two different numbers
+        var source = props.order ? props.order[t] : t;
+        if (source === null || source === undefined) continue;
+        var off = source * size;
+        if (off < 0 || off + size > props.bytes.length) continue;
         var px = C.decodeTile(props.bytes, off, fmt);
         var tx = (t % perRow) * 8 * z;
         var ty = Math.floor(t / perRow) * 8 * z;
@@ -1134,8 +1139,23 @@
         ctx.strokeStyle = '#ffffff';
         ctx.strokeRect(ptx + 0.5, pty + 0.5, z - 1, z - 1);
       }
+      // the character each glyph stands for, so a font reads as a font
+      if (props.labels) {
+        ctx.font = Math.max(8, Math.round(8 * z * 0.5)) + 'px monospace';
+        ctx.textBaseline = 'top';
+        for (var li = 0; li < props.tiles; li++) {
+          var label = props.labels[li];
+          if (!label) continue;
+          var lx = (li % perRow) * 8 * z + 2;
+          var ly = Math.floor(li / perRow) * 8 * z + 2;
+          ctx.fillStyle = 'rgba(0,0,0,0.55)';
+          ctx.fillRect(lx - 1, ly - 1, ctx.measureText(label).width + 3, Math.round(8 * z * 0.5) + 3);
+          ctx.fillStyle = '#ffd479';
+          ctx.fillText(label, lx, ly);
+        }
+      }
       if (props.onDrawn) props.onDrawn(drawn);
-    }, [props.windowKey, props.format, props.zoom, props.tiles, props.selected, props.selPixel, props.cursorTile, props.cursorByte, props.palette, props.width]);
+    }, [props.windowKey, props.format, props.zoom, props.tiles, props.selected, props.selPixel, props.cursorTile, props.cursorByte, props.palette, props.width, props.orderKey]);
     return e('canvas', {
       ref: ref,
       onMouseDown: props.onClick,
@@ -1254,6 +1274,26 @@
     var windowKey = win ? win.key : 'none';
     var mapKey = mapWin ? mapWin.key : 'none';
     var charKey = charWin ? charWin.key : 'none';
+    /* A font view is the same sheet, drawn in character order and labelled with the
+       characters the table names. The slot on screen and the tile in the buffer are
+       then two different numbers, which is the whole point. */
+    var fontOrder = null;
+    var fontLabels = null;
+    var orderKey = 'plain';
+    if (st.view === 'font' && K.core.codeChars) {
+      var fontTable = K.hex.activeTable ? K.hex.activeTable() : null;
+      var fontCodes = K.core.codeChars(fontTable);
+      var fontBaseNow = Number(st.fontBase) || 0;
+      fontOrder = [];
+      fontLabels = [];
+      for (var slot = 0; slot < st.tiles; slot++) {
+        fontOrder.push(fontBaseNow + slot);
+        var slotChar = fontCodes[slot];
+        fontLabels.push(slotChar === undefined || slotChar === ' ' ? '' : slotChar);
+      }
+      orderKey = 'font:' + fontBaseNow + ':' + st.tiles + ':' + (fontTable && fontTable.entryCount ? fontTable.entryCount : 0);
+    }
+
     var hexCell = -1;
     if (hex && mapWin) {
       var mapRel = Number(hex.cursorOffset) - mapWin.start;
@@ -1338,7 +1378,10 @@
       var hit = K.core.tileHit(point.x, point.y, {
         zoom: st.zoom, availableWidth: width - 16, tiles: st.tiles, tileWidth: 8, tileHeight: 8
       });
-      return hit ? { tile: hit.tile, x: hit.x, y: hit.y } : null;
+      if (!hit) return null;
+      var real = fontOrder ? fontOrder[hit.tile] : hit.tile;
+      if (real === null || real === undefined) return null;
+      return { tile: real, slot: hit.tile, x: hit.x, y: hit.y };
     }
 
     function line(x0, y0, x1, y1, fn) {
@@ -1510,6 +1553,19 @@
         e('span', { style: { opacity: 0.25 } }, '|'),
         e('button', { type: 'button', className: TB + (st.view === 'tiles' ? '' : ' secondary'), onClick: function () { _set({ view: 'tiles' }); } }, 'Tiles'),
         e('button', { type: 'button', className: TB + (st.view === 'map' ? '' : ' secondary'), onClick: function () { _set({ view: 'map' }); } }, 'Map'),
+        e('button', {
+          type: 'button', className: TB + (st.view === 'font' ? '' : ' secondary'),
+          title: 'Draw the sheet in character order, labelled from the loaded table',
+          onClick: function () { _set({ view: 'font' }); }
+        }, 'Font'),
+        st.view === 'font' ? e('span', { style: { display: 'flex', alignItems: 'center', gap: 3 } },
+          e('span', { style: { opacity: 0.7 } }, 'base'),
+          e('input', {
+            type: 'number', value: st.fontBase,
+            onChange: function (ev) { _set({ fontBase: Math.max(0, Number(ev.target.value) || 0) }); },
+            style: { width: 62, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' }
+          })
+        ) : null,
         st.view === 'map' ? e('button', { type: 'button', className: TB + (st.mapFlipH ? '' : ' secondary'), title: 'Flip horizontally when placing (X)', onClick: function () { _set({ mapFlipH: !st.mapFlipH }); } }, 'H') : null,
         st.view === 'map' ? e('button', { type: 'button', className: TB + (st.mapFlipV ? '' : ' secondary'), title: 'Flip vertically when placing (Y)', onClick: function () { _set({ mapFlipV: !st.mapFlipV }); } }, 'V') : null,
         e('span', { style: { flex: 1 } }),
@@ -1532,6 +1588,7 @@
           windowKey: windowKey,
           format: st.format, zoom: st.zoom, tiles: st.tiles,
           selected: selected, selPixel: sel, palette: st.palette,
+          order: fontOrder, labels: fontLabels, orderKey: orderKey,
           cursorTile: cursorTile, cursorByte: cursorByte,
           width: Math.max(200, width - 16),
           onClick: onDown, onMove: onMove, onUp: onUp, onContext: onContext
