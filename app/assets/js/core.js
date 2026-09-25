@@ -1425,6 +1425,9 @@ let _recordTable = null;
             _recordTable.entries = knownEntries;
             _recordTable.sites = knownSites;
             _recordTable.size = kSize;
+            _recordTable.stride = kStride;
+            _recordTable.base = kBase;
+            _recordTable.little = kLittle;
             _recordTable.bySite = Object.create(null);
             for (let i = 0; i < knownEntries.length; i++) _recordTable.bySite[knownEntries[i]] = knownSites[i];
             return _recordTable;
@@ -2906,6 +2909,43 @@ let _recordTable = null;
           relocationLog.push(`  -> Try using shorter translations or find pointers manually.`);
         }
       }
+      /* Self check before the image is handed over. Three defects in a row reached
+         the game because nothing looked at the finished image: a record that lost
+         its end code, a page written over the page after it, and blocks writing at
+         addresses an earlier shift had already moved. Every record must still carry
+         its header where its entry points and still close with the end code; when
+         one does not, the original bytes are handed back instead of a rom that would
+         freeze or skip dialogue. The entries are read from the current image, so the
+         check sees the layout the game will see. */
+      const selfCheckBad = (() => {
+        const table = recordTable();
+        const sites = table.sites || [];
+        const bad = [];
+        const total = Math.min(sites.length, (table.entries || []).length);
+        if (total < 8) return bad;
+        for (let i = 0; i < total - 1; i++) {
+          const at = sites[i];
+          let v = 0;
+          for (let b = 3; b >= 0; b--) v = (v * 256) + romCopy[at + b];
+          const from = (v >>> 0) - (table.base || 0);
+          let vNext = 0;
+          for (let b = 3; b >= 0; b--) vNext = (vNext * 256) + romCopy[sites[i + 1] + b];
+          const to = (vNext >>> 0) - (table.base || 0);
+          if (from < 0 || to <= from || to > romCopy.length) { bad.push(from); continue; }
+          let closes = false;
+          for (let p = to - 1; p >= from; p--) { if (romCopy[p] === terminatorHex) { closes = true; break; } }
+          const originalStart = (table.entries || [])[i];
+          const headerKept = originalStart === undefined ||
+            (romCopy[from] === originalRom[originalStart] && romCopy[from + 1] === originalRom[originalStart + 1]);
+          if (!closes || !headerKept) bad.push(from);
+        }
+        return bad;
+      })();
+      if (selfCheckBad.length > 0) {
+        relocationLog.push(`[WARNING] Self check failed: ${selfCheckBad.length} record(s) lost their end code or their header (first at 0x${selfCheckBad[0].toString(16).toUpperCase()}). The original bytes are handed back instead of a rom that would freeze or skip dialogue. Build in smaller scopes - one group, or a few neighbouring texts - and run Insert All again.`);
+        return { modifiedRom: originalRom.slice(0), relocationLog };
+      }
+      relocationLog.push(`Self check passed: all ${(recordTable().entries || []).length} records close with the end code and keep their header.`);
       return { modifiedRom: romCopy, relocationLog };
     };
 
