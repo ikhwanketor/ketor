@@ -122,18 +122,35 @@
     return best;
   }
 
-  /* Text to tile numbers, which is what writing on a screen needs. A character
-     the table does not know comes back as null so the caller can say so. */
-  function textToTiles(text, tableData, base) {
+  /* Text to tile numbers, which is what writing on a screen needs.
+
+     A font does not have to start at code 0. The font found in the test ROM starts
+     at code 0x20: its first tile is the space, then ! and so on, so 'A' is the
+     thirty fourth tile of the sheet, not the sixty sixth. That is the firstCode
+     option, and without it every character written would be 32 tiles out.
+
+     A character the table does not know, or one that falls outside the sheet, comes
+     back as null so the caller can say so instead of writing something wrong. */
+  function textToTiles(text, tableData, base, options) {
+    var opts = options || {};
+    var firstCode = opts.firstCode === undefined ? 0 : Number(opts.firstCode) || 0;
+    var sheetTiles = opts.sheetTiles === undefined ? 0 : Number(opts.sheetTiles) || 0;
     var codes = charCodes(tableData);
     var start = Number(base) || 0;
     var tiles = [];
     var missing = {};
+    var outside = {};
     String(text || '').split('').forEach(function (ch) {
       if (codes[ch] === undefined) { missing[ch] = true; tiles.push(null); return; }
-      tiles.push((start + codes[ch]) & 0x3FF);
+      var tile = start + (codes[ch] - firstCode);
+      if (tile < 0 || tile > 0x3FF || (sheetTiles && tile >= start + sheetTiles)) {
+        outside[ch] = true;
+        tiles.push(null);
+        return;
+      }
+      tiles.push(tile & 0x3FF);
     });
-    return { tiles: tiles, missing: Object.keys(missing) };
+    return { tiles: tiles, missing: Object.keys(missing), outside: Object.keys(outside) };
   }
 
   /* Where the characters go. A screen is written row by row, and a newline moves
@@ -143,7 +160,7 @@
     var cols = Math.max(1, Number(opts.cols) || 32);
     var startCell = Math.max(0, Number(opts.startCell) || 0);
     var limit = opts.limit === undefined ? 0 : Number(opts.limit);
-    var converted = textToTiles(text, opts.table, opts.base);
+    var converted = textToTiles(text, opts.table, opts.base, { firstCode: opts.firstCode, sheetTiles: opts.sheetTiles });
     var cells = [];
     var cell = startCell;
     for (var i = 0; i < converted.tiles.length; i++) {
@@ -153,7 +170,7 @@
       cells.push({ cell: cell, tile: converted.tiles[i], char: ch });
       cell++;
     }
-    return { cells: cells, missing: converted.missing, endCell: cell };
+    return { cells: cells, missing: converted.missing, outside: converted.outside || [], endCell: cell };
   }
 
   /* The glyph sheet in character order, which is what a font view draws. */

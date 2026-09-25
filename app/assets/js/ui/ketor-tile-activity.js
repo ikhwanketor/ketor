@@ -57,6 +57,9 @@
     romIdentity: null,
     inspector: true,
     fontBase: 0,
+    // a font does not have to start at code 0: the one in this ROM starts at 0x20,
+    // so its first tile is the space and A is the 34th tile of the sheet
+    fontFirstCode: 0x20,
     format: 'gba-4bpp',
     palette: null,
     paletteOffset: null,
@@ -1290,12 +1293,14 @@
       var fontBaseNow = Number(st.fontBase) || 0;
       fontOrder = [];
       fontLabels = [];
+      var firstCodeNow = Number(st.fontFirstCode) || 0;
       for (var slot = 0; slot < st.tiles; slot++) {
         fontOrder.push(fontBaseNow + slot);
-        var slotChar = fontCodes[slot];
+        // the tile at this slot holds code firstCode + slot, whatever the base is
+        var slotChar = fontCodes[firstCodeNow + slot];
         fontLabels.push(slotChar === undefined || slotChar === ' ' ? '' : slotChar);
       }
-      orderKey = 'font:' + fontBaseNow + ':' + st.tiles + ':' + (fontTable && fontTable.entryCount ? fontTable.entryCount : 0);
+      orderKey = 'font:' + fontBaseNow + ':' + st.tiles + ':' + firstCodeNow + ':' + (fontTable && fontTable.entryCount ? fontTable.entryCount : 0);
     }
 
     var hexCell = -1;
@@ -1563,11 +1568,17 @@
           onClick: function () { _set({ view: 'font' }); }
         }, 'Font'),
         st.view === 'font' ? e('span', { style: { display: 'flex', alignItems: 'center', gap: 3 } },
-          e('span', { style: { opacity: 0.7 } }, 'base'),
+          e('span', { style: { opacity: 0.7 }, title: 'Tile number that holds the first code of the font' }, 'base'),
           e('input', {
             type: 'number', value: st.fontBase,
             onChange: function (ev) { _set({ fontBase: Math.max(0, Number(ev.target.value) || 0) }); },
-            style: { width: 62, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' }
+            style: { width: 58, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' }
+          }),
+          e('span', { style: { opacity: 0.7 }, title: 'The code the first tile of the sheet holds, 0x20 when a font starts at the space' }, 'first code'),
+          e('input', {
+            type: 'text', value: '0x' + (Number(st.fontFirstCode) || 0).toString(16).toUpperCase(),
+            onChange: function (ev) { _set({ fontFirstCode: parseInt(String(ev.target.value).replace(/^0x/i, ''), 16) || 0 }); },
+            style: { width: 52, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' }
           })
         ) : null,
         st.view === 'map' ? e('button', { type: 'button', className: TB + (st.mapFlipH ? '' : ' secondary'), title: 'Flip horizontally when placing (X)', onClick: function () { _set({ mapFlipH: !st.mapFlipH }); } }, 'H') : null,
@@ -1677,7 +1688,8 @@
         : parseInt(String(startSt[0]).replace(/^0x/i, ''), 16);
       if (!Number.isFinite(start)) { _set({ status: 'Start cell must be a number.' }); return; }
       var plan = K.core.planTextOnMap(text, {
-        table: table, base: Number(st.fontBase) || 0, cols: win.cols, startCell: start
+        table: table, base: Number(st.fontBase) || 0, firstCode: Number(st.fontFirstCode) || 0,
+        sheetTiles: st.tiles, cols: win.cols, startCell: start
       });
       var wrote = 0, skipped = 0;
       plan.cells.forEach(function (one) {
@@ -1686,8 +1698,10 @@
       });
       _set({
         status: 'Wrote ' + wrote + ' cell(s) from cell ' + start + ' with font base ' + (Number(st.fontBase) || 0)
-          + (skipped ? ', ' + skipped + ' character(s) not in the table were skipped' : '')
-          + (plan.missing.length ? ' (missing: ' + plan.missing.join(' ') + ')' : '') + '.'
+          + ' and first code 0x' + (Number(st.fontFirstCode) || 0).toString(16).toUpperCase()
+          + (skipped ? ', ' + skipped + ' character(s) were skipped' : '')
+          + (plan.missing && plan.missing.length ? ' (not in the table: ' + plan.missing.join(' ') + ')' : '')
+          + (plan.outside && plan.outside.length ? ' (outside the sheet: ' + plan.outside.join(' ') + ')' : '') + '.'
           + (wrote ? ' Undo discards it.' : '')
       });
     }
@@ -1774,6 +1788,20 @@
           onChange: function (ev) { startSt[1](ev.target.value); }
         }),
         e('button', { type: 'button', className: 'kt-btn small', onClick: writeText }, 'Write')
+      ),
+      e('div', { style: rowStyle },
+        e('span', { style: { opacity: 0.7 } }, 'font base'),
+        e('input', {
+          style: { width: 58, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' },
+          type: 'number', value: st.fontBase,
+          onChange: function (ev) { _set({ fontBase: Math.max(0, Number(ev.target.value) || 0) }); }
+        }),
+        e('span', { style: { opacity: 0.7 } }, 'first code'),
+        e('input', {
+          style: { width: 52, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' },
+          type: 'text', value: '0x' + (Number(st.fontFirstCode) || 0).toString(16).toUpperCase(),
+          onChange: function (ev) { _set({ fontFirstCode: parseInt(String(ev.target.value).replace(/^0x/i, ''), 16) || 0 }); }
+        })
       ),
       e('div', { style: { display: 'flex', gap: 4 } },
         e('button', {
