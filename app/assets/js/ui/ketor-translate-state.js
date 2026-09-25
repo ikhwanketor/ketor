@@ -467,9 +467,15 @@
     var patched = new Uint8Array(rb.buffer.slice(rb.byteOffset, rb.byteOffset + rb.byteLength));
     var appliedPatches = 0;
     var hexState = (K.hex && typeof K.hex.getState === 'function') ? K.hex.getState() : null;
+    // Build from the loaded file, never from a buffer that already holds a
+    // previous insert: the insert is written into free space, so rebuilding on
+    // top of it finds new free space every time and duplicates the text.
+    var insertedOffsets = (K.hex && typeof K.hex.getInsertedOffsets === 'function')
+      ? K.hex.getInsertedOffsets() : {};
     if (hexState && hexState.patches) {
       Object.keys(hexState.patches).forEach(function (key) {
         var off = parseInt(key, 10);
+        if (insertedOffsets[off]) return;
         if (Number.isFinite(off) && off >= 0 && off < patched.length) {
           patched[off] = hexState.patches[key] & 0xFF;
           appliedPatches++;

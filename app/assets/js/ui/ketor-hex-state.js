@@ -39,6 +39,9 @@
     // second view over the same session, never a replacement: patches,
     // bookmarks and the ROM key stay attached to the loaded file.
     compiledBytes: null, compiledAt: 0, compiledScope: '',
+    // Offsets the last insert owns. They are dropped before the next insert so
+    // pressing Insert twice cannot duplicate the text.
+    insertedOffsets: {},
     // Where the last compile moved text to, from the build worker's own
     // report. The compiled view marks those ranges so "did it repoint?" can be
     // answered by looking at the ROM instead of at a log line.
@@ -488,14 +491,17 @@
     // Editor shows the inserted bytes, paints them as changed bytes, Clear
     // discards them (back to the source) and Export writes source + patches.
     var patches = Object.assign({}, _state.patches);
+    var inserted = {};
     var diffCount = 0;
     for (var i = 0; i < data.length; i++) {
       if (data[i] === source[i]) continue;
+      inserted[i] = true;
       if (patches[i] !== data[i]) diffCount++;
       patches[i] = data[i];
     }
     _set({
       patches: patches,
+      insertedOffsets: inserted,
       compiledBytes: data,
       compileRelocations: Array.isArray(info.relocations) ? info.relocations.slice() : [],
       compiledAt: Number(info.at) || Date.now(),
@@ -1022,6 +1028,11 @@
   K.hex.setCompiledRom = setCompiledRom;
   K.hex.clearCompiledRom = clearCompiledRom;
   K.hex.adoptInsertedRom = adoptInsertedRom;
+  /* The file that was loaded, without any insert on top: the next insert has
+     to start from it, otherwise every press of Insert writes another copy of
+     the same text into the next free run of the ROM. */
+  K.hex.getSourceBytes = function () { return _state.romBytes; };
+  K.hex.getInsertedOffsets = function () { return _state.insertedOffsets || {}; };
   K.hex.clearCompiledRelocations = function () {
     _set({ compileRelocations: [] });
     return true;
