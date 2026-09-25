@@ -394,7 +394,9 @@
       var len = Math.max(1, Number(t.byteLength) || 1);
       var decoded = decodeRange(start, start + len - 1);
       if (decoded.text && decoded.text !== String(t.originalText || '')) {
-        if (K.search.setOriginalText(start, decoded.text)) changed++;
+        // The Hex Editor never rewrites the original text: an insert lives in the
+        // patch layer, so re-decoding it here turned the original into the
+        // translation. The text stays what the table decoded from the loaded ROM.
       }
     });
     return changed;
