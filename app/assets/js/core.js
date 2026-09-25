@@ -1408,6 +1408,7 @@ let _recordTable = null;
           const kLittle = String(known.endianness || 'little') === 'little';
           const kBase = Number(known.base) || 0;
           const knownEntries = [];
+          const knownSites = [];
           for (let i = 0; i < Number(known.count); i++) {
             const at = Number(known.at) + i * kStride;
             if (at + kSize > originalRom.length) break;
@@ -1417,10 +1418,15 @@ let _recordTable = null;
             const off = (v >>> 0) - kBase;
             if (off < 0 || off >= originalRom.length) break;
             knownEntries.push(off);
+            knownSites.push(at);
           }
           if (knownEntries.length >= 8) {
             relocationLog.push('Pointer table: known profile ' + (known.name || '') + ' at 0x' + Number(known.at).toString(16).toUpperCase() + ' with ' + knownEntries.length + ' entries, taken as given instead of guessed.');
             _recordTable.entries = knownEntries;
+            _recordTable.sites = knownSites;
+            _recordTable.size = kSize;
+            _recordTable.bySite = Object.create(null);
+            for (let i = 0; i < knownEntries.length; i++) _recordTable.bySite[knownEntries[i]] = knownSites[i];
             return _recordTable;
           }
         }
@@ -2784,6 +2790,25 @@ let _recordTable = null;
           if (needsRelocation && system.allowMessageShift === false && system.allowRelocation !== true) {
             relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: [WARNING] Needs ${Number(newBlockBytes.length) - Number(originalBlockLength)} byte(s) more than this record has. Nothing was written because moving text in this game corrupts the dialogue. Shorten the page, or set allowMessageShift to try the shift path.`);
             continue;
+          }
+          /* The known table names the pointer of every record, so a record that has to
+             grow must not depend on the heuristic search finding it. Without this, a
+             record whose search came up empty was skipped with "no safe pointers found"
+             even though its pointer was known all along (record 0xEB32C was skipped that
+             way). */
+          if (needsRelocation && validPointers.length === 0) {
+            const knownTable = recordTable();
+            const knownSite = knownTable && knownTable.bySite ? knownTable.bySite[Number(block.start)] : undefined;
+            if (Number.isFinite(knownSite)) {
+              validPointers.push({
+                ptrOffset: knownSite,
+                ptrSize: knownTable.size || 4,
+                transformId: 'gba',
+                confidence: 1,
+                knownTable: true
+              });
+              relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: pointer taken from the known table at 0x${Number(knownSite).toString(16).toUpperCase()} because the search had found none.`);
+            }
           }
           /* Borrowing the padding of the messages that follow keeps the grown
              message inside its region and needs no pointer rewrite of its own:
