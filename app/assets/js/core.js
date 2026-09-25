@@ -2626,6 +2626,19 @@ window.__PT_APP_READY__ = false;
               validPointers = [];
             }
           }
+          /* Moving text in a game whose record format is not fully understood is
+             what broke the dialogue: the intro message displayed fine while it was
+             written in place, and the same game skipped conversations once a
+             message was moved (build 66 relocated one out of the region, build 67
+             slid twenty six of them by a few bytes - the crashing export). The
+             records hold engine data the tool cannot see, so by default nothing
+             moves: a page that needs more room than its record has is reported and
+             left alone. Shifting stays available behind an explicit request, for
+             testing or for games whose format has been worked out. */
+          if (needsRelocation && !system.allowMessageShift && !system.allowRelocation) {
+            relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: [WARNING] Needs ${Number(newBlockBytes.length) - Number(originalBlockLength)} byte(s) more than this record has. Nothing was written because moving text in this game corrupts the dialogue. Shorten the page, or set allowMessageShift to try the shift path.`);
+            continue;
+          }
           /* Borrowing the padding of the messages that follow keeps the grown
              message inside its region and needs no pointer rewrite of its own:
              everything that moved was recalculated by the helper. */
