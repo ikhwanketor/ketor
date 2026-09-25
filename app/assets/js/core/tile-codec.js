@@ -112,29 +112,29 @@
     return true;
   }
 
-  /* 0..1 score of how likely this offset holds tiles of that format.
-     Two measurements separate art from noise: a tile of a game uses few
-     colours, and its pixels come in short runs instead of alternating at
-     random. Colour count alone scored noise and art the same, which is why
-     the first version of this function could not be used for detection. */
-  function scoreRegion(bytes, offset, formatId, tileCount) {
+  /* Raw measurements behind the score. Kept separate from the score so the
+     rule can be tuned against real ROMs instead of guessed: every guard
+     below was added after looking at these numbers for art and padding. */
+  function regionMetrics(bytes, offset, formatId, tileCount) {
     var f = formatOf(formatId);
     var count = Math.max(1, Math.min(Number(tileCount) || 16, 256));
-    if (!bytes || offset < 0 || offset + f.size * count > bytes.length) return 0;
+    if (!bytes || offset < 0 || offset + f.size * count > bytes.length) return null;
     var colourSum = 0;
+    var runSum = 0;
     var allSeen = {};
+    var patternSeen = {};
     var totalPixels = 0;
     var nonZeroPixels = 0;
-    var runSum = 0;
-    var colourLimit = f.colors;
     for (var t = 0; t < count; t++) {
       var px = decodeTile(bytes, offset + t * f.size, formatId);
       var seen = {};
       var colours = 0;
       var runs = 0;
       var pixels = 0;
+      var key = '';
       for (var y = 0; y < 8; y++) {
         var last = -1;
+        key += px[y].join(',') + '|';
         for (var x = 0; x < 8; x++) {
           var c = px[y][x];
           if (!seen[c]) { seen[c] = true; colours++; }
@@ -145,23 +145,45 @@
           pixels++;
         }
       }
+      patternSeen[key] = (patternSeen[key] || 0) + 1;
       // few colours per tile is what a game palette looks like
-      colourSum += Math.max(0, Math.min(1, 1 - (colours - 1) / Math.max(1, colourLimit - 1)));
+      colourSum += Math.max(0, Math.min(1, 1 - (colours - 1) / Math.max(1, f.colors - 1)));
       // long horizontal runs mean structure, not random bytes
       var meanRun = pixels / Math.max(1, runs);
       runSum += Math.max(0, Math.min(1, (meanRun - 1) / 2.5));
     }
-    var regionColours = Object.keys(allSeen).length;
-    var fill = totalPixels ? nonZeroPixels / totalPixels : 0;
-    var base = (colourSum / count) * 0.55 + (runSum / count) * 0.45;
-    // Few colours and long runs also describe empty padding, which scored a
-    // perfect 1.0 and pushed the real graphics off the list of candidates.
-    if (regionColours <= 2) base *= 0.15;
-    if (fill < 0.03) base *= 0.4;
-    if (fill > 0.97) base *= 0.4;
-    return Math.max(0, Math.min(1, base));
+    var topShare = 0;
+    Object.keys(patternSeen).forEach(function (k) { if (patternSeen[k] > topShare) topShare = patternSeen[k]; });
+    return {
+      count: count,
+      colour: colourSum / count,
+      run: runSum / count,
+      regionColours: Object.keys(allSeen).length,
+      distinctShare: Object.keys(patternSeen).length / count,
+      topShare: topShare / count,
+      fill: totalPixels ? nonZeroPixels / totalPixels : 0
+    };
   }
 
+  /* 0..1 score of how likely this offset holds tiles of that format.
+     Two measurements separate art from noise: a tile of a game uses few
+     colours, and its pixels come in short runs instead of alternating at
+     random. Colour count alone scored noise and art the same, which is why
+     the first version of this function could not be used for detection. */
+  function scoreRegion(bytes, offset, formatId, tileCount) {
+    var m = regionMetrics(bytes, offset, formatId, tileCount);
+    if (!m) return 0;
+    var base = m.colour * 0.55 + m.run * 0.45;
+    // Few colours and long runs also describe empty padding, which scored a
+    // perfect 1.0 and pushed the real graphics off the list of candidates.
+    if (m.regionColours <= 2) base *= 0.15;
+    // A region where one tile pattern covers most of the area is a blank
+    // fill: it scores high on colour count and runs, yet holds no art.
+    if (m.topShare > 0.4) base *= 0.3;
+    if (m.fill < 0.03) base *= 0.4;
+    if (m.fill > 0.97) base *= 0.4;
+    return Math.max(0, Math.min(1, base));
+  }
   Ketor.core.TILE_FORMATS = FORMATS;
   Ketor.core.tileFormat = formatOf;
   Ketor.core.tileSize = tileSize;
@@ -169,4 +191,5 @@
   Ketor.core.encodeTile = encodeTile;
   Ketor.core.tileRoundTrip = roundTrip;
   Ketor.core.scoreTileRegion = scoreRegion;
+  Ketor.core.tileRegionMetrics = regionMetrics;
 })(window);
