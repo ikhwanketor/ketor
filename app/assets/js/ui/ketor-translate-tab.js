@@ -393,7 +393,7 @@
       onClick: function () { props.onSelect(row.startByte); },
       title: 'Index ' + (props.index + 1) + ' · ' + (row.offset || ''),
       style: {
-        display: 'flex', alignItems: 'baseline', gap: 4,
+        display: 'flex', alignItems: 'baseline', gap: 8,
         position: 'relative',
         padding: '2px 8px',
         fontFamily: MONO, fontSize: 12,
@@ -419,18 +419,6 @@
           whiteSpace: 'pre-wrap', wordBreak: 'break-word'
         }
       }, original),
-      // The arrow takes no room of its own: with the row's 4px gaps the two
-      // text columns end up 8px apart, exactly like the Original and
-      // Translation boxes below, so the column edges line up and the arrow
-      // sits on the boundary between them.
-      e('span', {
-        style: {
-          flex: '0 0 0px', width: 0, overflow: 'visible',
-          position: 'relative', left: -2,
-          textAlign: 'center', opacity: 0.6,
-          fontFamily: MONO, fontWeight: 600
-        }
-      }, '\u2192'),
       translation ? e('span', {
         style: {
           flex: '1 1 0', minWidth: 0, opacity: 0.85,
