@@ -136,10 +136,12 @@
 
   function spanIsRecord(bytes, from, to, termSet) {
     if (to <= from || to > bytes.length) return false;
+    if (to - from > 0x10000) return true;   /* a record is never 64K long: treat as its own thing */
     /* The gate is the terminator. Padding after it is a bonus: several consoles
        pack their strings back to back with no padding at all, and requiring it
        made every table on NES, SNES, GB and GBC fail. */
-    for (var p = to - 1; p >= from; p--) { if (termSet[bytes[p]]) return true; }
+    var limit = Math.max(from, to - 4096);   /* the closure sits at the end */
+    for (var p = to - 1; p >= limit; p--) { if (termSet[bytes[p]]) return true; }
     return false;
   }
 
@@ -198,11 +200,15 @@
            every span closing like a record */
         var entries = [];
         for (var k = run.from; k <= run.to; k++) entries.push(sites[k].target);
-        var ascending = true;
-        for (var a = 1; a < entries.length; a++) if (entries[a] <= entries[a - 1]) { ascending = false; break; }
-        if (!ascending) return;
-        var ok = 0, bad = 0;
+        /* Monotony is not the gate. A real table can hold a few entries that
+           jump back (a secondary list inside the same array), and on Aria of
+           Sorrow those six entries used to cut the table in two. The gate is the
+           record test: every span that runs forwards has to close like a record,
+           and a span that runs backwards is counted as irregular instead of
+           killing the table. */
+        var ok = 0, bad = 0, irregular = 0;
         for (var s = 0; s < entries.length - 1; s++) {
+          if (entries[s + 1] <= entries[s]) { irregular++; continue; }
           if (spanIsRecord(bytes, entries[s], entries[s + 1], termSet)) ok++; else bad++;
         }
         if (ok < minEntries || bad > 0) return;
@@ -230,11 +236,35 @@
           dominantDelta: dominantDelta, deltaConsensus: consensus, confirmed: confirmed,
           endianness: rules.little ? 'little' : 'big', base: mode === 'raw' ? 0 : rules.base, mode: mode,
           count: entries.length, regionStart: entries[0], regionEnd: entries[entries.length - 1],
-          spansOk: ok, spansBad: bad, matchedTexts: matched, textsGiven: texts.length,
+          spansOk: ok, spansBad: bad, irregularEntries: irregular, matchedTexts: matched, textsGiven: texts.length,
           deltas: deltas, confidence: confirmed ? 0.98 : (bad === 0 ? 0.6 : 0.4)
         });
       });
     });
+    /* Clustered matching: one table can be reported as two runs when a single
+       step between them is neither a multiple of the stride nor a record. Runs that
+       sit next to each other and agree on the dominant delta are the same table. */
+    results.sort(function (a, b) { return a.at - b.at; });
+    var clustered = [];
+    results.forEach(function (r) {
+      var last = clustered[clustered.length - 1];
+      var lastEnd = last ? last.at + (last.count - 1) * last.stride : -1;
+      var close = last && (r.at - lastEnd) >= 0 && (r.at - lastEnd) <= last.stride * 8;
+      var sameDelta = last && (last.dominantDelta === r.dominantDelta || last.matchedTexts === 0 || r.matchedTexts === 0);
+      if (close && sameDelta) {
+        last.count = Math.floor((r.at + (r.count - 1) * r.stride - last.at) / last.stride) + 1;
+        last.regionEnd = Math.max(last.regionEnd, r.regionEnd);
+        last.spansOk += r.spansOk;
+        last.spansBad += r.spansBad;
+        last.irregularEntries = (last.irregularEntries || 0) + (r.irregularEntries || 0);
+        last.matchedTexts += r.matchedTexts;
+        last.mergedFrom = (last.mergedFrom || 1) + 1;
+        if (r.deltas) Object.keys(r.deltas).forEach(function (d) { last.deltas[d] = (last.deltas[d] || 0) + r.deltas[d]; });
+        return;
+      }
+      clustered.push(r);
+    });
+    results = clustered;
     results.sort(function (a, b) {
       if (a.confirmed !== b.confirmed) return a.confirmed ? -1 : 1;
       if (b.count !== a.count) return b.count - a.count;
