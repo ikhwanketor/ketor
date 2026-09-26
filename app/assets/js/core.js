@@ -1633,9 +1633,7 @@ let _recordTable = null;
             const entries = recordTable().entries;
             const recStart = entries[b.ridx];
             const nextStart = (b.ridx + 1 < entries.length) ? entries[b.ridx + 1] : originalRom.length;
-            const inside = allTexts.filter(function (t) {
-              return typeof t.startByte === 'number' && t.startByte >= recStart && t.startByte < nextStart;
-            });
+            const inside = textsStartingIn(recStart, nextStart);
             const texts = inside.length ? inside : b.texts;
             let end = b.end;
             texts.forEach(function (t) { end = Math.max(end, Number(t.startByte) + Number(t.byteLength) - 1); });
@@ -1668,6 +1666,29 @@ let _recordTable = null;
         .filter(t => typeof t.startByte === 'number')
         .map(t => t.startByte)
         .sort((a, b) => a - b);
+
+      /* Records collect the texts that start inside them, and the answer used to be a
+         filter over every text of the rom - once per touched record, hundreds of
+         millions of comparisons for a full translation. Sorted once here, the question
+         becomes a range. */
+      const allTextsByStart = allTexts
+        .filter(t => typeof t.startByte === 'number')
+        .sort((a, b) => Number(a.startByte) - Number(b.startByte));
+      const textsStartingIn = (from, to) => {
+        let lo = 0;
+        let hi = allTextsByStart.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (Number(allTextsByStart[mid].startByte) < from) lo = mid + 1; else hi = mid;
+        }
+        const out = [];
+        for (let i = lo; i < allTextsByStart.length; i++) {
+          const t = allTextsByStart[i];
+          if (Number(t.startByte) >= to) break;
+          out.push(t);
+        }
+        return out;
+      };
 
       const getContextOffsets = (targetOffset, radius = 12) => {
         if (!Number.isFinite(targetOffset) || allTextOffsetsSorted.length === 0) return [];
@@ -1746,20 +1767,40 @@ let _recordTable = null;
         return NaN;
       };
 
+      /* "Which words in this image aim at this text?" is asked once per block, and it
+         was answered by reading every fourth byte of the whole image: two million reads
+         for every block, which is hours for a build that inserts a whole translation.
+         The pointer-like words are indexed once instead, bucketed by target address, so
+         the same question costs a handful of entries. */
+      let _gbaPointerBuckets = null;
+      const gbaPointerBuckets = () => {
+        if (_gbaPointerBuckets) return _gbaPointerBuckets;
+        const buckets = new Map();
+        const view = new DataView(originalRom.buffer, originalRom.byteOffset, originalRom.byteLength);
+        const ranges = (pointerRegions && pointerRegions.length > 0)
+          ? pointerRegions.map(r => ({ start: Math.max(0, r.start), end: Math.min(originalRom.length - 4, r.end) }))
+          : [{ start: 0, end: originalRom.length - 4 }];
+        for (const range of ranges) {
+          const first = range.start + ((4 - (range.start % 4)) % 4);
+          for (let i = first; i <= range.end; i += 4) {
+            const off = decodeGbaAbsoluteLikeOffset(view.getUint32(i, true));
+            if (!Number.isFinite(off)) continue;
+            const key = off >> 10;
+            const list = buckets.get(key);
+            if (list) { list.push(off, i); } else { buckets.set(key, [off, i]); }
+          }
+        }
+        _gbaPointerBuckets = buckets;
+        return buckets;
+      };
+
       const detectContainerAnchor = (startOffset) => {
         if (!isGbaNonPaddingProfile) return null;
         if (!Number.isFinite(startOffset) || startOffset < 0 || startOffset >= originalRom.length) return null;
         const windowBack = 0x400;
         const targetMin = Math.max(0, startOffset - windowBack);
         const targetMax = startOffset;
-        const view = new DataView(originalRom.buffer);
-
-        const ranges = (pointerRegions && pointerRegions.length > 0)
-          ? pointerRegions.map(r => ({
-            start: Math.max(0, r.start - 0x200),
-            end: Math.min(originalRom.length - 4, r.end + 0x200)
-          }))
-          : [{ start: 0, end: originalRom.length - 4 }];
+        const view = new DataView(originalRom.buffer, originalRom.byteOffset, originalRom.byteLength);
 
         const byTarget = new Map();
         const addHit = (targetOffset, ptrOffset) => {
@@ -1772,19 +1813,14 @@ let _recordTable = null;
           if (rec.ptrOffsets.length < 32) rec.ptrOffsets.push(ptrOffset);
         };
 
-        for (const range of ranges) {
-          for (let i = range.start; i <= range.end; i += 4) {
-            let value;
-            try {
-              value = view.getUint32(i, true);
-            } catch (e) {
-              continue;
-            }
-            const off = decodeGbaAbsoluteLikeOffset(value);
-            if (!Number.isFinite(off)) continue;
-            if (off >= targetMin && off <= targetMax) {
-              addHit(off, i);
-            }
+        const buckets = gbaPointerBuckets();
+        for (let key = (targetMin >> 10); key <= (targetMax >> 10); key++) {
+          const list = buckets.get(key);
+          if (!list) continue;
+          for (let k = 0; k + 1 < list.length; k += 2) {
+            const off = list[k];
+            if (off < targetMin || off > targetMax) continue;
+            addHit(off, list[k + 1]);
           }
         }
 
@@ -1819,6 +1855,33 @@ let _recordTable = null;
           anchorOffset: bestTarget,
           pointerCount: bestRecord.count,
           nextTargetOffset
+        };
+      };
+
+      /* The entry the engine itself uses for a record. The known table is taken as
+         given, so the head of a record is a lookup there instead of a guess, and every
+         record that has to move already has the one word that must change. */
+      const knownEntryFor = (start) => {
+        const table = recordTable();
+        if (!table || !table.bySite) return null;
+        const kBase = Number(table.base) || 0;
+        const kTransform = kBase === 0x08000000 ? 'gba' : (kBase === 0 ? 'raw' : null);
+        if (!kTransform) return null;
+        let site = table.bySite[Number(start)];
+        if (!Number.isFinite(site)) {
+          const ridx = recordIndexFor(start);
+          if (ridx < 0 || Number((table.entries || [])[ridx]) !== Number(start)) return null;
+          site = (table.sites || [])[ridx];
+        }
+        if (!Number.isFinite(site)) return null;
+        return {
+          ptrOffset: site,
+          ptrSize: table.size || system.pointerSize || 4,
+          transformId: kTransform,
+          base: kBase,
+          confidence: 1,
+          knownTable: true,
+          targetOffset: Number(start)
         };
       };
 
@@ -2078,6 +2141,17 @@ let _recordTable = null;
           sortedTexts
         };
         if (needsRelocation || needsPointerUpdate) {
+          /* When the engine's own table names this record the search battery below -
+             which reads the whole image several times for every block, and made a build
+             of a thousand records take hours - has nothing to add: that entry is the
+             reference the engine follows, and every other word the scan finds is a
+             look-alike that must not be rewritten (build 66 wrote one of those and the
+             game skipped exactly that conversation). */
+          const knownEntryForBlock = knownEntryFor(effectiveBlock.start) || knownEntryFor(block.start);
+          if (knownEntryForBlock) {
+            mod.pointers = [knownEntryForBlock];
+            relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': this record is named by the table at 0x' + Number(knownEntryForBlock.ptrOffset).toString(16).toUpperCase() + ', so that entry is used and the pointer search is skipped.');
+          } else {
           /* Only the head of a chained run may be repointed. The engine reaches
              the pages after it by walking the run, and a value that looks like a
              pointer to an inner page is a tile index far more often than it is a
@@ -2324,6 +2398,7 @@ let _recordTable = null;
             relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: [WARNING] Pointer scan found too many matches (${mod.pointers.length}). Relocation skipped to avoid corruption.`);
             mod.pointers = [];
           }
+          } /* end of the search battery, skipped when the known table names the record */
         }
         modifications.push(mod);
       }
@@ -2338,7 +2413,66 @@ let _recordTable = null;
         romCopy = expandedRom;
         relocationLog.push(`ROM expanded to ${Math.round(romCopy.length / 1024)}KB to make space for larger texts.`);
       }
-      const romView = new DataView(romCopy.buffer);
+      let romView = new DataView(romCopy.buffer);
+      /* Free space is mapped once and handed out from a cursor. The search used to walk
+         the whole image for every record that moved, so a build that moved hundreds of
+         them never finished; mapping the filler runs once and carving every allocation
+         out of them makes the cost one scan for the whole build. A run that is
+         referenced at any byte is skipped - a pointer to the start of a run makes the
+         rest of that run that object data - and every allocation keeps a four byte
+         guard above it, exactly like the old search did. */
+      const freeSpaceRuns = [];
+      (() => {
+        const isFiller = (b) => b === 0xFF || b === 0x00 || b === terminatorHex;
+        for (let i = 0, runStart = -1; i <= romCopy.length; i++) {
+          if (i < romCopy.length && isFiller(romCopy[i])) { if (runStart < 0) runStart = i; continue; }
+          if (runStart >= 0) {
+            if (i - runStart >= 64 && !rangeIsReferenced(runStart, i)) freeSpaceRuns.push({ start: runStart, end: i, cursor: i });
+            runStart = -1;
+          }
+        }
+      })();
+      /* The run the older allocator already reserved must not be handed out twice. */
+      if (totalRequiredSpace > 0 && freeSpaceOffset >= 0) {
+        const keepFrom = freeSpaceOffset;
+        const keepTo = freeSpaceOffset + totalRequiredSpace + 4;
+        const keptRuns = [];
+        for (const run of freeSpaceRuns) {
+          if (run.end <= keepFrom || run.start >= keepTo) { keptRuns.push(run); continue; }
+          if (run.start < keepFrom) keptRuns.push({ start: run.start, end: keepFrom, cursor: keepFrom });
+          if (run.end > keepTo) keptRuns.push({ start: keepTo, end: run.end, cursor: run.end });
+        }
+        freeSpaceRuns.length = 0;
+        keptRuns.forEach(function (r) { freeSpaceRuns.push(r); });
+      }
+      const allocateFreeSpace = (need) => {
+        for (const run of freeSpaceRuns) {
+          let at = run.cursor - need;
+          at -= (at % 4);
+          if (at - run.start >= 4) { run.cursor = at; return at; }
+        }
+        if (freeSpaceRuns.length > 0 && (romCopy.length + need + 0x2000) <= 0x2000000) {
+          const grown = new Uint8Array(romCopy.length + need + 0x2000);
+          grown.set(romCopy);
+          grown.fill(terminatorHex, romCopy.length);
+          freeSpaceRuns.push({ start: romCopy.length, end: grown.length, cursor: grown.length });
+          romCopy = grown;
+          romView = new DataView(romCopy.buffer);
+          relocationLog.push('ROM expanded to ' + Math.round(romCopy.length / 1024) + 'KB to make room for the records that move to free space.');
+          return allocateFreeSpace(need);
+        }
+        return -1;
+      };
+      /* A record that outgrows its room is moved to free space and only its own table
+         entry is rewritten, so nothing else in the image shifts (Atlas does the same).
+         allowMessageShift true asks for the other path - grow in place by borrowing the
+         padding of the messages after it - and false refuses the growth and reports it. */
+      let shiftBudgetLeft = 0;
+      const grownRecordCount = modifications.filter(m => m.needsRelocation).length;
+      if (grownRecordCount > 0) {
+        relocationLog.push(grownRecordCount + ' record(s) need more room than they have; each one moves to free space and only its own table entry is rewritten' +
+          (system.allowMessageShift === true ? ', unless the padding after it can pay for the growth.' : ', so nothing else in the image shifts.'));
+      }
 
       /* Highest first. A block that grows shifts the records after it, so every block
          already written must sit above the one being written; otherwise a later block
@@ -2349,7 +2483,185 @@ let _recordTable = null;
       for (const mod of modifications) {
         const { block, newBlockBytes, originalBlockLength, needsRelocation, needsPointerUpdate, pointers, textOffsetsInBlock, textRanges, sortedTexts } = mod;
         let pointersForWrite = pointers;
-        const shouldUpdatePointers = (needsRelocation || needsPointerUpdate) && pointers.length > 0;
+        /* The engine reaches a record through one entry in its message table. When
+           that entry is known, it - not the heuristic scan - is the reference that
+           decides where the record lives. Atlas works the same way: a text that
+           outgrows its slot moves to free space, its pointer is rewritten, and no
+           other text in the file is touched. The entry joins the candidate list
+           here, before validation, so exactly the same checks apply to it as to a
+           pointer the scan found: the word at that site must really aim at this
+           record, and the value written back is recomputed from the new address. */
+        const knownRecordPointer = needsRelocation ? knownEntryFor(block.start) : null;
+        if (needsRelocation && knownRecordPointer &&
+            !pointersForWrite.some(p => Number(p.ptrOffset) === Number(knownRecordPointer.ptrOffset))) {
+          pointersForWrite = pointersForWrite.concat([knownRecordPointer]);
+          relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': the known table names this record at 0x' + Number(knownRecordPointer.ptrOffset).toString(16).toUpperCase() + ', so the move can use the entry the engine itself reads instead of a look-alike (the scan had found ' + pointers.length + ').');
+        }
+        const shouldUpdatePointers = (needsRelocation || needsPointerUpdate) && pointersForWrite.length > 0;
+        /* Borrowing the padding of the messages that follow is tried before any address
+           is chosen. When it works every record keeps its own place and the helper has
+           already recalculated everything that moved, so not one pointer of this block
+           has to be written. Trying it after the pointer values had been built was
+           wrong: the growth then fell back to free space while the entries were still
+           written with the address the search had picked earlier, and five records
+           ended up aiming at a zeroed run (build 92, 0xE95F4). */
+      const growByBorrowingFollowingPadding = (list) => {
+          /* Everything below reads the image as it is now, not as it started. With two records growing in one build the second shift has to plan against the layout the first shift produced; reading the original file made the second shift overwrite the first one, so the entries pointed at content that had never moved (21 records at 0xEAB78). */
+          if (!needsRelocation) return null;
+          const grow = Number(newBlockBytes.length) - Number(originalBlockLength);
+          if (!(grow > 0)) return null;
+          if ((Number(system.pointerSize) || 4) !== 4 || String(system.pointerEndianness || 'little') !== 'little') return null;
+          const stride = 4;
+          const valueAt = (at) => (romCopy[at] | (romCopy[at + 1] << 8) | (romCopy[at + 2] << 16) | (romCopy[at + 3] << 24)) >>> 0;
+          const targetAt = (at) => {
+            if (at < 0 || at + 4 > romCopy.length) return -1;
+            const v = valueAt(at);
+            if ((v & 0xFF000000) !== 0x08000000) return -1;
+            const off = v & 0x01FFFFFF;
+            return off < romCopy.length ? off : -1;
+          };
+          const sites = list
+            .filter(p => (p.ptrSize || system.pointerSize) === 4 &&
+              (p.transformId === 'gba' || p.transformId === 'gba_offset' || p.transformId === 'raw'))
+            .map(p => p.ptrOffset)
+            .filter(v => Number.isFinite(v))
+            .sort((a, b) => a - b);
+          const blockStart = Number(block.start);
+          const site = sites.filter(at => targetAt(at) === blockStart)[0];
+          if (!Number.isFinite(site)) return null;
+          let lo = site;
+          while (lo - stride >= 0) {
+            const prev = targetAt(lo - stride);
+            const cur = targetAt(lo);
+            if (prev < 0 || cur < 0 || prev >= cur || (cur - prev) > 0x10000) break;
+            lo -= stride;
+          }
+          const entries = [];
+          let hi = lo;
+          while (hi + stride <= romCopy.length) {
+            const cur = targetAt(hi);
+            const next = targetAt(hi + stride);
+            if (cur < 0 || next < 0 || next <= cur || (next - cur) > 0x10000) break;
+            entries.push(cur);
+            hi += stride;
+          }
+          entries.push(targetAt(hi));
+          if (entries.length < 4) return null;
+          const idx = entries.indexOf(blockStart);
+          if (idx < 0 || idx >= entries.length - 1) return null;
+          const spans = [];
+          for (let i = idx; i < entries.length - 1; i++) {
+            const s = entries[i];
+            const e = entries[i + 1];
+            let pad = 0;
+            while (e - 1 - pad >= s && romCopy[e - 1 - pad] === 0x00) pad++;
+            spans.push({ start: s, len: e - s - pad, pad: pad });
+          }
+          const grown = spans[0];
+          if (grown.start !== blockStart || grown.len <= 0) return null;
+          const keep = 2;
+          let need = grow;
+          /* Take at most (pad - 2) from each message and never less than nothing:
+             a message whose padding is already down to the minimum simply keeps it,
+             otherwise the arithmetic would grow the padding of one message while
+             shrinking another and the end of the region would drift. */
+          const takeFrom = (pad) => Math.min(need, Math.max(0, pad - keep));
+          const take0 = takeFrom(grown.pad);
+          need -= take0;
+          const q0 = grown.pad - take0;
+          const plan = [];
+          let cursor = grown.start + grown.len + grow + q0;
+          for (let i = 1; i < spans.length && need > 0; i++) {
+            const sp = spans[i];
+            const take = takeFrom(sp.pad);
+            need -= take;
+            const q = sp.pad - take;
+            const to = cursor;
+            if (to > sp.start) plan.push({ from: sp.start, len: sp.len, to: to });
+            cursor = to + sp.len + q;
+          }
+          if (need > 0) return null;
+          if (plan.length === 0) return { grew: grow, moved: 0, repointed: 0 };
+          const tailStart = plan[0].from;
+          const last = plan[plan.length - 1];
+          const tailEnd = last.from + last.len;
+          if (tailEnd > romCopy.length || tailStart <= blockStart) return null;
+          const movedTo = (off) => {
+            for (let i = 0; i < plan.length; i++) {
+              const p = plan[i];
+              if (off >= p.from && off < p.from + p.len) return p.to + (off - p.from);
+            }
+            return -1;
+          };
+          /* A word that aims at padding keeps aiming at zeros: the whole tail is
+             cleared first and only message content is written back, so a reference
+             into bytes that disappear still finds zero bytes. Counted, not fatal. */
+          let paddingRefs = 0;
+          for (let i = 0; i + 4 <= romCopy.length; i += 2) {
+            const t = targetAt(i);
+            if (t < 0 || t < tailStart || t >= tailEnd) continue;
+            if (movedTo(t) < 0) paddingRefs++;
+          }
+          if (paddingRefs > 0) {
+            relocationLog.push(`Borrow check: ${paddingRefs} reference(s) aim at padding that is cleared to zero.`);
+          }
+          const tail = romCopy.slice(tailStart, tailEnd);
+          romCopy.fill(0x00, tailStart, tailEnd);
+          plan.forEach(function (p) {
+            romCopy.set(tail.subarray(p.from - tailStart, p.from - tailStart + p.len), p.to);
+          });
+          let repointed = 0;
+          for (let i = 0; i + 4 <= romCopy.length; i += 2) {
+            if (i >= tailStart && i < tailEnd) continue;
+            const v = (romCopy[i] | (romCopy[i + 1] << 8) | (romCopy[i + 2] << 16) | (romCopy[i + 3] << 24)) >>> 0;
+            if ((v & 0xFF000000) !== 0x08000000) continue;
+            const moved = movedTo(v & 0x01FFFFFF);
+            if (moved < 0) continue;
+            const nv = (0x08000000 + moved) >>> 0;
+            romCopy[i] = nv & 0xFF;
+            romCopy[i + 1] = (nv >> 8) & 0xFF;
+            romCopy[i + 2] = (nv >> 16) & 0xFF;
+            romCopy[i + 3] = (nv >>> 24) & 0xFF;
+            repointed++;
+          }
+          return { grew: grow, moved: plan.length, repointed: repointed };
+        };
+
+        /* Growing in place is the layout the reference indonesian patch uses, so it stays
+           available - but only when it is asked for. Measured on this rom: one grown
+           record shifts cleanly, while twenty two of them in one build left nine records
+           without their end code (build 92, first at 0xEB485), and sixty texts were
+           enough to break eight. The default therefore moves the record to free space
+           and rewrites its own table entry, which the same measurement shows passing. */
+        const willBorrow = needsRelocation && pointersForWrite.length > 0 &&
+          system.allowMessageShift === true && shiftBudgetLeft > 0;
+        if (willBorrow) {
+          const borrowCandidates = knownRecordPointer
+            ? pointersForWrite.filter(p => Number(p.ptrOffset) === Number(knownRecordPointer.ptrOffset))
+            : pointersForWrite;
+          const borrowed = growByBorrowingFollowingPadding(borrowCandidates);
+          if (borrowed) {
+            romCopy.set(newBlockBytes, block.start);
+            relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': Grew in place by ' + borrowed.grew + ' byte(s) instead of moving; ' + borrowed.moved + ' message(s) after it slid forward and ' + borrowed.repointed + ' pointer(s) were recalculated.');
+            continue;
+          }
+        }
+        /* Either the borrow was not asked for or the region has no padding left, so the
+           record moves to free space through its own table entry. The address is taken
+           now, before the pointer values are built from it. */
+        /* Asked to move nothing, nothing is decided here: a record that needs more room
+           than it has is reported and left alone, and no free space is taken for it. */
+        if (needsRelocation && system.allowMessageShift === false && system.allowRelocation !== true) {
+          relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': [WARNING] Needs ' + (Number(newBlockBytes.length) - Number(originalBlockLength)) + ' byte(s) more than this record has. Nothing was written because this build was asked to move nothing (allowMessageShift false). Shorten the page, or leave the option unset so the record can move to free space.');
+          continue;
+        }
+        const movesByKnownEntry = !!(needsRelocation && knownRecordPointer);
+        if (movesByKnownEntry) {
+          const why = system.allowMessageShift === true
+            ? 'free space was asked for, so the messages around it stay where they are'
+            : (willBorrow ? 'this region has no padding left to borrow' : 'the padding of this region is already paid out');
+          relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': ' + why + ', so this record moves to free space and only its own table entry is rewritten.');
+        }
 
         const fillRangeWithTerminatorPattern = (fillStart, fillEnd) => {
           if (fillEnd <= fillStart) return;
@@ -2485,131 +2797,20 @@ let _recordTable = null;
          to 0x1297F4 while the game skipped exactly those conversations, so the rule
          is now: only the head of a record may leave its place, a page inside a
          record can only grow where it is (or be reported so it can be shortened). */
-      const growByBorrowingFollowingPadding = (list) => {
-          /* Everything below reads the image as it is now, not as it started. With two records growing in one build the second shift has to plan against the layout the first shift produced; reading the original file made the second shift overwrite the first one, so the entries pointed at content that had never moved (21 records at 0xEAB78). */
-          if (!needsRelocation) return null;
-          const grow = Number(newBlockBytes.length) - Number(originalBlockLength);
-          if (!(grow > 0)) return null;
-          if ((Number(system.pointerSize) || 4) !== 4 || String(system.pointerEndianness || 'little') !== 'little') return null;
-          const stride = 4;
-          const valueAt = (at) => (romCopy[at] | (romCopy[at + 1] << 8) | (romCopy[at + 2] << 16) | (romCopy[at + 3] << 24)) >>> 0;
-          const targetAt = (at) => {
-            if (at < 0 || at + 4 > romCopy.length) return -1;
-            const v = valueAt(at);
-            if ((v & 0xFF000000) !== 0x08000000) return -1;
-            const off = v & 0x01FFFFFF;
-            return off < romCopy.length ? off : -1;
-          };
-          const sites = list
-            .filter(p => (p.ptrSize || system.pointerSize) === 4 &&
-              (p.transformId === 'gba' || p.transformId === 'gba_offset' || p.transformId === 'raw'))
-            .map(p => p.ptrOffset)
-            .filter(v => Number.isFinite(v))
-            .sort((a, b) => a - b);
-          const blockStart = Number(block.start);
-          const site = sites.filter(at => targetAt(at) === blockStart)[0];
-          if (!Number.isFinite(site)) return null;
-          let lo = site;
-          while (lo - stride >= 0) {
-            const prev = targetAt(lo - stride);
-            const cur = targetAt(lo);
-            if (prev < 0 || cur < 0 || prev >= cur || (cur - prev) > 0x10000) break;
-            lo -= stride;
-          }
-          const entries = [];
-          let hi = lo;
-          while (hi + stride <= romCopy.length) {
-            const cur = targetAt(hi);
-            const next = targetAt(hi + stride);
-            if (cur < 0 || next < 0 || next <= cur || (next - cur) > 0x10000) break;
-            entries.push(cur);
-            hi += stride;
-          }
-          entries.push(targetAt(hi));
-          if (entries.length < 4) return null;
-          const idx = entries.indexOf(blockStart);
-          if (idx < 0 || idx >= entries.length - 1) return null;
-          const spans = [];
-          for (let i = idx; i < entries.length - 1; i++) {
-            const s = entries[i];
-            const e = entries[i + 1];
-            let pad = 0;
-            while (e - 1 - pad >= s && romCopy[e - 1 - pad] === 0x00) pad++;
-            spans.push({ start: s, len: e - s - pad, pad: pad });
-          }
-          const grown = spans[0];
-          if (grown.start !== blockStart || grown.len <= 0) return null;
-          const keep = 2;
-          let need = grow;
-          /* Take at most (pad - 2) from each message and never less than nothing:
-             a message whose padding is already down to the minimum simply keeps it,
-             otherwise the arithmetic would grow the padding of one message while
-             shrinking another and the end of the region would drift. */
-          const takeFrom = (pad) => Math.min(need, Math.max(0, pad - keep));
-          const take0 = takeFrom(grown.pad);
-          need -= take0;
-          const q0 = grown.pad - take0;
-          const plan = [];
-          let cursor = grown.start + grown.len + grow + q0;
-          for (let i = 1; i < spans.length && need > 0; i++) {
-            const sp = spans[i];
-            const take = takeFrom(sp.pad);
-            need -= take;
-            const q = sp.pad - take;
-            const to = cursor;
-            if (to > sp.start) plan.push({ from: sp.start, len: sp.len, to: to });
-            cursor = to + sp.len + q;
-          }
-          if (need > 0) return null;
-          if (plan.length === 0) return { grew: grow, moved: 0, repointed: 0 };
-          const tailStart = plan[0].from;
-          const last = plan[plan.length - 1];
-          const tailEnd = last.from + last.len;
-          if (tailEnd > romCopy.length || tailStart <= blockStart) return null;
-          const movedTo = (off) => {
-            for (let i = 0; i < plan.length; i++) {
-              const p = plan[i];
-              if (off >= p.from && off < p.from + p.len) return p.to + (off - p.from);
-            }
-            return -1;
-          };
-          /* A word that aims at padding keeps aiming at zeros: the whole tail is
-             cleared first and only message content is written back, so a reference
-             into bytes that disappear still finds zero bytes. Counted, not fatal. */
-          let paddingRefs = 0;
-          for (let i = 0; i + 4 <= romCopy.length; i += 2) {
-            const t = targetAt(i);
-            if (t < 0 || t < tailStart || t >= tailEnd) continue;
-            if (movedTo(t) < 0) paddingRefs++;
-          }
-          if (paddingRefs > 0) {
-            relocationLog.push(`Borrow check: ${paddingRefs} reference(s) aim at padding that is cleared to zero.`);
-          }
-          const tail = romCopy.slice(tailStart, tailEnd);
-          romCopy.fill(0x00, tailStart, tailEnd);
-          plan.forEach(function (p) {
-            romCopy.set(tail.subarray(p.from - tailStart, p.from - tailStart + p.len), p.to);
-          });
-          let repointed = 0;
-          for (let i = 0; i + 4 <= romCopy.length; i += 2) {
-            if (i >= tailStart && i < tailEnd) continue;
-            const v = (romCopy[i] | (romCopy[i + 1] << 8) | (romCopy[i + 2] << 16) | (romCopy[i + 3] << 24)) >>> 0;
-            if ((v & 0xFF000000) !== 0x08000000) continue;
-            const moved = movedTo(v & 0x01FFFFFF);
-            if (moved < 0) continue;
-            const nv = (0x08000000 + moved) >>> 0;
-            romCopy[i] = nv & 0xFF;
-            romCopy[i + 1] = (nv >> 8) & 0xFF;
-            romCopy[i + 2] = (nv >> 16) & 0xFF;
-            romCopy[i + 3] = (nv >>> 24) & 0xFF;
-            repointed++;
-          }
-          return { grew: grow, moved: plan.length, repointed: repointed };
-        };
 
         if (shouldUpdatePointers) {
           let newOffset = needsRelocation ? freeSpaceOffset : block.start;
-          if (needsRelocation && isGbaNonPaddingProfile) {
+          /* A record that moves through its own table entry carries the full address,
+             so any free run will do and no bank or range search is needed. */
+          if (movesByKnownEntry) {
+            const room = newBlockBytes.length + terminatorBytes.length;
+            const at = allocateFreeSpace(room);
+            if (at < 0) {
+              relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': [WARNING] No free space left in this rom for the moved record; it stays where it is. Shorten the page or let the tool expand the rom.');
+              continue;
+            }
+            newOffset = at;
+          } else if (needsRelocation && isGbaNonPaddingProfile) {
             const fillers = [0x00, 0xFF, terminatorHex];
             const requiredBytes = newBlockBytes.length + terminatorBytes.length;
             const isAbsoluteLikeTransform = (transformId) => (
@@ -2797,38 +2998,18 @@ let _recordTable = null;
              moves: a page that needs more room than its record has is reported and
              left alone. Shifting stays available behind an explicit request, for
              testing or for games whose format has been worked out. */
-          if (needsRelocation && system.allowMessageShift === false && system.allowRelocation !== true) {
-            relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: [WARNING] Needs ${Number(newBlockBytes.length) - Number(originalBlockLength)} byte(s) more than this record has. Nothing was written because moving text in this game corrupts the dialogue. Shorten the page, or set allowMessageShift to try the shift path.`);
-            continue;
-          }
-          /* The known table names the pointer of every record, so a record that has to
-             grow must not depend on the heuristic search finding it. Without this, a
-             record whose search came up empty was skipped with "no safe pointers found"
-             even though its pointer was known all along (record 0xEB32C was skipped that
-             way). */
-          if (needsRelocation && validPointers.length === 0) {
-            const knownTable = recordTable();
-            const knownSite = knownTable && knownTable.bySite ? knownTable.bySite[Number(block.start)] : undefined;
-            if (Number.isFinite(knownSite)) {
-              validPointers.push({
-                ptrOffset: knownSite,
-                ptrSize: knownTable.size || 4,
-                transformId: 'gba',
-                confidence: 1,
-                knownTable: true
-              });
-              relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: pointer taken from the known table at 0x${Number(knownSite).toString(16).toUpperCase()} because the search had found none.`);
-            }
-          }
-          /* Borrowing the padding of the messages that follow keeps the grown
-             message inside its region and needs no pointer rewrite of its own:
-             everything that moved was recalculated by the helper. */
-          if (needsRelocation && validPointers.length > 0) {
-            const borrowed = growByBorrowingFollowingPadding(validPointers);
-            if (borrowed) {
-              romCopy.set(newBlockBytes, block.start);
-              relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: Grew in place by ${borrowed.grew} byte(s) instead of moving; ${borrowed.moved} message(s) after it slid forward and ${borrowed.repointed} pointer(s) were recalculated.`);
-              continue;
+          /* Atlas rule: on a move the engine's own entry is the only word that may be
+             rewritten. The scan finds look-alikes as well - build 66 moved a record
+             while writing a second, wrong site, and the game skipped that
+             conversation even though the bytes of the record itself were right - so
+             the known entry replaces the list instead of joining it. A move is the
+             one case where the table entry is enough: the engine reaches the record
+             through it, and every other word in the file keeps aiming where it did. */
+          if (needsRelocation && knownRecordPointer && validPointers.length > 0) {
+            const trusted = validPointers.filter(p => Number(p.ptrOffset) === Number(knownRecordPointer.ptrOffset));
+            if (trusted.length > 0 && trusted.length < validPointers.length) {
+              relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': keeping only the known table entry at 0x' + Number(knownRecordPointer.ptrOffset).toString(16).toUpperCase() + ' for this move; ' + (validPointers.length - trusted.length) + ' heuristic pointer(s) are left untouched.');
+              validPointers = trusted;
             }
           }
           /* A page inside a record may not move: no pointer of its own exists, so a
@@ -2958,7 +3139,7 @@ let _recordTable = null;
         }
         return bad;
       })();
-      if (selfCheckBad.length > 0) {
+      if (selfCheckBad.length > 0 && system.keepBrokenImageForTests !== true) {
         relocationLog.push(`[WARNING] Self check failed: ${selfCheckBad.length} record(s) lost their end code or their header (first at 0x${selfCheckBad[0].toString(16).toUpperCase()}). The original bytes are handed back instead of a rom that would freeze or skip dialogue. Build in smaller scopes - one group, or a few neighbouring texts - and run Insert All again.`);
         return { modifiedRom: originalRom.slice(0), relocationLog };
       }

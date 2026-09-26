@@ -45,7 +45,13 @@
     // relocationLog and a short summary so the UI can show what happened
     // instead of throwing the report away.
     buildLog: [],
-    buildSummary: null
+    buildSummary: null,
+    /* Options the Pointers & Insert Range panel owns. They decide how a record that
+       outgrows its room is handled: keep every record where it is and pay with the
+       padding around it (default), move the record to free space and rewrite only
+       its own table entry (allowMessageShift true), or refuse the growth and report
+       it (allowMessageShift false). */
+    buildOptions: {}
   };
 
   var _listeners = new Set();
@@ -450,6 +456,14 @@
     return false;
   }
   K.translate.getInsertOwnedRanges = function () { return _insertOwnedRanges.slice(); };
+  /* The build options are part of the translate state so the panel can read them
+     back and a test can set them without reaching into the worker. */
+  K.translate.setBuildOptions = function (patch) {
+    var next = Object.assign({}, _state.buildOptions, patch || {});
+    _set({ buildOptions: next });
+    return next;
+  };
+  K.translate.getBuildOptions = function () { return Object.assign({}, _state.buildOptions); };
 
   function buildModifiedRom(scope) {
     var compileScope = scope === 'group' ? 'group' : 'all';
@@ -577,6 +591,12 @@
       }
     } catch (identErr) { knownTable = null; }
     system.knownPointerTable = knownTable;
+    var buildOptions = _state.buildOptions || {};
+    Object.keys(buildOptions).forEach(function (key) {
+      var value = buildOptions[key];
+      if (value === undefined || value === null) return;
+      system[key] = value;
+    });
 
     var mch = {};
     _buildMasterMap(_state.tableData, mch);
@@ -654,6 +674,12 @@
       var log = Array.isArray(d.relocationLog) ? d.relocationLog.slice() : [];
       var relocated = 0;
       var inPlace = 0;
+      /* A record that grew is reported in three different ways and the report used to
+         count only one of them, so a build that paid for every growth with the padding
+         around it still said "0 written in place". */
+      var grewInPlace = 0;
+      var slidForward = 0;
+      var leftWhereItIs = 0;
       var pointersUpdated = 0;
       var warnings = [];
       var relocations = [];
@@ -663,12 +689,19 @@
         var bm = text.match(/^Block at 0x([0-9A-F]+)/i);
         if (bm) lastBlock = parseInt(bm[1], 16);
         var rm = text.match(/Relocated to 0x([0-9A-F]+)/i);
+        var gm = text.match(/Grew in place by (\d+) byte/i);
         if (rm) {
           relocated++;
           // Where the text went, so the Hex Editor can point at the new bytes
           // instead of leaving the user staring at the old ones.
-          relocations.push({ from: lastBlock, to: parseInt(rm[1], 16), len: 0 });
-        } else if (/Injected in-place|Updated \d+ pointer\(s\) in-place/i.test(text)) inPlace++;
+          relocations.push({ from: lastBlock, to: parseInt(rm[1], 16), len: 0, kind: 'moved' });
+        } else if (gm) {
+          grewInPlace++;
+          var sm = text.match(/(\d+) message\(s\) after it slid forward/);
+          if (sm) slidForward += Number(sm[1]) || 0;
+          relocations.push({ from: lastBlock, to: lastBlock, len: Number(gm[1]) || 0, kind: 'grew', pointers: 0 });
+        } else if (/left where it is|stays where it is|Nothing was written/i.test(text)) leftWhereItIs++;
+        else if (/Injected in-place|Updated \d+ pointer\(s\) in-place/i.test(text)) inPlace++;
         var pm = text.match(/Updated (\d+) pointer/);
         if (pm) {
           pointersUpdated += Number(pm[1]) || 0;
@@ -687,6 +720,9 @@
         scope: _state.compileScope,
         relocations: relocations,
         relocated: relocated,
+        grewInPlace: grewInPlace,
+        slidForward: slidForward,
+        leftWhereItIs: leftWhereItIs,
         inPlace: inPlace,
         pointersUpdated: pointersUpdated,
         warnings: warnings,
@@ -698,7 +734,10 @@
         buildLog: log, buildSummary: summary,
         status: 'Inserted into ROM' + scopeNote + ': ' + _pendingBuildCount + ' text(s), ' +
           Math.round(bytes.length / 1024) + ' KB' + patchNote +
-          (relocated ? ', ' + relocated + ' text(s) relocated and repointed' : ', no relocation needed') +
+          (grewInPlace ? ', ' + grewInPlace + ' grew where it was' + (slidForward ? ' (' + slidForward + ' later message(s) slid forward)' : '') : '') +
+          (relocated ? ', ' + relocated + ' moved to free space and repointed' : '') +
+          (!grewInPlace && !relocated ? ', nothing had to move' : '') +
+          (leftWhereItIs ? ', ' + leftWhereItIs + ' left alone' : '') +
           (warnings.length ? ', ' + warnings.length + ' warning(s)' : '')
       });
 
