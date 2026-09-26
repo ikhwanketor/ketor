@@ -111,6 +111,7 @@ function loadWorkbench() {
   load(path.join(CORE, 'font-codec.js'));
   load(path.join(CORE, 'font-detect.js'));
   load(path.join(CORE, 'tile-codec.js'));
+  load(path.join(CORE, 'save-state.js'));
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
