@@ -2986,6 +2986,13 @@ let _recordTable = null;
             ? 'free space was asked for, so the messages around it stay where they are'
             : (willBorrow ? 'this region has no padding left to borrow' : 'the padding of this region is already paid out');
           relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': ' + why + ', so this record moves to free space and only its own table entry is rewritten.');
+        /* The translator asked why the pages they never touched moved as well. A page inside a
+           record has no pointer of its own: the engine takes the record from the table and reads
+           the pages one after another, so the smallest thing that can be put somewhere else is the
+           record. Saying how many pages travelled with it turns that into a number they can check. */
+        if (sortedTexts.length > 1) {
+          relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': that record is a chain of ' + sortedTexts.length + ' page(s) and they all travel with it, because a page has no pointer of its own - only this record\'s entry in the table is rewritten. The pages you did not edit are copied byte for byte.');
+        }
         }
 
         const fillRangeWithTerminatorPattern = (fillStart, fillEnd) => {
