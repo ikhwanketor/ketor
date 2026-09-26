@@ -2340,6 +2340,12 @@ let _recordTable = null;
       }
       const romView = new DataView(romCopy.buffer);
 
+      /* Highest first. A block that grows shifts the records after it, so every block
+         already written must sit above the one being written; otherwise a later block
+         writes at the address it had before the shift and lands on content that has already
+         moved, which is what froze the intro. */
+      modifications.sort(function (a, b) { return Number(b.block.start) - Number(a.block.start); });
+
       for (const mod of modifications) {
         const { block, newBlockBytes, originalBlockLength, needsRelocation, needsPointerUpdate, pointers, textOffsetsInBlock, textRanges, sortedTexts } = mod;
         let pointersForWrite = pointers;
