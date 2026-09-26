@@ -268,6 +268,60 @@
     );
   }
 
+  /* The right hand panel of the workbench: the settings of the activity that is open,
+     beside the work. It is what the left sidebar used to carry for the insert settings,
+     where a user had to scroll past the project, the groups and the translation tools to
+     find them. An activity offers one with Ketor.ui.registerRightPanelProvider. */
+  function RightPanelWrapper(props) {
+    var Provider = Ketor.ui.getRightPanelProvider(props.activity);
+    if (!Provider) return null;
+    var meta = ACTIVITY_META[props.activity] || {};
+
+    var handleResizeStart = useCallback(function (ev) {
+      ev.preventDefault();
+      var handleEl = ev.currentTarget;
+      handleEl.classList.add('dragging');
+      var startX = ev.clientX;
+      var startWidth = props.width;
+      var onMove = function (moveEv) {
+        props.onResize(Math.max(200, Math.min(560, startWidth - (moveEv.clientX - startX))));
+      };
+      var onUp = function () {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        try { handleEl.classList.remove('dragging'); } catch (_) { }
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    }, [props.onResize, props.width]);
+
+    return e('div', { className: 'kt-right-panel', style: { width: props.width + 'px' } },
+      e('div', {
+        className: 'kt-right-panel-resize-handle',
+        onMouseDown: handleResizeStart
+      }),
+      e('div', { className: 'kt-right-panel-header' },
+        e('span', null, (meta.title || props.activity) + ' settings'),
+        e('button', {
+          type: 'button',
+          className: 'icon-btn',
+          title: 'Hide this panel',
+          onClick: function () { props.onVisibleChange(false); }
+        }, e('span', { style: { fontSize: 14, lineHeight: 1 } }, '×'))
+      ),
+      e('div', { className: 'kt-right-panel-body' }, e(Provider, { activity: props.activity }))
+    );
+  }
+
+  function RightPanelShowButton(props) {
+    return e('button', {
+      type: 'button',
+      className: 'kt-right-panel-show',
+      title: 'Show the settings panel',
+      onClick: function () { props.onVisibleChange(true); }
+    }, '‹');
+  }
+
   function EditorColumn(props) {
     var state = props.state;
     var actions = props.actions;
@@ -461,7 +515,15 @@
     var setRomInfo = romState[1];
 
     var kebabState = useState(false);
+    /* The right hand settings panel: open by default when the activity offers one, and
+       its width is the user to drag. */
+    var rightPanelState = useState(true);
+    var rightPanelWidthState = useState(300);
     var kebabOpen = kebabState[0];
+    var rightPanelVisible = rightPanelState[0];
+    var setRightPanelVisible = rightPanelState[1];
+    var rightPanelWidth = rightPanelWidthState[0];
+    var setRightPanelWidth = rightPanelWidthState[1];
     var setKebabOpen = kebabState[1];
 
     var kebabAnchorRef = useRef(null);
@@ -1067,6 +1129,17 @@
         onCloseKebab: function () { setKebabOpen(false); },
         kebabAnchorRef: kebabAnchorRef
       }),
+
+      Ketor.ui.getRightPanelProvider(state.activeActivity)
+        ? (rightPanelVisible
+            ? e(RightPanelWrapper, {
+                activity: state.activeActivity,
+                width: rightPanelWidth,
+                onResize: setRightPanelWidth,
+                onVisibleChange: setRightPanelVisible
+              })
+            : e(RightPanelShowButton, { onVisibleChange: setRightPanelVisible }))
+        : null,
 
       state.statusBarVisible
         ? e(Ketor.ui.KetorStatusBar, {

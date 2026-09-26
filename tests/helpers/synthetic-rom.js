@@ -100,7 +100,9 @@ function buildSyntheticRom(options) {
     project: project,
     records: records,
     count: recordCount,
-    table: { at: tableAt, count: recordCount, entrySize: 4, stride: 4, endianness: 'little', base: base },
+    /* confirmed: every record this table describes closes with the trailer, which is the test
+       the detector applies before a table may be declared. */
+    table: { at: tableAt, count: recordCount, entrySize: 4, stride: 4, endianness: 'little', base: base, confirmed: true },
     region: { start: regionAt, end: regionAt + recordCount * stride },
     trailer: TRAILER,
     header: HEADER,

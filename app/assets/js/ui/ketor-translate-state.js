@@ -329,6 +329,7 @@
   }
   var _lineBudgetNote = '';
   var relocationLogNote = '';
+  var _tableNote = '';
 
   function measureOriginal(row) {
     if (!row) return 0;
@@ -445,13 +446,18 @@
   }
 
   function getPointerTableInfo() {
-    var declared = _state.buildOptions ? _state.buildOptions.knownPointerTable : null;
-    if (declared && Number.isFinite(Number(declared.at)) && Number(declared.count) > 1) {
+    /* The readout has to be the truth the build uses, not a copy that can drift from it:
+       it asks the same function the build asks. */
+    var choice = _tableForBuild();
+    if (choice.table) {
       return {
-        source: 'declared',
-        label: 'Declared table',
-        table: declared,
-        note: 'Every record is reached through this table, so a record that moves has only its own entry rewritten.'
+        source: choice.source,
+        label: choice.source === 'profile' ? 'Verified profile for this rom' : 'Declared table',
+        table: choice.table,
+        ignoredDeclaration: choice.ignoredDeclaration || null,
+        note: choice.source === 'profile'
+          ? 'This rom is already recognised, so its table is used and a declaration is not needed.'
+          : 'Every record is reached through this table, so a record that moves has only its own entry rewritten.'
       };
     }
     var verified = _verifiedTableForRom();
@@ -467,6 +473,7 @@
       source: 'none',
       label: 'No table known',
       table: null,
+      ignoredDeclaration: choice.ignoredDeclaration || null,
       note: 'Without a table the engine searches each block for pointers. That is slower and it can act on a look-alike, so a table is worth declaring for a rom that is being translated seriously.'
     };
   }
@@ -575,6 +582,27 @@
     return groups;
   }
 
+  /* The table the build is handed. A rom that is in the registry already has a table
+     that was verified against three sources, and that one wins: a declaration that has
+     not been confirmed by the detector must never replace it. This is what made a build
+     fail with 118 broken records - a declared table of 124 entries at 0x229E94 (graphics
+     pointers, not messages) was used for the self check, so the check was reading the
+     wrong layout and every shift was rolled back for a reason that was not real. */
+  function _tableForBuild() {
+    var declared = _state.buildOptions ? _state.buildOptions.knownPointerTable : null;
+    var verified = _verifiedTableForRom();
+    /* A rom that is in the registry has a table verified against three sources, and that
+       one is used whatever else was declared: a declaration is for roms nobody has worked
+       out yet. Declaring something else for a known rom is how a graphics pointer table
+       ended up in charge of the self check, which then reported 118 broken records that
+       were perfectly fine (the user log of 26 Sep). */
+    if (verified) {
+      return { table: verified, source: 'profile', ignoredDeclaration: (declared && Number(declared.at) !== Number(verified.at)) ? declared : null };
+    }
+    if (declared && declared.confirmed === true) return { table: declared, source: declared.auto === true ? 'detected' : 'declared', ignoredDeclaration: null };
+    return { table: null, source: 'none', ignoredDeclaration: declared || null };
+  }
+
   function detectPointers() {
     if (!_state.romBytes) { _set({ pointerNote: 'Load a rom first.' }); return []; }
     if (!K.core || typeof K.core.detectPointerTables !== 'function') {
@@ -627,6 +655,13 @@
       _set({ pointerNote: 'A table needs a site and at least two entries.' });
       return null;
     }
+    /* Only a structure the detector could prove is accepted. A table that merely looks
+       regular can point at graphics, and using one for the self check makes the check lie
+       about records that are fine. */
+    if (table.confirmed !== true && table.force !== true) {
+      _set({ pointerNote: 'That candidate was not confirmed: its records do not all close with the terminator, so it is not the message table. Nothing was declared - the build keeps using ' + getPointerTableInfo().label.toLowerCase() + '.' });
+      return null;
+    }
     var declared = {
       at: Number(table.at),
       count: Number(table.count),
@@ -635,7 +670,10 @@
       endianness: table.endianness || 'little',
       base: Number(table.base) || 0,
       name: table.name || 'declared table',
-      declared: true
+      declared: true,
+      /* Confirmed by the detector when it was picked, and kept in the project file so a
+         reloaded project is trusted for the same reason the pick was. */
+      confirmed: true
     };
     setBuildOptions({ knownPointerTable: declared });
     _set({ pointerNote: 'Table declared at 0x' + declared.at.toString(16).toUpperCase() + ' with ' + declared.count + ' entries. Every record that has to move will be repointed through it.' });
@@ -822,8 +860,51 @@
       pointerBase: (systemProfile && Number(systemProfile.pointerBase)) || 0
     };
 
-    var knownTable = _verifiedTableForRom();
+    var tableChoice = _tableForBuild();
+    /* A rom nobody has worked out yet: the tool looks for the table itself, once, before it
+       falls back to hunting pointers block by block. This is the detector that used to be a
+       button in the panel - it runs on its own now, because a translator should not have to
+       know what a pointer table is to translate a game. The answer is remembered in the
+       build options and travels with the project file, so it is paid for once. */
+    if (!tableChoice.table && K.core && typeof K.core.detectPointerTables === 'function' && _state.romBytes) {
+      try {
+        var autoRules = _consoleRulesIdFor((systemProfile && systemProfile.name) || _state.romSystem);
+        var autoFound = K.core.detectPointerTables(_state.romBytes, {
+          console: autoRules || undefined,
+          terminator: _tableTerminatorBytes(),
+          minEntries: 8,
+          maxResults: 4,
+          textOffsets: contextTexts.map(function (t) { return Number(t.startByte); })
+        }) || [];
+        var autoTable = autoFound.filter(function (t) { return t.confirmed === true; })[0] || null;
+        if (autoTable) {
+          var remembered = {
+            at: Number(autoTable.at),
+            count: Number(autoTable.count),
+            entrySize: Number(autoTable.entrySize) || 4,
+            stride: Number(autoTable.stride) || 4,
+            endianness: autoTable.endianness || 'little',
+            base: Number(autoTable.base) || 0,
+            name: 'table found automatically',
+            confirmed: true,
+            /* found by the tool, not picked by a person: the readout says so. */
+            auto: true
+          };
+          setBuildOptions({ knownPointerTable: remembered });
+          tableChoice = { table: remembered, source: 'detected', ignoredDeclaration: tableChoice.ignoredDeclaration };
+          _tableNote = 'Pointer table found automatically: ' + remembered.count + ' pointers at 0x' + remembered.at.toString(16).toUpperCase() + '.';
+        }
+      } catch (_) { }
+    }
+    var knownTable = tableChoice.table;
     system.knownPointerTable = knownTable;
+    if (tableChoice.ignoredDeclaration) {
+      _tableNote = 'The declared table at 0x' + Number(tableChoice.ignoredDeclaration.at).toString(16).toUpperCase() + ' was not used: it is not confirmed, and this rom already has ' + (knownTable && knownTable.count ? knownTable.count + ' verified entries' : 'no verified table') + '.';
+    } else if (tableChoice.ignoredVerified) {
+      _tableNote = 'Using the declared table at 0x' + Number(tableChoice.ignoredVerified.at).toString(16).toUpperCase() + ' instead of the verified profile for this rom.';
+    } else {
+      _tableNote = '';
+    }
     var buildOptions = _state.buildOptions || {};
     Object.keys(buildOptions).forEach(function (key) {
       var value = buildOptions[key];
@@ -953,6 +1034,7 @@
       });
       if (_lineBudgetNote) warnings.push('Line budget: ' + _lineBudgetNote);
       if (typeof relocationLogNote === 'string' && relocationLogNote) log.push(relocationLogNote);
+      if (typeof _tableNote === 'string' && _tableNote) log.push(_tableNote);
       var owned = _rememberInsertRanges(_lastBuildBase, bytes);
       log.push('Insert ownership: ' + owned + ' range(s) of this build are excluded from the hex patches on the next one, so a second Insert All cannot shift the same records twice.');
 
@@ -1005,7 +1087,15 @@
       return;
     }
     if (d.type === 'error') {
-      _set({ isBusy: false, progress: 0, status: 'Build error: ' + (d.message || '') });
+      /* The worker sends the stack with the message; the first frame is what turns "Build
+         error: Cannot read properties of undefined" into a line somebody can fix, so it is
+         kept in the status instead of thrown away. */
+      var where = '';
+      if (d.stack) {
+        var frames = String(d.stack).split('\n').filter(function (line) { return line.indexOf('at ') >= 0; });
+        if (frames.length > 0) where = ' (' + frames[0].trim() + ')';
+      }
+      _set({ isBusy: false, progress: 0, status: 'Build error: ' + (d.message || '') + where });
     }
   }
 

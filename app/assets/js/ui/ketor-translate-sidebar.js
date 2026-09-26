@@ -59,31 +59,6 @@
      to find a record, and what may happen to a record that outgrows the room it has.
      The readout is the truth the build will use, not a suggestion: source, site,
      entry size and base come straight from the table the engine is handed. */
-  /* Four ways to pay for a record that outgrows its room. The first is the one a
-     translator asked for: shift first, verify every shift, and move the records the
-     shift cannot keep. The others exist because a game can prefer one layout. */
-  var INSERT_MODES = [
-    {
-      id: 'hybrid',
-      label: 'Shift first, move what fails',
-      title: 'Each grown record is shifted in place first - the layout the reference indonesian patch uses, everything keeps its address - and every shift is checked against the whole rom. A shift that would leave a record broken is undone and that record moves to free space instead.'
-    },
-    {
-      id: 'moveonly',
-      label: 'Always move to free space',
-      title: 'Nothing in the message region is touched: every grown record is copied to free space and only its own pointer is rewritten. The Atlas rule, and the fastest for a whole translation.'
-    },
-    {
-      id: 'shiftonly',
-      label: 'Only shift, never move',
-      title: 'A grown record is shifted in place or reported; nothing is ever copied elsewhere. Use it when you want the message region to keep exactly the layout the original game had.'
-    },
-    {
-      id: 'never',
-      label: 'Never move, only report',
-      title: 'Nothing is written for a record that needs more room; the build reports how many bytes it is short.'
-    }
-  ];
 
   function TranslateSidebar() {
     var t = K.translate.useTranslate();
@@ -250,69 +225,6 @@
                 })
               )
             )
-      ),
-
-      /* Pointers & Insert Range. Before this panel the tool decided both silently:
-         the table came from a registry the user could not see, and whether a record
-         might move was a constant in the code. */
-      e(Section, { title: 'Pointers & Insert Range' },
-        e('div', { style: { fontSize: 11, lineHeight: 1.5, color: 'var(--kt-sidebar-fg)', opacity: 0.85 } },
-          e('div', { style: { fontWeight: 600, opacity: 1 } }, pointerInfo.label),
-          pointerInfo.table
-            ? e('div', { style: { marginTop: 2, fontFamily: 'monospace' } },
-                '0x' + Number(pointerInfo.table.at).toString(16).toUpperCase() +
-                '  ' + Number(pointerInfo.table.count) + ' entries' +
-                '  ' + (Number(pointerInfo.table.entrySize) || 4) + ' byte' +
-                '  base 0x' + (Number(pointerInfo.table.base) || 0).toString(16).toUpperCase())
-            : null,
-          e('div', { style: { marginTop: 4 } }, pointerInfo.note)
-        ),
-        e(Action, {
-          label: 'Detect pointer table',
-          title: 'Reads the loaded rom and reports compact pointer tables it can prove: constant spacing, every record closing with the terminator, and one entry delta over the texts you extracted.',
-          disabled: !t.romBytes,
-          onClick: onDetectPointers
-        }),
-        t.pointerNote ? e('div', {
-          style: { marginTop: 6, fontSize: 11, opacity: 0.8, color: 'var(--kt-sidebar-fg)', lineHeight: 1.45 }
-        }, t.pointerNote) : null,
-        (t.pointerReport || []).length ? e('div', { style: { marginTop: 6 } },
-          (t.pointerReport || []).map(function (cand, ci) {
-            return e('button', {
-              key: 'cand' + ci,
-              type: 'button',
-              className: 'kt-btn small',
-              title: cand.confirmed ? 'Every record span closes and one entry delta covers the extracted texts.' : 'The structure is regular but the records did not all close; use it only if you know this rom.',
-              onClick: function () { onUseTable(cand); },
-              style: { width: '100%', textAlign: 'left', marginTop: 4 }
-            }, 'Use 0x' + Number(cand.at).toString(16).toUpperCase() + ' · ' + cand.count + ' entries' + (cand.confirmed ? ' · records close' : ' · unconfirmed'));
-          })
-        ) : null,
-        pointerInfo.source !== 'profile' ? e(Action, {
-          label: 'Use no declared table',
-          title: 'Falls back to the verified profile for this rom, or to a per block pointer search.',
-          onClick: onClearTable
-        }) : null,
-        e('div', {
-          style: { marginTop: 10, fontSize: 11, fontWeight: 600, color: 'var(--kt-sidebar-fg)' }
-        }, 'When a record needs more room'),
-        INSERT_MODES.map(function (m) {
-          return e('button', {
-            key: m.id,
-            type: 'button',
-            className: 'kt-btn small',
-            title: m.title,
-            onClick: function () { onInsertMode(m.id); },
-            style: { width: '100%', textAlign: 'left', marginTop: 4, fontWeight: insertMode === m.id ? 600 : 400 }
-          }, (insertMode === m.id ? '● ' : '○ ') + m.label);
-        }),
-        t.buildSummary ? e('div', {
-          style: { marginTop: 8, fontSize: 11, opacity: 0.8, color: 'var(--kt-sidebar-fg)', lineHeight: 1.45 }
-        }, 'Last insert: ' +
-          (t.buildSummary.relocated || 0) + ' record(s) moved to free space, ' +
-          (t.buildSummary.grewInPlace || 0) + ' grew where they were, ' +
-          (t.buildSummary.leftWhereItIs || 0) + ' left alone' +
-          ((t.buildSummary.warnings || []).length ? ', ' + t.buildSummary.warnings.length + ' warning(s)' : '.')) : null
       ),
 
       hasTexts ? e(Section, { title: 'Translation I/O' },

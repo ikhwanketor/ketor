@@ -2522,7 +2522,29 @@ let _recordTable = null;
         freeSpaceRuns.length = 0;
         keptRuns.forEach(function (r) { freeSpaceRuns.push(r); });
       }
+      /* Records that move are put past the end of the rom and the image is grown for them.
+         A run of zeroes inside the file is not a licence to write there: on this rom the
+         run that looked free held sprite tiles, and the in game result was a graphics
+         glitch whenever the player was hit. Growing the file cannot touch anything the
+         game reads, and every emulator and flash cart this project is tested with accepts
+         a larger rom. system.freeSpacePolicy === 'interior' asks for the old behaviour. */
+      let appendCursor = 0;
       const allocateFreeSpace = (need) => {
+        if (system.freeSpacePolicy !== 'interior') {
+          if (appendCursor === 0) appendCursor = romCopy.length;
+          let at = appendCursor;
+          at += (4 - (at % 4)) % 4;
+          const end = at + need;
+          if (end + 0x1000 > romCopy.length) {
+            const grown = new Uint8Array(end + 0x4000);
+            grown.set(romCopy);
+            romCopy = grown;
+            romView = new DataView(romCopy.buffer);
+            relocationLog.push('ROM grown to ' + Math.round(romCopy.length / 1024) + 'KB so the records that move sit after everything the game uses.');
+          }
+          appendCursor = end;
+          return at;
+        }
         for (const run of freeSpaceRuns) {
           let at = run.cursor - need;
           at -= (at % 4);
@@ -2760,7 +2782,7 @@ let _recordTable = null;
                still finds the record header it used to find.
            A shift that fails any of them is undone and the record moves instead. */
         const verifyBorrow = (borrow) => {
-          if (!borrow || !borrow.movedTo) return { ok: true };
+          if (!borrow || !borrow.movedTo) return { ok: true, broken: [] };
           const tailStart = borrow.tailStart;
           const tailEnd = borrow.tailEnd;
           const table = recordTable();
@@ -2796,18 +2818,41 @@ let _recordTable = null;
               }
             }
           }
-          return { ok: true };
+          /* And every record the shift moved has to still close inside its own span. The
+             span of a record is the distance to the next entry that aims into the tail,
+             which is exactly what the game will read. */
+          const reached = [];
+          for (let i = 0; i < Math.min(sites.length, entries.length); i++) {
+            let w = 0;
+            for (let b = 3; b >= 0; b--) w = (w * 256) + romCopy[sites[i] + b];
+            const at = (w >>> 0) - (table.base || 0);
+            if (at >= tailStart && at < tailEnd) reached.push({ index: i, at: at });
+          }
+          reached.sort(function (a, b) { return a.at - b.at; });
+          for (let k = 0; k < reached.length; k++) {
+            const from = reached[k].at;
+            const to = (k + 1 < reached.length) ? reached[k + 1].at : Math.min(romCopy.length, from + 0x10000);
+            let closes = false;
+            for (let p = Math.min(romCopy.length, to) - 1; p >= from; p--) {
+              if (romCopy[p] === terminatorHex) { closes = true; break; }
+            }
+            if (!closes) {
+              const original = Number(entries[reached[k].index]) || from;
+              return { ok: false, broken: [original], why: 'record 0x' + original.toString(16).toUpperCase() + ' would not close after the shift' };
+            }
+          }
+          return { ok: true, broken: [] };
         };
 
-        /* Hybrid by default, which is what a translator asked for: try the shift first,
-           because it is the layout the reference indonesian patch uses and it keeps every
-           record at its own address, then move the records the shift cannot keep. A shift
-           is kept only when it verifies (verifyBorrow above); the ones that do not are
-           undone and their record moves instead, so the combination is safe even though
-           the shift path on its own is not - twenty two unverified shifts in one build
-           left nine records without their end code. allowMessageShift true asks for the
-           shift and nothing else, false asks for nothing to move. */
-        const shiftAllowed = system.allowMessageShift !== false && system.forceRelocationOnly !== true;
+        /* One way of paying for a record that outgrows its room, the way both Kruptar 7 and
+           Atlas do it: write the record where there is room and rewrite its own pointer.
+           Kruptar 7 packs the texts into declared destination blocks and marks a text that
+           does not fit as an insert error (7/MainUnit.pas, "Ptrs[J] := $FFFFFFFF" and
+           "ProgressInsertErrorProc(grName, WPLeftSize)"), Atlas writes an over long text to
+           free space and rewrites its pointer, and neither of them slides the rest of the
+           file or recalculates every pointer. The shift path below is kept as an experiment
+           behind allowMessageShift true only, and the panel does not offer it. */
+        const shiftAllowed = system.allowMessageShift === true && system.forceRelocationOnly !== true;
         const willBorrow = needsRelocation && pointersForWrite.length > 0 && shiftAllowed;
         if (willBorrow) {
           const borrowCandidates = knownRecordPointer
@@ -2825,8 +2870,13 @@ let _recordTable = null;
                pass over the table, which is nothing next to writing a rom the game
                cannot read. When either says no, the shift is undone and this record
                moves to free space instead - the hybrid the translator asked for. */
+            /* Only what the shift itself touched is judged here. Asking the whole rom after
+               every shift let one unrelated record - or a wrong table - roll back every shift
+               in the build, which is the opposite of what was asked for: shift the texts one
+               by one and move only the ones that fail. The whole rom is still checked once at
+               the end, and a build that fails there is redone with relocation only. */
             const verdict = verifyBorrow(borrowed);
-            const brokenAfterShift = verdict.ok ? findBrokenRecords() : [];
+            const brokenAfterShift = verdict.ok ? verdict.broken : [];
             if (verdict.ok && brokenAfterShift.length === 0) {
               romCopy.set(newBlockBytes, block.start);
               borrowKept++;

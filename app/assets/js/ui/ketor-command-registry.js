@@ -104,7 +104,10 @@
   // Tab providers: registered by tab kind (e.g. 'translate')
   Ketor.ui.registry = Ketor.ui.registry || {
     sidebars: {},
-    tabs: {}
+    tabs: {},
+    /* The right hand panel: settings for the activity that is open, beside the work
+       instead of buried in the left sidebar. The insert settings moved there. */
+    rightPanels: {}
   };
 
   Ketor.ui.registerSidebarProvider = function (activityId, Component) {
@@ -125,6 +128,16 @@
 
   Ketor.ui.getTabProvider = function (kind) {
     return Ketor.ui.registry.tabs[String(kind)] || null;
+  };
+
+  Ketor.ui.registerRightPanelProvider = function (activityId, Component) {
+    if (!activityId || typeof Component !== 'function') return false;
+    Ketor.ui.registry.rightPanels[String(activityId)] = Component;
+    return true;
+  };
+
+  Ketor.ui.getRightPanelProvider = function (activityId) {
+    return Ketor.ui.registry.rightPanels[String(activityId)] || null;
   };
 
 })(window);

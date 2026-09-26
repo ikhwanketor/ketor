@@ -84,9 +84,10 @@ function loadWorkbench() {
   win.ReactDOM = { createRoot: function () { return { render: function () {} }; } };
   win.Ketor = {
     ui: {
-      sidebarProviders: {}, tabProviders: {},
+      sidebarProviders: {}, tabProviders: {}, rightPanelProviders: {},
       registerSidebarProvider: function (id, fn) { win.Ketor.ui.sidebarProviders[id] = fn; },
       registerTabProvider: function (id, fn) { win.Ketor.ui.tabProviders[id] = fn; },
+      registerRightPanelProvider: function (id, fn) { win.Ketor.ui.rightPanelProviders[id] = fn; },
       icon: function () { return {}; },
       getSidebarProvider: function () { return null; }, getTabProvider: function () { return null; }
     },

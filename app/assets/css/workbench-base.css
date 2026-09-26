@@ -438,6 +438,75 @@
 }
 
 /* ---- Editor column ---- */
+/* Right hand settings panel: the activity settings, beside the work. */
+.kt-right-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  max-width: 560px;
+  flex: 0 0 auto;
+  border-left: 1px solid var(--kt-widget-border-default);
+  background: var(--kt-sidebar-bg, var(--kt-editor-bg));
+  overflow: hidden;
+}
+.kt-right-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.85;
+  border-bottom: 1px solid var(--kt-widget-border-default);
+}
+.kt-right-panel-body { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; }
+.kt-right-panel-resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  cursor: col-resize;
+  z-index: 3;
+}
+.kt-right-panel-resize-handle:hover,
+.kt-right-panel-resize-handle.dragging { background: var(--kt-focus-border); }
+.kt-right-panel-show {
+  align-self: stretch;
+  width: 18px;
+  border: none;
+  border-left: 1px solid var(--kt-widget-border-default);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.kt-right-panel-show:hover { opacity: 1; }
+.kt-choice {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  margin-top: 6px;
+  border: 1px solid var(--kt-widget-border-default);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.kt-choice.active { border-color: var(--kt-focus-border); background: var(--kt-list-hover-bg, rgba(127,127,127,0.08)); }
+.kt-choice-mark { line-height: 1.4; }
+.kt-choice-body { display: flex; flex-direction: column; gap: 2px; }
+.kt-choice-label { font-size: 12px; }
+.kt-choice-hint { font-size: 11px; opacity: 0.7; line-height: 1.4; }
+.kt-hint { font-size: 11px; line-height: 1.5; opacity: 0.8; }
+.kt-warn-note { font-size: 11px; line-height: 1.45; margin-top: 4px; color: var(--kt-warning-fg, #d7a24a); }
+.kt-btn-quiet { opacity: 0.55; }
+
 .kt-editor-column {
   grid-area: editor;
   display: flex;

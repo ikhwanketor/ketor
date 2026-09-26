@@ -97,7 +97,7 @@ suite.test('a project brings its declared table and its mode back', async functi
   const loaded = await loadRom(fixture);
   const payload = JSON.parse(JSON.stringify(fixture.project));
   payload.pointers = {
-    table: { at: 0x2000, count: 33, entrySize: 4, stride: 4, endianness: 'little', base: 0x08000000, name: 'declared table' },
+    table: { at: 0x2000, count: 33, entrySize: 4, stride: 4, endianness: 'little', base: 0x08000000, name: 'declared table', confirmed: true },
     allowMessageShift: true
   };
   loaded.K.translate.loadProjectContent(JSON.stringify(payload));
@@ -121,21 +121,52 @@ suite.test('a rom the registry knows is read from the registry, not guessed', as
   t.assertEqual(info.table.count, 2893, 'with the verified entry count');
 });
 
-suite.test('the panel renders the readout, the detector and the three modes', async function (t) {
+suite.test('an unconfirmed candidate is refused, and never replaces the verified profile', async function (t) {
+  /* The user log of 26 Sep: a candidate of 124 entries at 0x229E94 (graphics pointers)
+     was declared, the self check then read that layout and reported 118 broken records
+     that were fine, and every shift was rolled back for a reason that was not real. */
   const fixture = buildSyntheticRom({ records: 12 });
-  const loaded = await loadRom(fixture, { buildOptions: { knownPointerTable: fixture.table } });
-  const provider = loaded.env.K.ui.sidebarProviders.translation;
-  t.assert(typeof provider === 'function', 'the translation sidebar should be registered');
-  const tree = provider();
-  const text = loaded.env.treeStrings(tree).join(' | ');
-  t.assert(text.indexOf('Pointers & Insert Range') >= 0, 'the section should be there: ' + text.slice(0, 200));
-  t.assert(text.indexOf('Verified profile for this rom') >= 0 || text.indexOf('Declared table') >= 0, 'the readout should name the table source: ' + text.slice(0, 300));
-  t.assert(text.indexOf('Detect pointer table') >= 0, 'the detect action should be there');
-  t.assert(text.indexOf('Shift first, move what fails') >= 0, 'the hybrid mode should be listed');
-  t.assert(text.indexOf('Always move to free space') >= 0, 'the move only mode should be listed');
-  t.assert(text.indexOf('Only shift, never move') >= 0, 'the shift only mode should be listed');
-  t.assert(text.indexOf('Never move, only report') >= 0, 'the refusal mode should be listed');
-  t.assert(text.indexOf('● Shift first') >= 0, 'the active mode should be marked');
+  const loaded = await loadRom(fixture, { identifyAs: 'abd71fe01ebb201bcc133074db1dd8c5253776c7' });
+  const K = loaded.K;
+  const refused = K.translate.declarePointerTable({ at: 0x229E94, count: 124, entrySize: 4, stride: 4, base: 0x08000000, confirmed: false });
+  t.assertEqual(refused, null, 'an unconfirmed candidate must not be declared');
+  t.assert(/not confirmed/i.test(K.translate.getState().pointerNote), 'and the note should say why: ' + K.translate.getState().pointerNote);
+
+  const accepted = K.translate.declarePointerTable({ at: 0x229E94, count: 124, entrySize: 4, stride: 4, base: 0x08000000, confirmed: true });
+  t.assert(accepted, 'a confirmed candidate is accepted');
+  const info = K.translate.getPointerTableInfo();
+  t.assertEqual(info.source, 'profile', 'but the verified profile for this rom still wins');
+  t.assertEqual(info.table.at, 0x506B40, 'at the verified site');
+});
+
+suite.test('nothing about pointers is put in front of the user', async function (t) {
+  /* The panel existed for one round and was removed on request: a translator should not have
+     to know what a pointer table is. The tool finds the table itself and says so in the build
+     report, and the settings stay in the project file for anyone who wants to drive them. */
+  const fixture = buildSyntheticRom({ records: 12 });
+  const loaded = await loadRom(fixture);
+  t.assertEqual(loaded.env.K.ui.rightPanelProviders.translation, undefined, 'no pointer panel is registered');
+  t.assertEqual(loaded.env.K.ui.sidebarProviders.translation !== undefined, true, 'the normal sidebar is still there');
+});
+
+suite.test('a build needs no settings at all: the table is found and used automatically', async function (t) {
+  const fixture = buildSyntheticRom({ records: 16 });
+  const loaded = await loadRom(fixture);
+  const K = loaded.K;
+  t.assertEqual(K.translate.getPointerTableInfo().source, 'none', 'nothing is known before the build');
+  const target = fixture.records[2];
+  K.search.applyTranslations([{ startByte: target.textStart, translatedText: target.text + ' X X X X' }]);
+  await loaded.env.sleep(20);
+  K.translate.buildModifiedRom('all');
+  await loaded.env.runPending();
+  await loaded.env.sleep(200);
+  await loaded.env.runPending();
+  const state = K.translate.getState();
+  t.assert(state.modifiedRom, 'the build produced no image: ' + state.status);
+  const log = (state.buildLog || []).join('\n');
+  t.assert(/found automatically/.test(log), 'the log should say the table was found by the tool: ' + log.slice(0, 300));
+  t.assert(/Self check passed/.test(log), 'and the self check should have passed');
+  t.assertEqual(K.translate.getPointerTableInfo().source, 'detected', 'the found table is remembered for the next build');
 });
 
 module.exports = { suite: suite };

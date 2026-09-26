@@ -68,7 +68,10 @@ suite.test('nothing grows: the image is handed back untouched', async function (
   t.assert(/Self check passed/.test(built.log.join('\n')), 'the self check should have passed');
 });
 
-suite.test('the default is hybrid: the shift is tried first and kept when it checks out', async function (t) {
+suite.test('the default moves the record, which is what Kruptar 7 and Atlas do', async function (t) {
+  /* Kruptar 7 packs a text into a destination block and marks the ones that do not fit as
+     an insert error; Atlas writes an over long text to free space and rewrites its pointer.
+     Neither slides the rest of the file, so this is the one way the app uses. */
   const fixture = buildSyntheticRom({ records: 12 });
   const target = fixture.records[3];
   const translated = {};
@@ -78,13 +81,14 @@ suite.test('the default is hybrid: the shift is tried first and kept when it che
 
   const before = readTable(fixture.rom, fixture.table);
   const after = readTable(built.out, fixture.table);
-  t.assertEqual(before[3], after[3], 'a verified shift keeps the record at its own address');
+  t.assert(before[3] !== after[3], 'the grown record should have been repointed');
+  t.assert(after[3] >= fixture.rom.length, 'to a copy after everything the game uses');
 
   const report = inspectRecords(built.out, fixture, fixture.rom);
   t.assertEqual(report.broken.length, 0, 'no record may be broken: ' + JSON.stringify(report.broken.slice(0, 3)));
   const text = built.log.join('\n');
-  t.assert(/Grew in place/.test(text), 'the log should say the record grew where it was');
-  t.assert(/checked out/.test(text), 'and that the shift was checked');
+  t.assert(!/Grew in place/.test(text), 'nothing may be shifted by default');
+  t.assert(/Relocated to/.test(text), 'the log should say the record moved');
   t.assert(/Self check passed/.test(text), 'the self check should have passed');
 });
 
@@ -107,7 +111,11 @@ suite.test('move only mode: the record moves to free space and only its own entr
 
   const at = after[3];
   t.assert(at < fixture.region.start || at >= fixture.region.end, 'the record should have left its own region');
+  /* Past the end of the rom, not into a run of zeroes inside it: a run that looks free can
+     be sprite tiles, and writing there was the graphics glitch the user saw in game. */
+  t.assert(at >= fixture.rom.length, 'the copy must sit after everything the game uses, got 0x' + at.toString(16));
   t.assert(built.out[at] === 0x01 && built.out[at + 1] === 0x00, 'the copy should start with the record header');
+  t.assert(built.out.length > fixture.rom.length, 'the image should have been grown for it');
 
   const report = inspectRecords(built.out, fixture, fixture.rom);
   t.assertEqual(report.broken.length, 0, 'no record may be broken: ' + JSON.stringify(report.broken.slice(0, 3)));
@@ -126,14 +134,13 @@ suite.test('every record grows: each one moves, nothing else shifts', async func
 
   const after = readTable(built.out, fixture.table);
   const report = inspectRecords(built.out, fixture, fixture.rom);
-  /* In the hybrid, a record either keeps its address (the shift paid for the growth and
-     checked out) or moves (the shift could not pay). What is not allowed is a record
-     that is missing or broken, and that is what is asserted here. */
-  t.assertEqual(report.moved + report.inPlace, fixture.count, 'every record must be accounted for');
+  t.assertEqual(report.moved, fixture.count, 'every grown record should have moved');
   t.assertEqual(report.broken.length, 0, 'no record may be broken: ' + JSON.stringify(report.broken.slice(0, 3)));
+  after.forEach(function (at, i) {
+    t.assert(at >= fixture.rom.length, 'record ' + i + ' must sit after the game data, got 0x' + at.toString(16));
+  });
   const text = built.log.join('\n');
   t.assert(/Self check passed/.test(text), 'the self check should have passed');
-  t.assert(/Growth report: \d+ record\(s\) grew in place/.test(text), 'the report should say how the growth was paid for');
 });
 
 suite.test('every record grows in move only mode: each one moves to its own address', async function (t) {
