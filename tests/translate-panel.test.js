@@ -169,4 +169,26 @@ suite.test('a build needs no settings at all: the table is found and used automa
   t.assertEqual(K.translate.getPointerTableInfo().source, 'detected', 'the found table is remembered for the next build');
 });
 
+
+suite.test('the in game preview lays a text out the way the engine draws it', async function (t) {
+  /* Measured on the rom: a record holds pages joined by 05 09, a page holds lines joined by
+     06 (the [LINE] token), and the extractor gives one page per text. The box therefore has
+     to answer one question per text: do these lines fit the width the original page had. */
+  const fixture = buildSyntheticRom({ records: 4 });
+  const loaded = await loadRom(fixture);
+  const layout = loaded.K.translate.previewLayout;
+
+  t.assertEqual(layout('one\ntwo', 20).lines.length, 2, 'a newline is a line break');
+  t.assertEqual(layout('a[LINE]b', 20).lines.length, 2, 'so is the line token');
+  const wrapped = layout('alpha beta gamma delta', 12);
+  t.assertEqual(wrapped.lines.length, 2, 'a line wider than the box wraps');
+  wrapped.lines.forEach(function (line) {
+    t.assert(line.text.length <= 12, 'no line may be wider than the box: ' + JSON.stringify(line.text));
+  });
+  t.assertEqual(wrapped.over.length, 0, 'and nothing is reported as too wide');
+  const tooWide = layout('supercalifragilistic', 10);
+  t.assertEqual(tooWide.over.length, 1, 'a word that cannot be broken is reported as too wide');
+  t.assert(layout('[SOMA PORTRAIT]Hello', 20).lines[0].text.indexOf('[SOMA PORTRAIT]') === 0, 'a speaker token stays in the line');
+});
+
 module.exports = { suite: suite };

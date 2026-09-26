@@ -311,6 +311,39 @@
     if (isTokenForm) s = s.replace(LINE_TOKEN_SPLIT, '\n');
     return s.split('\n');
   }
+  /* The layout of one game text, the way the engine draws it. Measured on the rom: a record
+     holds pages joined by 05 09, a page holds lines joined by 06 (the [LINE] token), and the
+     extractor gives one page per text. So a newline inside a text is a line break, and what
+     the box has to answer is whether those lines fit the width the original page had. */
+  function previewLayout(text, width) {
+    var w = Math.max(8, Number(width) || 32);
+    var lines = [];
+    var over = [];
+    String(text == null ? '' : text)
+      .split(/\n/)
+      .forEach(function (rawLine) {
+        String(rawLine).split(/\[LINE\]/i).forEach(function (hardLine) {
+          var words = hardLine.split(/\s+/).filter(function (word) { return word.length > 0; });
+          if (words.length === 0) { lines.push({ text: '', over: false }); return; }
+          var current = '';
+          var flush = function () {
+            if (current.length === 0) return;
+            lines.push({ text: current, over: current.length > w });
+            if (current.length > w) over.push(current);
+            current = '';
+          };
+          words.forEach(function (word) {
+            if (current.length === 0) { current = word; return; }
+            if ((current + ' ' + word).length <= w) { current += ' ' + word; return; }
+            flush();
+            current = word;
+          });
+          flush();
+        });
+      });
+    return { lines: lines, over: over, width: w };
+  }
+
   function lineBudget(row) {
     if (!row) return { budget: 0, originalLines: 0, translatedLines: 0, over: [] };
     var origLines = linesOf(row.originalText, false);
@@ -1475,6 +1508,7 @@
   K.translate.measureBytes = measureBytes;
   K.translate.measureOriginal = measureOriginal;
   K.translate.lineBudget = lineBudget;
+  K.translate.previewLayout = previewLayout;
   K.translate.getActiveGroupId = getActiveGroupId;
   K.translate.getActiveGroupEntries = getActiveGroupEntries;
   K.translate.setFilter = setFilter;

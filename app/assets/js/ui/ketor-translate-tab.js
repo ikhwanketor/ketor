@@ -382,6 +382,118 @@
     );
   }
 
+  /* The in game preview.
+
+     A game text is not one paragraph: the record holds pages, a page holds lines, and the
+     engine draws three of those lines inside one dialogue box. A translation can be the
+     right length in bytes and still run out of the box, and that is the question a
+     translator actually asks while typing. The box below is drawn the way the game draws
+     it: the page breaks of the record, the line breaks of the page, the same number of
+     characters per line as the original page had, and the speaker and button tokens shown
+     as the chips they are. */
+  function renderTokens(line, keyPrefix) {
+    var parts = String(line).split(/([[^\]]{1,24}])/g);
+    return parts.map(function (part, i) {
+      if (!part) return null;
+      var isToken = /^[[^\]]{1,24}]$/.test(part);
+      return e('span', {
+        key: keyPrefix + '-' + i,
+        style: isToken
+          ? {
+              color: '#f0c674', background: 'rgba(240,198,116,0.12)',
+              borderRadius: 3, padding: '0 3px', margin: '0 1px', fontSize: '0.92em'
+            }
+          : null
+      }, part);
+    });
+  }
+
+  function GamePreviewBox(props) {
+    var showOriginalState = useState(false);
+    var showOriginal = showOriginalState[0];
+    var setShowOriginal = showOriginalState[1];
+    var text = showOriginal ? props.original : props.translation;
+    var budget = props.budget || { budget: 0, over: [] };
+    var width = Math.max(8, Number(budget.budget) || 32);
+    var layout = K.translate.previewLayout(text, width);
+    var lines = layout.lines;
+    var empty = String(text == null ? '' : text).trim().length === 0;
+    var shown = lines.slice(0, 4);
+    var hidden = lines.length - shown.length;
+    var over = lines.filter(function (line) { return line.over; }).length;
+
+    return e('div', {
+      style: {
+        flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column',
+        border: '1px solid var(--kt-widget-border-default)', borderRadius: 3,
+        background: 'var(--kt-editor-bg)', overflow: 'hidden'
+      }
+    },
+      e('div', {
+        style: {
+          flex: '0 0 auto', padding: '3px 6px', fontSize: 10,
+          textTransform: 'uppercase', letterSpacing: '0.05em', opacity: 0.6,
+          borderBottom: '1px solid var(--kt-widget-border-default)',
+          display: 'flex', alignItems: 'center', gap: 8
+        }
+      },
+        'As the game shows it',
+        e('button', {
+          type: 'button',
+          className: 'kt-btn small',
+          style: { marginLeft: 'auto', fontSize: 10, padding: '1px 6px' },
+          title: 'Show the original text in the same box',
+          onClick: function () { setShowOriginal(!showOriginal); }
+        }, showOriginal ? 'Original' : 'Translation')
+      ),
+      e('div', {
+        style: { flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: 10 }
+      },
+        empty
+          ? e('div', { style: { fontStyle: 'italic', opacity: 0.55, fontSize: 12 } },
+              'Type a translation to see it in the game box.')
+          : e('div', {
+              style: {
+                position: 'relative',
+                background: '#0b1020',
+                border: '2px solid #8fa6d8',
+                borderRadius: 4,
+                boxShadow: 'inset 0 0 0 2px #1b2545',
+                padding: '8px 10px 10px 10px',
+                minHeight: 66,
+                fontFamily: MONO,
+                fontSize: 13,
+                lineHeight: '18px',
+                color: '#f2f5ff',
+                textShadow: '1px 1px 0 #000'
+              }
+            },
+              shown.map(function (line, i) {
+                return e('div', {
+                  key: 'l' + i,
+                  style: { whiteSpace: 'pre-wrap', color: line.over ? '#ff9d9d' : '#f2f5ff' }
+                }, renderTokens(line.text, 'l' + i));
+              }),
+              hidden > 0 ? e('div', {
+                style: { position: 'absolute', right: 8, bottom: 4, fontSize: 10, color: '#f0c674' }
+              }, '+' + hidden + ' more line(s) in this page') : null
+            )
+      ),
+      e('div', {
+        style: {
+          flex: '0 0 auto', padding: '4px 8px', fontSize: 11,
+          borderTop: '1px solid var(--kt-widget-border-default)',
+          color: over > 0 ? 'var(--kt-error-fg)' : 'var(--kt-editor-fg)',
+          opacity: over > 0 ? 1 : 0.7
+        }
+      },
+        over > 0
+          ? over + ' line(s) wider than the original page (' + width + ' characters). The game wraps them or cuts them.'
+          : lines.length + ' line(s), none wider than the original page (' + width + ' characters).'
+      )
+    );
+  }
+
   function PreviewRow(props) {
     var row = props.row;
     var active = props.active;
@@ -1044,6 +1156,13 @@
                 color: 'var(--kt-input-placeholder-fg)', fontSize: 12
               }
             }, 'Select an entry above to translate it.'),
+
+        active ? e(GamePreviewBox, {
+          key: 'preview-' + active.startByte,
+          original: active.originalText,
+          translation: active.translatedText,
+          budget: K.translate.lineBudget(active)
+        }) : null,
 
         active ? e(TargetBox, {
           key: 'target-' + active.startByte,
