@@ -2486,18 +2486,19 @@ let _recordTable = null;
          is now: only the head of a record may leave its place, a page inside a
          record can only grow where it is (or be reported so it can be shortened). */
       const growByBorrowingFollowingPadding = (list) => {
+          /* Everything below reads the image as it is now, not as it started. With two records growing in one build the second shift has to plan against the layout the first shift produced; reading the original file made the second shift overwrite the first one, so the entries pointed at content that had never moved (21 records at 0xEAB78). */
           if (!needsRelocation) return null;
           const grow = Number(newBlockBytes.length) - Number(originalBlockLength);
           if (!(grow > 0)) return null;
           if ((Number(system.pointerSize) || 4) !== 4 || String(system.pointerEndianness || 'little') !== 'little') return null;
           const stride = 4;
-          const valueAt = (at) => (originalRom[at] | (originalRom[at + 1] << 8) | (originalRom[at + 2] << 16) | (originalRom[at + 3] << 24)) >>> 0;
+          const valueAt = (at) => (romCopy[at] | (romCopy[at + 1] << 8) | (romCopy[at + 2] << 16) | (romCopy[at + 3] << 24)) >>> 0;
           const targetAt = (at) => {
-            if (at < 0 || at + 4 > originalRom.length) return -1;
+            if (at < 0 || at + 4 > romCopy.length) return -1;
             const v = valueAt(at);
             if ((v & 0xFF000000) !== 0x08000000) return -1;
             const off = v & 0x01FFFFFF;
-            return off < originalRom.length ? off : -1;
+            return off < romCopy.length ? off : -1;
           };
           const sites = list
             .filter(p => (p.ptrSize || system.pointerSize) === 4 &&
@@ -2517,7 +2518,7 @@ let _recordTable = null;
           }
           const entries = [];
           let hi = lo;
-          while (hi + stride <= originalRom.length) {
+          while (hi + stride <= romCopy.length) {
             const cur = targetAt(hi);
             const next = targetAt(hi + stride);
             if (cur < 0 || next < 0 || next <= cur || (next - cur) > 0x10000) break;
@@ -2533,7 +2534,7 @@ let _recordTable = null;
             const s = entries[i];
             const e = entries[i + 1];
             let pad = 0;
-            while (e - 1 - pad >= s && originalRom[e - 1 - pad] === 0x00) pad++;
+            while (e - 1 - pad >= s && romCopy[e - 1 - pad] === 0x00) pad++;
             spans.push({ start: s, len: e - s - pad, pad: pad });
           }
           const grown = spans[0];
@@ -2564,7 +2565,7 @@ let _recordTable = null;
           const tailStart = plan[0].from;
           const last = plan[plan.length - 1];
           const tailEnd = last.from + last.len;
-          if (tailEnd > originalRom.length || tailStart <= blockStart) return null;
+          if (tailEnd > romCopy.length || tailStart <= blockStart) return null;
           const movedTo = (off) => {
             for (let i = 0; i < plan.length; i++) {
               const p = plan[i];
@@ -2576,7 +2577,7 @@ let _recordTable = null;
              cleared first and only message content is written back, so a reference
              into bytes that disappear still finds zero bytes. Counted, not fatal. */
           let paddingRefs = 0;
-          for (let i = 0; i + 4 <= originalRom.length; i += 2) {
+          for (let i = 0; i + 4 <= romCopy.length; i += 2) {
             const t = targetAt(i);
             if (t < 0 || t < tailStart || t >= tailEnd) continue;
             if (movedTo(t) < 0) paddingRefs++;
@@ -2592,7 +2593,7 @@ let _recordTable = null;
           let repointed = 0;
           for (let i = 0; i + 4 <= romCopy.length; i += 2) {
             if (i >= tailStart && i < tailEnd) continue;
-            const v = (originalRom[i] | (originalRom[i + 1] << 8) | (originalRom[i + 2] << 16) | (originalRom[i + 3] << 24)) >>> 0;
+            const v = (romCopy[i] | (romCopy[i + 1] << 8) | (romCopy[i + 2] << 16) | (romCopy[i + 3] << 24)) >>> 0;
             if ((v & 0xFF000000) !== 0x08000000) continue;
             const moved = movedTo(v & 0x01FFFFFF);
             if (moved < 0) continue;
