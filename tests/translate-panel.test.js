@@ -164,7 +164,7 @@ suite.test('the in game panel is its own right hand panel, not a box in the edit
   const text = loaded.env.treeStrings(panel()).join(' | ');
   t.assert(text.indexOf('Baris satu') >= 0, 'it shows the translation of the selected page: ' + text.slice(0, 200));
   t.assert(/line\(s\), original page width/.test(text), 'and how many lines it needs: ' + text.slice(-200));
-  t.assert(/Show original/.test(text), 'with a way to see the original in the same box');
+  t.assert(/Show the original text|Show your translation/.test(text), 'with a way to see the original in the same box');
 });
 suite.test('a build needs no settings at all: the table is found and used automatically', async function (t) {
   const fixture = buildSyntheticRom({ records: 16 });

@@ -151,6 +151,9 @@ function loadWorkbench() {
     if (node.props) {
       if (typeof node.props.label === 'string') list.push(node.props.label);
       if (typeof node.props.title === 'string') list.push(node.props.title);
+      /* A panel puts its buttons in an "actions" prop, not among the children, and those
+         buttons are part of what the user sees. */
+      if (node.props.actions) treeStrings(node.props.actions, list);
       treeStrings(node.props.children, list);
     }
     return list;

@@ -1,21 +1,25 @@
 /* ============================================================
-   Ketor - In game panel (right side)
+   Ketor - Page layout panel (right side)
    ------------------------------------------------------------
-   The page as the game shows it, next to the text being edited.
+   The page as the game shows it, beside the text being edited.
 
-   What is faithful today is the layout, and it is faithful because it
-   was measured on the rom rather than assumed: a record holds pages
-   joined by 05 09, a page holds lines joined by 06 (the [LINE] token),
-   and the extractor gives one page per text. So the box below breaks
-   its lines exactly where the game breaks them, uses the width of the
-   original page, and marks the lines that no longer fit.
+   The chrome is the shared box (K.ui.KtBox: collapse chevron,
+   uppercase title, actions), the same one the Groups panel, the
+   Table tab and the Hex Editor use, so the right hand side of the
+   workbench looks like one application instead of one panel per
+   author.
 
-   What is not there yet: the game own glyphs. The dialogue font of
-   Aria of Sorrow is not where a plain scan looks for it (the
-   candidates around 0xE4E00 decode to blank tiles under the obvious
-   rules) and most graphics on that rom are compressed, so the font has
-   to be found and unpacked before this box can draw the real letters.
-   The panel says that instead of pretending.
+   What is faithful today is the layout, and it is faithful because
+   it was measured on the rom rather than assumed: a record holds
+   pages joined by 05 09, a page holds lines joined by 06 (the
+   [LINE] token), and the extractor gives one page per text. The
+   width comes from the original page.
+
+   The in game picture itself (font, window frame, background,
+   portrait) comes from the game profile when the profile knows where
+   those are, never from a guess. That is what makes this panel
+   universal: it asks the profile, and a profile is plain JSON that a
+   user can write or load for any game on any console.
    ============================================================ */
 
 (function (global) {
@@ -25,7 +29,26 @@
   var R = global.React;
   if (!R) return;
   var e = R.createElement;
+  var uS = R.useState;
   var MONO = "Consolas, 'Courier New', monospace";
+
+  /* The shared box chrome when it is there, a plain box when it is not (a test harness
+     that loads this file alone should not fail because the kit is missing). */
+  function Box(props) {
+    if (typeof K.ui.KtBox === 'function') return e(K.ui.KtBox, props);
+    return e('div', {
+      className: 'kt-ui-box',
+      style: { display: 'flex', flexDirection: 'column', minHeight: 0, border: '1px solid var(--kt-widget-border-default)', borderRadius: 3, background: 'var(--kt-sidebar-bg)', overflow: 'hidden' }
+    },
+      e('div', {
+        style: { display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px', borderBottom: '1px solid var(--kt-widget-border-default)' }
+      },
+        e('div', { style: { flex: 1, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em', opacity: 0.7 } }, props.title || ''),
+        props.actions || null
+      ),
+      e('div', { style: { flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: 8 } }, props.children)
+    );
+  }
 
   function renderTokens(line, keyPrefix) {
     var parts = String(line).split(/(\[[^\]]{1,24}\])/g);
@@ -41,14 +64,13 @@
     });
   }
 
-  function InGamePanel() {
+  function PageLayoutPanel() {
     var t = K.translate.useTranslate();
     var s = K.search ? K.search.useSearch() : null;
-    var showOriginalState = R.useState(false);
-    var showOriginal = showOriginalState[0];
-    var setShowOriginal = showOriginalState[1];
+    var originalState = uS(false);
+    var showOriginal = originalState[0];
+    var setShowOriginal = originalState[1];
 
-    /* The same entry the editor is on: the selected one, or the first of the list. */
     var texts = (s && s.texts) ? s.texts : [];
     var active = null;
     if (t.selectedOffset !== null && t.selectedOffset !== undefined) {
@@ -58,9 +80,17 @@
     }
     if (!active && texts.length) active = texts[0];
 
+    var toggle = e('button', {
+      type: 'button',
+      className: 'kt-btn small',
+      style: { fontSize: 10, padding: '1px 6px' },
+      title: showOriginal ? 'Show your translation' : 'Show the original text',
+      onClick: function () { setShowOriginal(!showOriginal); }
+    }, showOriginal ? 'Original' : 'Translation');
+
     if (!active) {
-      return e('div', { className: 'kt-hint', style: { padding: 12 } },
-        'Select a text in the list to see the page as the game shows it.');
+      return e(Box, { id: 'translate-page-layout', title: 'Page layout', style: { minHeight: 0 } },
+        e('div', { className: 'kt-hint' }, 'Select a text in the list to see the page as the game shows it.'));
     }
 
     var budget = K.translate.lineBudget(active);
@@ -69,17 +99,15 @@
     var layout = K.translate.previewLayout(text, width);
     var empty = String(text == null ? '' : text).trim().length === 0;
     var over = layout.lines.filter(function (line) { return line.over; }).length;
+    var profileInfo = (K.translate.getProfileInfo) ? K.translate.getProfileInfo() : null;
+    var fontKnown = !!(profileInfo && profileInfo.profile && profileInfo.profile.graphics && profileInfo.profile.graphics.font);
 
-    return e('div', { style: { padding: 10, display: 'flex', flexDirection: 'column', gap: 8 } },
-      e('div', { className: 'kt-hint' },
-        (showOriginal ? 'Original text' : 'Your translation') + (empty && !showOriginal ? ' (empty)' : ''),
-        e('button', {
-          type: 'button',
-          className: 'kt-btn small',
-          style: { float: 'right', fontSize: 10, padding: '1px 6px' },
-          onClick: function () { setShowOriginal(!showOriginal); }
-        }, showOriginal ? 'Show translation' : 'Show original')
-      ),
+    return e(Box, {
+      id: 'translate-page-layout',
+      title: 'Page layout',
+      actions: toggle,
+      style: { minHeight: 0 }
+    },
       empty
         ? e('div', { className: 'kt-hint', style: { fontStyle: 'italic' } }, 'Nothing translated yet for this page.')
         : e('div', {
@@ -106,15 +134,17 @@
           ),
       e('div', {
         className: 'kt-hint',
-        style: { color: over > 0 ? 'var(--kt-error-fg)' : undefined }
+        style: { marginTop: 8, color: over > 0 ? 'var(--kt-error-fg)' : undefined }
       },
         layout.lines.length + ' line(s), original page width ' + width + ' characters' +
         (over > 0 ? ', ' + over + ' line(s) wider than the original page' : '') + '.'
       ),
-      e('div', { className: 'kt-hint', style: { opacity: 0.65 } },
-        'Lines and page width follow the rom. The full in game picture (font, window frame, background, portrait) is drawn by the game while it runs, so painting it here needs the runtime state of the moment the message is shown: a save state or a screenshot. That is the next step, not something this box pretends to be.')
+      e('div', { className: 'kt-hint', style: { marginTop: 6, opacity: 0.7 } },
+        fontKnown
+          ? 'Lines, page width and glyphs come from this game profile, so this is how the engine will draw the page.'
+          : 'Lines and page width follow the rom. The letters are still the system font: this game profile does not name a font yet. Filling "graphics.font" in the profile (or loading one) is what turns this into the real in game picture.')
     );
   }
 
-  K.ui.registerRightPanelProvider('translation', InGamePanel, { title: 'Page layout' });
+  K.ui.registerRightPanelProvider('translation', PageLayoutPanel, { title: 'Page layout' });
 })(window);
