@@ -40,7 +40,10 @@ suite.test('a rom the app knows gets its profile by fingerprint', async function
   t.assertEqual(info.profile.pointers.at, 0x506B40, 'with the verified table site');
   t.assertEqual(info.profile.pointers.count, 2893, 'and its entry count');
   t.assert(info.summary.known.join(' ').indexOf('pointer table') >= 0, 'the summary should list what is known');
-  t.assert(info.summary.missing.join(' ').indexOf('font') >= 0, 'and say the font is not known yet');
+  /* The font is known now - it was found in the cartridge at 0x0E3A80 and verified glyph by glyph
+     - so it must not be listed as missing, while the window and the palette still are. */
+  t.assert(info.summary.missing.join(' ').indexOf('font') < 0, 'and no longer list the font as unknown');
+  t.assert(info.summary.missing.length > 0, 'while what is still unknown is listed');
   t.assertEqual(info.summary.complete, false, 'so the profile is not complete');
 });
 

@@ -68,7 +68,20 @@
       records: { header: '0100', end: '05090A' },
       graphics: {
         tileFormat: 'gba-4bpp',
-        font: null,
+        font: {
+          /* Verified on the cartridge, glyph by glyph: the tiles at 0x0E3A80 were decoded as 4bpp
+             and read as the characters they are (! " 0 9 A B Z a z all checked), the region is
+             raw rather than compressed, the low nibble is the left pixel and the glyphs run in
+             ASCII order from 0x21. The Tile Editor pointed at 0x0E3660, 33 tiles before the
+             first glyph. */
+          at: 0x0E3A80,
+          tileSize: 32,
+          kind: 'gba-4bpp',
+          firstCode: 0x21,
+          lastCode: 0x7E,
+          indexRule: 'code - 0x21',
+          source: 'verified on the cartridge'
+        },
         window: null,
         palette: null,
         note: 'The dialogue font is not located yet: it is not a standalone run of tiles (a scan of the whole rom, bpp 1/2/4, 8x8 and 16x16, three index rules, found only shapes that fail a letter test), and most graphics here are compressed. Filling these three fields is what turns the page layout into the real in game picture.'
