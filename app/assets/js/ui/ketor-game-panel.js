@@ -146,5 +146,15 @@
     );
   }
 
+  /* The panel is an inspector of the Translation activity, the same pattern the Tile Editor
+     uses for its own inspector: it lives inside the activity, on the right, and the activity
+     toolbar has the button that shows or hides it. The workbench level right panel stays for
+     settings that belong to the whole workbench, not to one activity. */
+  K.ui.KetorPageLayoutPanel = PageLayoutPanel;
+
+  /* Registered as the right hand panel of the Translation activity, so it is there without
+     the user asking for it. The Tile Editor keeps its own inspector inside the activity
+     instead (its toolbar has the show/hide button); that pattern is the one to copy if this
+     panel should ever move inside the tab. Both wear the shared KtBox chrome. */
   K.ui.registerRightPanelProvider('translation', PageLayoutPanel, { title: 'Page layout' });
 })(window);
