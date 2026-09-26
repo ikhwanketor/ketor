@@ -106,7 +106,9 @@ function loadWorkbench() {
   load(path.join(CORE, 'rom-identifier.js'));
   load(path.join(CORE, 'control-code-detector.js'));
   load(path.join(CORE, 'pointer-table-detector.js'));
+  load(path.join(CORE, 'game-profile.js'));
   /* The font tools the in game preview needs: the game's own glyphs, not a mock up. */
+  load(path.join(CORE, 'gba-compress.js'));
   load(path.join(CORE, 'font-codec.js'));
   load(path.join(CORE, 'font-detect.js'));
   load(path.join(CORE, 'tile-codec.js'));

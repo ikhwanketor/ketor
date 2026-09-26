@@ -56,6 +56,8 @@
        structure detector found for this rom, so the panel can offer them; the table
        the engine will actually use lives in buildOptions.knownPointerTable. */
     pointerReport: [],
+    gameProfile: null,
+    gameProfileSource: '',
     pointerNote: ''
   };
 
@@ -437,6 +439,7 @@
       selectedOffset: null,
       status: 'ROM ready.'
     });
+    _applyProfileForRom();
   }
 
   /* A rom whose layout has been verified hands its pointer table to the engine instead
@@ -621,9 +624,29 @@
      fail with 118 broken records - a declared table of 124 entries at 0x229E94 (graphics
      pointers, not messages) was used for the self check, so the check was reading the
      wrong layout and every shift was rolled back for a reason that was not real. */
+  function _profilePointers() {
+    var profile = _state.gameProfile;
+    if (!profile || !profile.pointers) return null;
+    var p = profile.pointers;
+    if (!(Number(p.count) > 1) || !Number.isFinite(Number(p.at))) return null;
+    return {
+      at: Number(p.at),
+      count: Number(p.count),
+      entrySize: Number(p.entrySize) || 4,
+      stride: Number(p.stride) || Number(p.entrySize) || 4,
+      endianness: String(p.endianness || 'little'),
+      base: Number(p.base) || 0,
+      name: profile.name || 'game profile',
+      confirmed: true
+    };
+  }
+
   function _tableForBuild() {
     var declared = _state.buildOptions ? _state.buildOptions.knownPointerTable : null;
+    var fromProfile = _profilePointers();
     var verified = _verifiedTableForRom();
+    /* A profile says what this game is, so it comes before anything worked out by guessing. */
+    if (fromProfile) return { table: fromProfile, source: 'profile', ignoredDeclaration: null };
     /* A rom that is in the registry has a table verified against three sources, and that
        one is used whatever else was declared: a declaration is for roms nobody has worked
        out yet. Declaring something else for a known rom is how a graphics pointer table
@@ -634,6 +657,43 @@
     }
     if (declared && declared.confirmed === true) return { table: declared, source: declared.auto === true ? 'detected' : 'declared', ignoredDeclaration: null };
     return { table: null, source: 'none', ignoredDeclaration: declared || null };
+  }
+
+  function _applyProfileForRom() {
+    if (!_state.romBytes || !K.core || typeof K.core.profileForHash !== 'function') return;
+    var sha = '';
+    try {
+      var ident = (typeof K.core.identifyRom === 'function') ? K.core.identifyRom(_state.romBytes, _state.romName || '') : null;
+      sha = ident && ident.sha1 ? String(ident.sha1).toLowerCase() : '';
+    } catch (_) { sha = ''; }
+    if (!sha) return;
+    if (_state.gameProfile && _state.gameProfile.sha1 === sha) return;
+    var built = K.core.profileForHash(sha);
+    if (built) {
+      _set({ gameProfile: built, gameProfileSource: 'built in', pointerNote: 'Game profile: ' + built.name + ' (built in).' });
+    } else if (_state.gameProfileSource === 'built in') {
+      _set({ gameProfile: null, gameProfileSource: '' });
+    }
+  }
+
+  function loadProfileContent(content) {
+    if (!K.core || typeof K.core.parseProfile !== 'function') { _set({ status: 'Game profiles are not available in this build.' }); return null; }
+    var parsed = K.core.parseProfile(content);
+    if (!parsed.profile) { _set({ status: 'Game profile: ' + parsed.error }); return null; }
+    _set({
+      gameProfile: parsed.profile,
+      gameProfileSource: 'loaded',
+      status: 'Game profile loaded: ' + parsed.profile.name
+    });
+    return parsed.profile;
+  }
+
+  function getProfile() { return _state.gameProfile; }
+
+  function getProfileInfo() {
+    if (!_state.gameProfile) return { profile: null, source: '', summary: null };
+    var summary = (K.core && typeof K.core.profileSummary === 'function') ? K.core.profileSummary(_state.gameProfile) : null;
+    return { profile: _state.gameProfile, source: _state.gameProfileSource, summary: summary };
   }
 
   function detectPointers() {
@@ -1286,6 +1346,7 @@
       /* The declared pointer table and the insert mode are part of the work: the user
          verified them for this rom, and losing them on the next load would mean
          declaring them again. */
+      profile: _state.gameProfile ? { id: _state.gameProfile.id, source: _state.gameProfileSource, document: _state.gameProfileSource === 'loaded' ? _state.gameProfile : null } : null,
       pointers: {
         table: (_state.buildOptions && _state.buildOptions.knownPointerTable) || null,
         allowMessageShift: (_state.buildOptions && _state.buildOptions.allowMessageShift !== undefined)
@@ -1339,6 +1400,11 @@
 
     if (payload.table && payload.table.content) {
       loadTableContent(payload.table.content, payload.table.name || 'project.tbl');
+    }
+    if (payload.profile && payload.profile.document) {
+      loadProfileContent(JSON.stringify(payload.profile.document));
+    } else if (!_state.gameProfile) {
+      _applyProfileForRom();
     }
     if (payload.pointers && payload.pointers.table) {
       declarePointerTable(payload.pointers.table);
@@ -1557,5 +1623,9 @@
   K.translate.stopAutoTranslateGroup = stopAutoTranslateGroup;
   K.translate.reset = reset;
   K.translate.setRomFromLoad = setRomFromLoad;
+  K.translate.getProfile = getProfile;
+  K.translate.getProfileInfo = getProfileInfo;
+  K.translate.loadProfileContent = loadProfileContent;
+  K.translate.applyProfileForRom = _applyProfileForRom;
 
 })(window);

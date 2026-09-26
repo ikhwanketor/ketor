@@ -6,8 +6,9 @@ const { runSuites } = require('./helpers/tiny-test');
 const insertPolicy = require('./insert-policy.test');
 const pointerDetector = require('./pointer-detector.test');
 const translatePanel = require('./translate-panel.test');
+const gameProfile = require('./game-profile.test');
 
-const suites = [insertPolicy.suite, pointerDetector.suite, translatePanel.suite];
+const suites = [insertPolicy.suite, pointerDetector.suite, translatePanel.suite, gameProfile.suite];
 const filter = process.argv[2] ? String(process.argv[2]) : '';
 const chosen = filter ? suites.filter(function (s) { return s.name.indexOf(filter) >= 0; }) : suites;
 
