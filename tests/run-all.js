@@ -8,8 +8,9 @@ const pointerDetector = require('./pointer-detector.test');
 const translatePanel = require('./translate-panel.test');
 const gameProfile = require('./game-profile.test');
 const saveState = require('./save-state.test');
+const fontMap = require('./font-map.test');
 
-const suites = [insertPolicy.suite, pointerDetector.suite, translatePanel.suite, gameProfile.suite, saveState.suite];
+const suites = [insertPolicy.suite, pointerDetector.suite, translatePanel.suite, gameProfile.suite, saveState.suite, fontMap.suite];
 const filter = process.argv[2] ? String(process.argv[2]) : '';
 const chosen = filter ? suites.filter(function (s) { return s.name.indexOf(filter) >= 0; }) : suites;
 
