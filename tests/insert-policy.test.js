@@ -37,7 +37,7 @@ async function build(fixture, translated, buildOptions) {
   await env.sleep(200);
   await env.runPending();
   const state = K.translate.getState();
-  return { state: state, out: state.modifiedRom, log: state.buildLog || [] };
+  return { state: state, out: state.modifiedRom, log: state.buildLog || [], env: env };
 }
 
 function logLine(log, pattern) {
@@ -211,4 +211,31 @@ suite.test('the self check is the net: a build it refuses hands the original bac
   }
 });
 
+suite.test('an insert that grows the rom reaches Export patched ROM', async function (t) {
+  /* The bug the user hit: the image is longer than the file that was loaded, because a
+     moved record is written past the end of the rom. The Hex Editor refused a longer image
+     and the export button stayed dead with nothing in the log. */
+  const fixture = buildSyntheticRom({ records: 12 });
+  const target = fixture.records[5];
+  const translated = {};
+  translated[target.textStart] = grow(target.text, 24);
+  const built = await build(fixture, translated, { knownPointerTable: fixture.table });
+  t.assert(built.out, 'the build produced no image: ' + built.state.status);
+  t.assert(built.out.length > fixture.rom.length, 'the image should have grown');
+
+  const K = built.env.K;
+  const hex = K.hex.getState();
+  t.assert(hex.appended && hex.appended.length === (built.out.length - fixture.rom.length),
+    'the extra bytes should be held as the appended tail, got ' + (hex.appended ? hex.appended.length : 'none'));
+  const exported = K.hex.getPatchedBytes();
+  t.assertEqual(exported.length, built.out.length, 'the exported image has the size of the insert');
+  let same = true;
+  for (let i = 0; i < built.out.length; i++) { if (exported[i] !== built.out[i]) { same = false; break; } }
+  t.assert(same, 'and it carries every byte of the insert, appended tail included');
+
+  K.hex.exportPatchedRom();
+  const status = String(K.hex.getState().status || '');
+  t.assert(/Exported/.test(status), 'the export should report the file it wrote: ' + status);
+  t.assert(/\.gba\b/i.test(status), 'with the rom extension of the file that was loaded: ' + status);
+});
 module.exports = { suite: suite };

@@ -102,9 +102,14 @@ function loadWorkbench() {
   load(path.join(UI, 'ketor-hex-state.js'));
   load(path.join(UI, 'ketor-translate-state.js'));
   load(path.join(UI, 'ketor-translate-sidebar.js'));
+  load(path.join(UI, 'ketor-game-panel.js'));
   load(path.join(CORE, 'rom-identifier.js'));
   load(path.join(CORE, 'control-code-detector.js'));
   load(path.join(CORE, 'pointer-table-detector.js'));
+  /* The font tools the in game preview needs: the game's own glyphs, not a mock up. */
+  load(path.join(CORE, 'font-codec.js'));
+  load(path.join(CORE, 'font-detect.js'));
+  load(path.join(CORE, 'tile-codec.js'));
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

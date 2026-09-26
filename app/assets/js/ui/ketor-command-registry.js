@@ -130,14 +130,24 @@
     return Ketor.ui.registry.tabs[String(kind)] || null;
   };
 
-  Ketor.ui.registerRightPanelProvider = function (activityId, Component) {
+  Ketor.ui.registerRightPanelProvider = function (activityId, Component, meta) {
     if (!activityId || typeof Component !== 'function') return false;
-    Ketor.ui.registry.rightPanels[String(activityId)] = Component;
+    var info = meta || {};
+    Ketor.ui.registry.rightPanels[String(activityId)] = {
+      component: Component,
+      title: String(info.title || (activityId + ' panel'))
+    };
     return true;
   };
 
   Ketor.ui.getRightPanelProvider = function (activityId) {
-    return Ketor.ui.registry.rightPanels[String(activityId)] || null;
+    var entry = Ketor.ui.registry.rightPanels[String(activityId)] || null;
+    return entry ? entry.component : null;
+  };
+
+  Ketor.ui.getRightPanelTitle = function (activityId) {
+    var entry = Ketor.ui.registry.rightPanels[String(activityId)] || null;
+    return entry ? entry.title : '';
   };
 
 })(window);

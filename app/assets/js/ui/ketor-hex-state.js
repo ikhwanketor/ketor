@@ -490,7 +490,14 @@
     if (!data || !data.length) return false;
     var info = meta || {};
     var source = _state.romBytes;
-    if (!source || source.length !== data.length) return false;
+    if (!source || !data.length) return false;
+    /* The inserted image may be longer than the file that was loaded: a record that had to
+       move is written past the end of the rom, and the image grows for it. This used to
+       refuse a longer image outright, so an insert the log reported as done never reached
+       the Hex Editor and Export patched ROM stayed disabled with nothing to say. The extra
+       bytes are kept as the appended tail, which is already part of the export and of the
+       IPS patch. */
+    if (data.length < source.length) return false;
 
     // The insert is expressed as a patch layer on top of the loaded ROM, not
     // as a replacement for it. That is what makes one ecosystem work: the Hex
@@ -499,24 +506,28 @@
     var patches = Object.assign({}, _state.patches);
     var inserted = {};
     var diffCount = 0;
-    for (var i = 0; i < data.length; i++) {
+    for (var i = 0; i < source.length; i++) {
       if (data[i] === source[i]) continue;
       inserted[i] = true;
       if (patches[i] !== data[i]) diffCount++;
       patches[i] = data[i];
     }
+    var tail = data.length > source.length ? data.slice(source.length) : null;
+    var tailLength = tail ? tail.length : 0;
     _set({
       patches: patches,
       // Merged, never replaced: the next insert has to ignore the bytes of
       // every earlier insert, or it treats them as ordinary user patches and
       // writes another copy of the text into the next free run.
       insertedOffsets: Object.assign({}, _state.insertedOffsets, inserted),
+      appended: tail,
       compiledBytes: data,
       compileRelocations: Array.isArray(info.relocations) ? info.relocations.slice() : [],
       compiledAt: Number(info.at) || Date.now(),
       compiledScope: String(info.scope || ''),
-      status: 'Inserted ROM applied as ' + diffCount + ' changed byte(s) over the loaded ROM. ' +
-        'Clear in the Hex Editor discards the insert.'
+      status: 'Inserted ROM applied as ' + diffCount + ' changed byte(s) over the loaded ROM' +
+        (tailLength ? ' with ' + tailLength + ' byte(s) appended past its end' : '') +
+        '. Export patched ROM writes it; Clear in the Hex Editor discards the insert.'
     });
     return true;
   }

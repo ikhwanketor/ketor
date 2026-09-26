@@ -145,10 +145,27 @@ suite.test('nothing about pointers is put in front of the user', async function 
      report, and the settings stay in the project file for anyone who wants to drive them. */
   const fixture = buildSyntheticRom({ records: 12 });
   const loaded = await loadRom(fixture);
-  t.assertEqual(loaded.env.K.ui.rightPanelProviders.translation, undefined, 'no pointer panel is registered');
-  t.assertEqual(loaded.env.K.ui.sidebarProviders.translation !== undefined, true, 'the normal sidebar is still there');
+  const sidebar = loaded.env.K.ui.sidebarProviders.translation;
+  t.assert(typeof sidebar === 'function', 'the normal sidebar is still registered');
+  const text = loaded.env.treeStrings(sidebar()).join(' | ');
+  t.assert(text.indexOf('Pointer') < 0 && text.indexOf('Insert Range') < 0,
+    'the sidebar must not talk about pointers or insert ranges: ' + text.slice(0, 200));
 });
 
+suite.test('the in game panel is its own right hand panel, not a box in the editor', async function (t) {
+  const fixture = buildSyntheticRom({ records: 12 });
+  const loaded = await loadRom(fixture);
+  const panel = loaded.env.K.ui.rightPanelProviders.translation;
+  t.assert(typeof panel === 'function', 'the translation activity offers a right hand panel');
+  const K = loaded.K;
+  K.search.applyTranslations([{ startByte: fixture.records[1].textStart, translatedText: 'Baris satu[LINE]Baris dua yang panjang sekali supaya terlihat membungkus di dalam kotak.' }]);
+  K.translate.selectOffset(fixture.records[1].textStart);
+  await loaded.env.sleep(20);
+  const text = loaded.env.treeStrings(panel()).join(' | ');
+  t.assert(text.indexOf('Baris satu') >= 0, 'it shows the translation of the selected page: ' + text.slice(0, 200));
+  t.assert(/line\(s\), original page width/.test(text), 'and how many lines it needs: ' + text.slice(-200));
+  t.assert(/Show original/.test(text), 'with a way to see the original in the same box');
+});
 suite.test('a build needs no settings at all: the table is found and used automatically', async function (t) {
   const fixture = buildSyntheticRom({ records: 16 });
   const loaded = await loadRom(fixture);

@@ -275,8 +275,6 @@
   function RightPanelWrapper(props) {
     var Provider = Ketor.ui.getRightPanelProvider(props.activity);
     if (!Provider) return null;
-    var meta = ACTIVITY_META[props.activity] || {};
-
     var handleResizeStart = useCallback(function (ev) {
       ev.preventDefault();
       var handleEl = ev.currentTarget;
@@ -301,7 +299,7 @@
         onMouseDown: handleResizeStart
       }),
       e('div', { className: 'kt-right-panel-header' },
-        e('span', null, (meta.title || props.activity) + ' settings'),
+        e('span', null, Ketor.ui.getRightPanelTitle ? Ketor.ui.getRightPanelTitle(props.activity) : 'Settings'),
         e('button', {
           type: 'button',
           className: 'icon-btn',
