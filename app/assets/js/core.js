@@ -2878,6 +2878,7 @@ let _recordTable = null;
             const verdict = verifyBorrow(borrowed);
             const brokenAfterShift = verdict.ok ? verdict.broken : [];
             if (verdict.ok && brokenAfterShift.length === 0) {
+              mod.writtenAt = block.start;
               romCopy.set(newBlockBytes, block.start);
               borrowKept++;
               relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': Grew in place by ' + borrowed.grew + ' byte(s); ' + borrowed.moved + ' message(s) after it slid forward, ' + borrowed.repointed + ' pointer(s) recalculated, and the shift checked out.');
@@ -2929,6 +2930,7 @@ let _recordTable = null;
         };
 
         const writeInPlace = () => {
+          mod.writtenAt = block.start;
           romCopy.set(newBlockBytes, block.start);
           if (newBlockBytes.length < originalBlockLength) {
             const fillStart = block.start + newBlockBytes.length;
@@ -3321,6 +3323,7 @@ let _recordTable = null;
             }
           } else {
             if (needsRelocation) {
+              mod.writtenAt = newOffset;
               romCopy.set(newBlockBytes, newOffset);
               romCopy.set(terminatorBytes, newOffset + newBlockBytes.length);
             } else {
@@ -3386,6 +3389,41 @@ let _recordTable = null;
         relocationLog.push(`[WARNING] Self check failed: ${selfCheckBad.length} record(s) lost their end code or their header (first at 0x${selfCheckBad[0].toString(16).toUpperCase()}). The original bytes are handed back instead of a rom that would freeze or skip dialogue. Build in smaller scopes - one group, or a few neighbouring texts - and run Insert All again.`);
         return { modifiedRom: originalRom.slice(0), relocationLog };
       }
+      /* The self check reads records; this reads TEXTS. A record can keep its header and still
+         be missing the translation that was meant to be in it (a block written somewhere else,
+         a page left alone, a slot cut short), and that is exactly the failure the user kept
+         hitting: the report said the insert was done while the game showed the old words. Every
+         text that was built is looked for at the address its record was written to. */
+      const insertMissing = [];
+      let insertChecked = 0;
+      for (const mod of modifications) {
+        if (!Number.isFinite(Number(mod.writtenAt))) continue;
+        const writtenAt = Number(mod.writtenAt);
+        const localTexts = Array.isArray(mod.sortedTexts) ? mod.sortedTexts : [];
+        for (const textItem of localTexts) {
+          const textData = textMap.get(textItem.id);
+          if (!textData || !String(textData.translatedText || '').length) continue;
+          const rel = mod.textOffsetsInBlock ? mod.textOffsetsInBlock.get(Number(textItem.startByte)) : undefined;
+          if (rel === undefined) continue;
+          const encoded = smartTextParse(textData.translatedText, tokenizer, masterCharToHex, usePaddingByte, encodeOptions);
+          if (!encoded || !encoded.length) continue;
+          insertChecked++;
+          const at = writtenAt + Number(rel);
+          let present = at + encoded.length <= romCopy.length;
+          if (present) {
+            for (let k = 0; k < encoded.length; k++) {
+              if (romCopy[at + k] !== encoded[k]) { present = false; break; }
+            }
+          }
+          if (!present) insertMissing.push({ startByte: Number(textItem.startByte), at: at });
+        }
+      }
+      if (insertMissing.length > 0) {
+        relocationLog.push('[WARNING] Insert check: ' + insertMissing.length + ' of ' + insertChecked + ' translated text(s) are NOT where the build says they are (first at 0x' + Number(insertMissing[0].startByte).toString(16).toUpperCase() + ', looked for at 0x' + Number(insertMissing[0].at).toString(16).toUpperCase() + '). The old text would show in the game.');
+      } else if (insertChecked > 0) {
+        relocationLog.push('Insert check: all ' + insertChecked + ' translated text(s) are present in the image at the address their record was written to.');
+      }
+
       if (borrowKept > 0 || borrowRolledBack > 0) {
         relocationLog.push('Growth report: ' + borrowKept + ' record(s) grew in place after the shift checked out' +
           (borrowRolledBack > 0 ? ', and ' + borrowRolledBack + ' shift(s) were undone and moved instead' : '') + '.');
