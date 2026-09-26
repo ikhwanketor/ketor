@@ -51,7 +51,12 @@
        padding around it (default), move the record to free space and rewrite only
        its own table entry (allowMessageShift true), or refuse the growth and report
        it (allowMessageShift false). */
-    buildOptions: {}
+    buildOptions: {},
+    /* Pointers & Insert Range (batch 94). pointerReport holds the candidates the
+       structure detector found for this rom, so the panel can offer them; the table
+       the engine will actually use lives in buildOptions.knownPointerTable. */
+    pointerReport: [],
+    pointerNote: ''
   };
 
   var _listeners = new Set();
@@ -399,6 +404,174 @@
     });
   }
 
+  /* A rom whose layout has been verified hands its pointer table to the engine instead
+     of letting the engine guess. This entry was checked against three sources: the
+     original rom, a build that crashed, and the indonesian translation patch. 2893 four
+     byte little endian pointers based at 0x08000000; each aims at the two byte header in
+     front of a message, and every record closes with 05 09 0a.
+     It lives at module scope because both the build and the panel have to see it: while
+     it sat inside buildModifiedRom the panel could not, the lookup threw, the build fell
+     back to guessing a table from the image and found 2895 entries instead of 2893. */
+  var KNOWN_POINTER_TABLES = {
+    'abd71fe01ebb201bcc133074db1dd8c5253776c7': {
+      name: 'Castlevania - Aria of Sorrow (USA)',
+      at: 0x506B40, count: 2893, entrySize: 4, stride: 4,
+      endianness: 'little', base: 0x08000000
+    }
+  };
+
+  /* ---- Pointers & Insert Range ------------------------------------------
+     Two questions the panel has to answer for the user, and one place each:
+     which pointer table will the engine use for this rom, and how may a record
+     that outgrows its room be handled. A rom whose layout has been verified
+     carries its table in the registry; any other rom can have one declared after
+     the structure detector has looked at it. */
+  /* Identifying a rom hashes the whole file, and the panel asks on every render, so
+     the answer is kept until a different rom is loaded. */
+  var _verifiedTableCache = { bytes: null, table: null };
+  function _verifiedTableForRom() {
+    if (_verifiedTableCache.bytes === _state.romBytes) return _verifiedTableCache.table;
+    var resolved = null;
+    try {
+      if (K.core && typeof K.core.identifyRom === 'function' && _state.romBytes) {
+        var romIdent = K.core.identifyRom(_state.romBytes, _state.romName || '');
+        var identKey = romIdent && romIdent.sha1 ? String(romIdent.sha1).toLowerCase() : '';
+        if (identKey && KNOWN_POINTER_TABLES[identKey]) resolved = KNOWN_POINTER_TABLES[identKey];
+      }
+    } catch (_) { resolved = null; }
+    _verifiedTableCache = { bytes: _state.romBytes, table: resolved };
+    return resolved;
+  }
+
+  function getPointerTableInfo() {
+    var declared = _state.buildOptions ? _state.buildOptions.knownPointerTable : null;
+    if (declared && Number.isFinite(Number(declared.at)) && Number(declared.count) > 1) {
+      return {
+        source: 'declared',
+        label: 'Declared table',
+        table: declared,
+        note: 'Every record is reached through this table, so a record that moves has only its own entry rewritten.'
+      };
+    }
+    var verified = _verifiedTableForRom();
+    if (verified) {
+      return {
+        source: 'profile',
+        label: 'Verified profile for this rom',
+        table: verified,
+        note: (verified.name ? verified.name + ': ' : '') + verified.count + ' entries at 0x' + Number(verified.at).toString(16).toUpperCase() + ', taken as given.'
+      };
+    }
+    return {
+      source: 'none',
+      label: 'No table known',
+      table: null,
+      note: 'Without a table the engine searches each block for pointers. That is slower and it can act on a look-alike, so a table is worth declaring for a rom that is being translated seriously.'
+    };
+  }
+
+  function _consoleRulesId() {
+    var rules = (K.core && K.core.POINTER_CONSOLE_RULES) ? K.core.POINTER_CONSOLE_RULES : null;
+    if (!rules) return null;
+    var wanted = String(_state.romSystem || '').toLowerCase();
+    var keys = Object.keys(rules);
+    for (var i = 0; i < keys.length; i++) {
+      if (String(rules[keys[i]].name || '').toLowerCase() === wanted) return keys[i];
+    }
+    return null;
+  }
+
+  /* The record terminator the detector should accept, taken from the loaded table
+     when there is one: [END] closes a record, and its last byte is the marker the
+     record test looks for. */
+  function _tableTerminatorBytes() {
+    var td = _state.tableData;
+    var end = null;
+    if (td && td.multiByte) {
+      Object.keys(td.multiByte).forEach(function (hex) {
+        var name = String(td.multiByte[hex] || '').toUpperCase();
+        if (name !== '[END]' && name !== '[NULL]') return;
+        var bytes = (hex.match(/.{1,2}/g) || []).map(function (h) { return parseInt(h, 16) & 0xFF; });
+        if (bytes.length && (end === null || name === '[END]')) end = bytes;
+      });
+    }
+    if (end && end.length) return [end[end.length - 1]];
+    return [0x00];
+  }
+
+  function detectPointers() {
+    if (!_state.romBytes) { _set({ pointerNote: 'Load a rom first.' }); return []; }
+    if (!K.core || typeof K.core.detectPointerTables !== 'function') {
+      _set({ pointerNote: 'The pointer detector is not loaded in this build.' });
+      return [];
+    }
+    var rulesId = _consoleRulesId();
+    var started = Date.now();
+    var found = [];
+    try {
+      found = K.core.detectPointerTables(_state.romBytes, {
+        console: rulesId || undefined,
+        terminator: _tableTerminatorBytes(),
+        minEntries: 8,
+        maxResults: 4,
+        textOffsets: (K.search && K.search.getState) ? (K.search.getState().texts || []).map(function (t) { return Number(t.startByte); }) : []
+      });
+    } catch (err) {
+      _set({ pointerReport: [], pointerNote: 'Pointer detection failed: ' + (err && err.message ? err.message : String(err)) });
+      return [];
+    }
+    var ms = Date.now() - started;
+    var rows = (found || []).map(function (table) {
+      return {
+        at: Number(table.at),
+        count: Number(table.count),
+        entrySize: Number(table.entrySize),
+        stride: Number(table.stride),
+        endianness: table.endianness || 'little',
+        base: Number(table.base),
+        console: table.console || rulesId || '',
+        confirmed: table.confirmed === true,
+        deltaConsensus: Number(table.deltaConsensus) || 0,
+        regionStart: Number(table.regionStart),
+        regionEnd: Number(table.regionEnd)
+      };
+    });
+    _set({
+      pointerReport: rows,
+      pointerNote: rows.length
+        ? rows.length + ' candidate(s) in ' + ms + ' ms. Confirm the one that covers the records you extracted.'
+        : 'No compact table found in ' + ms + ' ms. This rom may keep its pointers scattered, as the NES often does.'
+    });
+    return rows;
+  }
+
+  function declarePointerTable(candidate) {
+    var table = candidate || null;
+    if (!table || !Number.isFinite(Number(table.at)) || Number(table.count) < 2) {
+      _set({ pointerNote: 'A table needs a site and at least two entries.' });
+      return null;
+    }
+    var declared = {
+      at: Number(table.at),
+      count: Number(table.count),
+      entrySize: Number(table.entrySize) || 4,
+      stride: Number(table.stride) || Number(table.entrySize) || 4,
+      endianness: table.endianness || 'little',
+      base: Number(table.base) || 0,
+      name: table.name || 'declared table',
+      declared: true
+    };
+    setBuildOptions({ knownPointerTable: declared });
+    _set({ pointerNote: 'Table declared at 0x' + declared.at.toString(16).toUpperCase() + ' with ' + declared.count + ' entries. Every record that has to move will be repointed through it.' });
+    return declared;
+  }
+
+  function clearPointerTable() {
+    var next = Object.assign({}, _state.buildOptions);
+    delete next.knownPointerTable;
+    _set({ buildOptions: next, pointerNote: 'Declared table removed; this rom falls back to the verified profile or to a per block search.' });
+  }
+
   // ---- Build ----
   function _buildMasterMap(tableData, target) {
     if (!tableData) return;
@@ -458,12 +631,16 @@
   K.translate.getInsertOwnedRanges = function () { return _insertOwnedRanges.slice(); };
   /* The build options are part of the translate state so the panel can read them
      back and a test can set them without reaching into the worker. */
-  K.translate.setBuildOptions = function (patch) {
+  /* A named function, not only an export: the panel and the project loader call it
+     from inside this module too. */
+  function setBuildOptions(patch) {
     var next = Object.assign({}, _state.buildOptions, patch || {});
     _set({ buildOptions: next });
     return next;
-  };
-  K.translate.getBuildOptions = function () { return Object.assign({}, _state.buildOptions); };
+  }
+  function getBuildOptions() { return Object.assign({}, _state.buildOptions); }
+  K.translate.setBuildOptions = setBuildOptions;
+  K.translate.getBuildOptions = getBuildOptions;
 
   function buildModifiedRom(scope) {
     var compileScope = scope === 'group' ? 'group' : 'all';
@@ -569,27 +746,7 @@
       pointerBase: (systemProfile && Number(systemProfile.pointerBase)) || 0
     };
 
-    /* A rom whose layout has been verified hands its pointer table to the engine
-       instead of letting the engine guess. This entry was checked against three
-       sources: the original rom, a build that crashed, and the indonesian
-       translation patch. 2893 four byte little endian pointers based at
-       0x08000000; each aims at the two byte header in front of a message, and
-       every record closes with 05 09 0a. */
-    var KNOWN_POINTER_TABLES = {
-      'abd71fe01ebb201bcc133074db1dd8c5253776c7': {
-        name: 'Castlevania - Aria of Sorrow (USA)',
-        at: 0x506B40, count: 2893, entrySize: 4, stride: 4,
-        endianness: 'little', base: 0x08000000
-      }
-    };
-    var knownTable = null;
-    try {
-      if (K.core && typeof K.core.identifyRom === 'function' && _state.romBytes) {
-        var romIdent = K.core.identifyRom(_state.romBytes, _state.romName || '');
-        var identKey = romIdent && romIdent.sha1 ? String(romIdent.sha1).toLowerCase() : '';
-        if (identKey && KNOWN_POINTER_TABLES[identKey]) knownTable = KNOWN_POINTER_TABLES[identKey];
-      }
-    } catch (identErr) { knownTable = null; }
+    var knownTable = _verifiedTableForRom();
     system.knownPointerTable = knownTable;
     var buildOptions = _state.buildOptions || {};
     Object.keys(buildOptions).forEach(function (key) {
@@ -917,6 +1074,14 @@
         entryCount: _state.tableData.entryCount,
         content: _state.tableContent || ''
       } : null,
+      /* The declared pointer table and the insert mode are part of the work: the user
+         verified them for this rom, and losing them on the next load would mean
+         declaring them again. */
+      pointers: {
+        table: (_state.buildOptions && _state.buildOptions.knownPointerTable) || null,
+        allowMessageShift: (_state.buildOptions && _state.buildOptions.allowMessageShift !== undefined)
+          ? _state.buildOptions.allowMessageShift : null
+      },
       groups: s.groups.map(function (g) {
         return { id: g.id, name: g.name, color: g.color, offsets: g.offsets, createdAt: g.createdAt };
       }),
@@ -963,6 +1128,12 @@
 
     if (payload.table && payload.table.content) {
       loadTableContent(payload.table.content, payload.table.name || 'project.tbl');
+    }
+    if (payload.pointers && payload.pointers.table) {
+      declarePointerTable(payload.pointers.table);
+    }
+    if (payload.pointers && payload.pointers.allowMessageShift !== undefined && payload.pointers.allowMessageShift !== null) {
+      setBuildOptions({ allowMessageShift: payload.pointers.allowMessageShift === true });
     }
 
     var savedName = payload.rom && payload.rom.name;
@@ -1112,6 +1283,10 @@
   }
 
   K.translate.getState = getState;
+  K.translate.getPointerTableInfo = getPointerTableInfo;
+  K.translate.detectPointers = detectPointers;
+  K.translate.declarePointerTable = declarePointerTable;
+  K.translate.clearPointerTable = clearPointerTable;
   K.translate.subscribe = subscribe;
   K.translate.useTranslate = useTranslate;
   K.translate.loadTableContent = loadTableContent;

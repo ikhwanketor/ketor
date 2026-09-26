@@ -19,7 +19,13 @@ const UI = path.join(JS, 'ui');
 
 function makeReactStub() {
   return {
-    createElement: function () { return { props: {} }; },
+    createElement: function (type, props) {
+      const children = Array.prototype.slice.call(arguments, 2);
+      const merged = Object.assign({}, props || {});
+      if (children.length === 1) merged.children = children[0];
+      else if (children.length > 1) merged.children = children;
+      return { type: type, props: merged };
+    },
     useState: function (v) { return [typeof v === 'function' ? v() : v, function () {}]; },
     useEffect: function () {}, useLayoutEffect: function () {},
     useCallback: function (f) { return f; },
@@ -78,7 +84,9 @@ function loadWorkbench() {
   win.ReactDOM = { createRoot: function () { return { render: function () {} }; } };
   win.Ketor = {
     ui: {
-      registerSidebarProvider: function () {}, registerTabProvider: function () {},
+      sidebarProviders: {}, tabProviders: {},
+      registerSidebarProvider: function (id, fn) { win.Ketor.ui.sidebarProviders[id] = fn; },
+      registerTabProvider: function (id, fn) { win.Ketor.ui.tabProviders[id] = fn; },
       icon: function () { return {}; },
       getSidebarProvider: function () { return null; }, getTabProvider: function () { return null; }
     },
@@ -92,6 +100,7 @@ function loadWorkbench() {
   load(path.join(UI, 'ketor-search-state.js'));
   load(path.join(UI, 'ketor-hex-state.js'));
   load(path.join(UI, 'ketor-translate-state.js'));
+  load(path.join(UI, 'ketor-translate-sidebar.js'));
   load(path.join(CORE, 'rom-identifier.js'));
   load(path.join(CORE, 'control-code-detector.js'));
   load(path.join(CORE, 'pointer-table-detector.js'));
@@ -123,7 +132,23 @@ function loadWorkbench() {
     }
   }
 
-  return { K: win.Ketor, win, runPending, sleep, REPO };
+  /* Everything a rendered tree says, so a suite can assert on a panel without a
+     browser: children, labels and tooltips. */
+  function treeStrings(node, out) {
+    const list = out || [];
+    if (node === null || node === undefined || node === false || node === true) return list;
+    if (typeof node === 'string') { list.push(node); return list; }
+    if (typeof node === 'number') { list.push(String(node)); return list; }
+    if (Array.isArray(node)) { node.forEach(function (item) { treeStrings(item, list); }); return list; }
+    if (node.props) {
+      if (typeof node.props.label === 'string') list.push(node.props.label);
+      if (typeof node.props.title === 'string') list.push(node.props.title);
+      treeStrings(node.props.children, list);
+    }
+    return list;
+  }
+
+  return { K: win.Ketor, win, runPending, sleep, REPO, treeStrings };
 }
 
 module.exports = { loadWorkbench };
