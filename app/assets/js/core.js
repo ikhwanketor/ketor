@@ -2504,7 +2504,7 @@ let _recordTable = null;
         for (let i = 0, runStart = -1; i <= romCopy.length; i++) {
           if (i < romCopy.length && isFiller(romCopy[i])) { if (runStart < 0) runStart = i; continue; }
           if (runStart >= 0) {
-            if (i - runStart >= 64 && !rangeIsReferenced(runStart, i)) freeSpaceRuns.push({ start: runStart, end: i, cursor: i });
+            if (i - runStart >= 64 && !rangeIsReferenced(runStart, i)) freeSpaceRuns.push({ start: runStart, end: i, cursor: i, filler: romCopy[runStart] });
             runStart = -1;
           }
         }
@@ -2522,15 +2522,16 @@ let _recordTable = null;
         freeSpaceRuns.length = 0;
         keptRuns.forEach(function (r) { freeSpaceRuns.push(r); });
       }
-      /* Records that move are put past the end of the rom and the image is grown for them.
-         A run of zeroes inside the file is not a licence to write there: on this rom the
-         run that looked free held sprite tiles, and the in game result was a graphics
-         glitch whenever the player was hit. Growing the file cannot touch anything the
-         game reads, and every emulator and flash cart this project is tested with accepts
-         a larger rom. system.freeSpacePolicy === 'interior' asks for the old behaviour. */
+      /* A record that moves is put inside the rom, never past its end: a bigger file is a
+         different cartridge (the user called it dangerous, and they are right - the header
+         declares a size, flash carts have one, and nothing about the game expects it).
+         Free space is taken from runs of filler that nothing points at, and a run of 0xFF is
+         preferred: that is how a cartridge is padded, while runs of zeroes can be tile data
+         (one of those held sprite tiles, and the game glitched when the player was hit).
+         system.allowRomGrowth === true asks for the old behaviour of growing the image. */
       let appendCursor = 0;
       const allocateFreeSpace = (need) => {
-        if (system.freeSpacePolicy !== 'interior') {
+        if (system.allowRomGrowth === true) {
           if (appendCursor === 0) appendCursor = romCopy.length;
           let at = appendCursor;
           at += (4 - (at % 4)) % 4;
@@ -2545,12 +2546,18 @@ let _recordTable = null;
           appendCursor = end;
           return at;
         }
-        for (const run of freeSpaceRuns) {
+        const fits = (run) => (run.cursor - run.start) >= (need + 4);
+        const carve = (run) => {
           let at = run.cursor - need;
           at -= (at % 4);
-          if (at - run.start >= 4) { run.cursor = at; return at; }
-        }
-        if (freeSpaceRuns.length > 0 && (romCopy.length + need + 0x2000) <= 0x2000000) {
+          run.cursor = at;
+          return at;
+        };
+        const ffRun = freeSpaceRuns.filter(r => r.filler === 0xFF && fits(r))[0];
+        if (ffRun) return carve(ffRun);
+        const anyRun = freeSpaceRuns.filter(fits)[0];
+        if (anyRun) return carve(anyRun);
+        if (system.allowRomGrowth === true && freeSpaceRuns.length > 0 && (romCopy.length + need + 0x2000) <= 0x2000000) {
           const grown = new Uint8Array(romCopy.length + need + 0x2000);
           grown.set(romCopy);
           grown.fill(terminatorHex, romCopy.length);
@@ -2852,7 +2859,12 @@ let _recordTable = null;
            free space and rewrites its pointer, and neither of them slides the rest of the
            file or recalculates every pointer. The shift path below is kept as an experiment
            behind allowMessageShift true only, and the panel does not offer it. */
-        const shiftAllowed = system.allowMessageShift === true && system.forceRelocationOnly !== true;
+        /* Growing in place, paid for by the padding of the messages after it, is the default
+           again: it is the reference patch layout, it keeps the rom exactly the same size, and
+           a shift is kept only when it verifies against what it touched (verifyBorrow) plus the
+           per text insert check at the end. allowMessageShift false refuses it; true forces it
+           even when a move would be possible. */
+        const shiftAllowed = system.allowMessageShift !== false && system.forceRelocationOnly !== true;
         const willBorrow = needsRelocation && pointersForWrite.length > 0 && shiftAllowed;
         if (willBorrow) {
           const borrowCandidates = knownRecordPointer

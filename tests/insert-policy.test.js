@@ -68,31 +68,32 @@ suite.test('nothing grows: the image is handed back untouched', async function (
   t.assert(/Self check passed/.test(built.log.join('\n')), 'the self check should have passed');
 });
 
-suite.test('the default moves the record, which is what Kruptar 7 and Atlas do', async function (t) {
-  /* Kruptar 7 packs a text into a destination block and marks the ones that do not fit as
-     an insert error; Atlas writes an over long text to free space and rewrites its pointer.
-     Neither slides the rest of the file, so this is the one way the app uses. */
+suite.test('the default grows the record in place and keeps the rom the size it was', async function (t) {
+  /* The user was explicit: a bigger rom is dangerous (the header declares a size and flash
+     carts have one), and only a text that overflows may be moved. A grown record is paid for
+     by the padding of the messages after it, so nothing has to leave the rom at all. */
   const fixture = buildSyntheticRom({ records: 12 });
   const target = fixture.records[3];
   const translated = {};
   translated[target.textStart] = grow(target.text, 8);
   const built = await build(fixture, translated, { knownPointerTable: fixture.table });
   t.assert(built.out, 'the build produced no image: ' + built.state.status);
+  t.assertEqual(built.out.length, fixture.rom.length, 'the image must not grow');
 
   const before = readTable(fixture.rom, fixture.table);
   const after = readTable(built.out, fixture.table);
-  t.assert(before[3] !== after[3], 'the grown record should have been repointed');
-  t.assert(after[3] >= fixture.rom.length, 'to a copy after everything the game uses');
-
+  t.assertEqual(before[3], after[3], 'a record that grew in place keeps its address');
+  let changed = 0;
+  for (let i = 0; i < before.length; i++) if (before[i] !== after[i]) changed++;
+  t.assertEqual(changed, 0, 'and no pointer has to be rewritten for it');
   const report = inspectRecords(built.out, fixture, fixture.rom);
   t.assertEqual(report.broken.length, 0, 'no record may be broken: ' + JSON.stringify(report.broken.slice(0, 3)));
-  const text = built.log.join('\n');
-  t.assert(!/Grew in place/.test(text), 'nothing may be shifted by default');
-  t.assert(/Relocated to/.test(text), 'the log should say the record moved');
+  const text = built.log.join('\\n');
+  t.assert(/Grew in place/.test(text), 'the log should say it grew where it was: ' + text.slice(0, 200));
+  t.assert(/Insert check: all/.test(text), 'and every translated text should be verified present');
   t.assert(/Self check passed/.test(text), 'the self check should have passed');
 });
-
-suite.test('move only mode: the record moves to free space and only its own entry changes', async function (t) {
+suite.test('move only mode: the record moves to free space inside the rom, one entry changes', async function (t) {
   const fixture = buildSyntheticRom({ records: 12 });
   const target = fixture.records[3];
   const translated = {};
@@ -101,48 +102,38 @@ suite.test('move only mode: the record moves to free space and only its own entr
     knownPointerTable: fixture.table, allowMessageShift: false, allowRelocation: true
   });
   t.assert(built.out, 'the build produced no image: ' + built.state.status);
+  t.assertEqual(built.out.length, fixture.rom.length, 'the image must not grow');
 
   const before = readTable(fixture.rom, fixture.table);
   const after = readTable(built.out, fixture.table);
   let changed = 0;
   for (let i = 0; i < before.length; i++) if (before[i] !== after[i]) changed++;
   t.assertEqual(changed, 1, 'exactly one table entry may change');
-  t.assert(after[3] !== before[3], 'the grown record should have been repointed');
-
   const at = after[3];
-  t.assert(at < fixture.region.start || at >= fixture.region.end, 'the record should have left its own region');
-  /* Past the end of the rom, not into a run of zeroes inside it: a run that looks free can
-     be sprite tiles, and writing there was the graphics glitch the user saw in game. */
-  t.assert(at >= fixture.rom.length, 'the copy must sit after everything the game uses, got 0x' + at.toString(16));
-  t.assert(built.out[at] === 0x01 && built.out[at + 1] === 0x00, 'the copy should start with the record header');
-  t.assert(built.out.length > fixture.rom.length, 'the image should have been grown for it');
-
+  t.assert(at !== before[3], 'the grown record should have been repointed');
+  t.assert(at < fixture.rom.length, 'to a place inside the rom, not past its end: 0x' + at.toString(16));
   const report = inspectRecords(built.out, fixture, fixture.rom);
   t.assertEqual(report.broken.length, 0, 'no record may be broken: ' + JSON.stringify(report.broken.slice(0, 3)));
-  const text = built.log.join('\n');
+  const text = built.log.join('\\n');
   t.assert(/Self check passed/.test(text), 'the self check should have passed');
-  t.assert(/Relocated to/.test(text), 'the log should say the record moved');
+  t.assert(/Insert check: all/.test(text), 'and the insert check should be green');
   t.assert(!/Grew in place/.test(text), 'nothing may be shifted in this mode');
 });
-
-suite.test('every record grows: each one moves, nothing else shifts', async function (t) {
+suite.test('every record grows: all grow in place and the rom keeps its size', async function (t) {
   const fixture = buildSyntheticRom({ records: 48 });
   const translated = {};
   fixture.records.forEach(function (r) { translated[r.textStart] = grow(r.text, 8); });
   const built = await build(fixture, translated, { knownPointerTable: fixture.table });
   t.assert(built.out, 'the build produced no image: ' + built.state.status);
-
-  const after = readTable(built.out, fixture.table);
+  t.assertEqual(built.out.length, fixture.rom.length, 'the image must not grow');
   const report = inspectRecords(built.out, fixture, fixture.rom);
-  t.assertEqual(report.moved, fixture.count, 'every grown record should have moved');
+  t.assert(report.moved <= 1, 'at most the last record may have to move (it has no padding after it): ' + report.moved + ' moved');
+  t.assertEqual(report.moved + report.inPlace, fixture.count, 'every record must be accounted for');
   t.assertEqual(report.broken.length, 0, 'no record may be broken: ' + JSON.stringify(report.broken.slice(0, 3)));
-  after.forEach(function (at, i) {
-    t.assert(at >= fixture.rom.length, 'record ' + i + ' must sit after the game data, got 0x' + at.toString(16));
-  });
-  const text = built.log.join('\n');
+  const text = built.log.join('\\n');
   t.assert(/Self check passed/.test(text), 'the self check should have passed');
+  t.assert(/Insert check: all/.test(text), 'and the insert check should be green');
 });
-
 suite.test('every record grows in move only mode: each one moves to its own address', async function (t) {
   const fixture = buildSyntheticRom({ records: 48 });
   const translated = {};
@@ -211,28 +202,21 @@ suite.test('the self check is the net: a build it refuses hands the original bac
   }
 });
 
-suite.test('an insert that grows the rom reaches Export patched ROM', async function (t) {
-  /* The bug the user hit: the image is longer than the file that was loaded, because a
-     moved record is written past the end of the rom. The Hex Editor refused a longer image
-     and the export button stayed dead with nothing in the log. */
+suite.test('an insert that stays inside the rom reaches Export patched ROM', async function (t) {
   const fixture = buildSyntheticRom({ records: 12 });
   const target = fixture.records[5];
   const translated = {};
   translated[target.textStart] = grow(target.text, 24);
   const built = await build(fixture, translated, { knownPointerTable: fixture.table });
   t.assert(built.out, 'the build produced no image: ' + built.state.status);
-  t.assert(built.out.length > fixture.rom.length, 'the image should have grown');
+  t.assertEqual(built.out.length, fixture.rom.length, 'the image keeps the size of the file that was loaded');
 
   const K = built.env.K;
-  const hex = K.hex.getState();
-  t.assert(hex.appended && hex.appended.length === (built.out.length - fixture.rom.length),
-    'the extra bytes should be held as the appended tail, got ' + (hex.appended ? hex.appended.length : 'none'));
   const exported = K.hex.getPatchedBytes();
   t.assertEqual(exported.length, built.out.length, 'the exported image has the size of the insert');
   let same = true;
   for (let i = 0; i < built.out.length; i++) { if (exported[i] !== built.out[i]) { same = false; break; } }
-  t.assert(same, 'and it carries every byte of the insert, appended tail included');
-
+  t.assert(same, 'and it carries every byte of the insert');
   K.hex.exportPatchedRom();
   const status = String(K.hex.getState().status || '');
   t.assert(/Exported/.test(status), 'the export should report the file it wrote: ' + status);
