@@ -2938,9 +2938,19 @@ let _recordTable = null;
           let vNext = 0;
           for (let b = 3; b >= 0; b--) vNext = (vNext * 256) + romCopy[sites[i + 1] + b];
           const to = (vNext >>> 0) - (table.base || 0);
-          if (from < 0 || to <= from || to > romCopy.length) { bad.push(from); continue; }
+          if (from < 0 || from >= romCopy.length) { bad.push(from); continue; }
+          /* The span test only means something while the records still sit next to each
+             other. A record written to free space has its neighbours far away, or even
+             below its new address (the next table entry can point lower), and the bytes
+             in between are not a record at all. For those the end code is looked for
+             from where the pointer aims, within one record's worth of bytes. */
           let closes = false;
-          for (let p = to - 1; p >= from; p--) { if (romCopy[p] === terminatorHex) { closes = true; break; } }
+          if (to > from && to <= romCopy.length && (to - from) <= 0x10000) {
+            for (let p = to - 1; p >= from; p--) { if (romCopy[p] === terminatorHex) { closes = true; break; } }
+          } else {
+            const limit = Math.min(romCopy.length, from + 0x10000);
+            for (let p = from; p < limit; p++) { if (romCopy[p] === terminatorHex) { closes = true; break; } }
+          }
           const originalStart = (table.entries || [])[i];
           const headerKept = originalStart === undefined ||
             (romCopy[from] === originalRom[originalStart] && romCopy[from + 1] === originalRom[originalStart + 1]);
