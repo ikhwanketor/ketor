@@ -152,20 +152,6 @@ suite.test('nothing about pointers is put in front of the user', async function 
     'the sidebar must not talk about pointers or insert ranges: ' + text.slice(0, 200));
 });
 
-suite.test('the page layout is an inspector inside the translation activity', async function (t) {
-  const fixture = buildSyntheticRom({ records: 12 });
-  const loaded = await loadRom(fixture);
-  const panel = loaded.env.K.ui.KetorPageLayoutPanel;
-  t.assert(typeof panel === 'function', 'the translation activity offers a page layout inspector');
-  const K = loaded.K;
-  K.search.applyTranslations([{ startByte: fixture.records[1].textStart, translatedText: 'Baris satu[LINE]Baris dua yang panjang sekali supaya terlihat membungkus di dalam kotak.' }]);
-  K.translate.selectOffset(fixture.records[1].textStart);
-  await loaded.env.sleep(20);
-  const text = loaded.env.treeStrings(panel()).join(' | ');
-  t.assert(text.indexOf('Baris satu') >= 0, 'it shows the translation of the selected page: ' + text.slice(0, 200));
-  t.assert(text.indexOf('page width') >= 0 && text.indexOf('too wide') >= 0, 'the details box should report the page width and the overflow: ' + text.slice(-200));
-  t.assert(/Show the original text|Show your translation/.test(text), 'with a way to see the original in the same box');
-});
 suite.test('a build needs no settings at all: the table is found and used automatically', async function (t) {
   const fixture = buildSyntheticRom({ records: 16 });
   const loaded = await loadRom(fixture);

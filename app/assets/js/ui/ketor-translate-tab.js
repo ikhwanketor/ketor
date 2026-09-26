@@ -492,12 +492,6 @@
   }
 
   function TranslateTab() {
-    /* The page layout inspector, the same pattern the Tile Editor uses for its inspector:
-       it sits inside this activity, on the right, and the toolbar button below shows or
-       hides it. On by default, because seeing the page while translating is the point. */
-    var layoutPanelState = useState(true);
-    var showLayoutPanel = layoutPanelState[0];
-    var setShowLayoutPanel = layoutPanelState[1];
     var t = K.translate.useTranslate();
     var s = K.search ? K.search.useSearch() : null;
     var apiKeySt = uS('');
@@ -726,16 +720,8 @@
     var providerKind = currentProvider ? currentProvider.kind : 'chat';
 
     return e('div', {
-      style: { display: 'flex', flexDirection: 'row', height: '100%', minHeight: 0, overflow: 'hidden' }
+      style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden' }
     },
-      /* Left: everything that was this tab before. Right: the page layout inspector, a full
-         height column at the edge, like the GROUPS column of the Hex Editor and the Palette
-         column of the Tile Editor. It used to sit inside the editor row, which made it a
-         short floating box in the middle of the tab - that is not how any other activity
-         places its inspector. */
-      e('div', {
-        style: { flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }
-      },
       e('div', {
         style: {
           flex: '0 0 auto',
@@ -1062,14 +1048,7 @@
           style: { flex: '0 1 250px', minWidth: 100, fontSize: 11, fontFamily: MONO }
         }) : null,
 
-        e('span', { style: { flex: 1 } }),
-
-        e('button', {
-          type: 'button', className: 'kt-btn small',
-          style: TOOL_BTN,
-          title: 'Show or hide the page layout of the text being edited',
-          onClick: function () { setShowLayoutPanel(!showLayoutPanel); }
-        }, (showLayoutPanel ? 'Hide' : 'Show') + ' page layout')
+        e('span', { style: { flex: 1 } })
       ),
 
       e('div', {
@@ -1103,22 +1082,8 @@
           onChange: function (value) {
             K.search.setTranslatedText(active.startByte, value);
           }
-        }) : null,
-
+        }) : null
       )
-      ),
-
-      showLayoutPanel && K.ui.KetorPageLayoutPanel ? e('div', {
-        style: {
-          flex: '0 0 320px', minWidth: 220, display: 'flex', flexDirection: 'column',
-          minHeight: 0, overflow: 'hidden', padding: 8, gap: 8,
-          background: 'var(--kt-sidebar-bg)',
-          borderLeft: '1px solid var(--kt-widget-border-default)'
-        }
-      }, e(K.ui.KetorPageLayoutPanel, {
-        row: active,
-        budget: active ? K.translate.lineBudget(active) : null
-      })) : null
     );
   }
 
