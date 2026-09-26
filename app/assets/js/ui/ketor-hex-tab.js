@@ -422,7 +422,9 @@
     var fullHeight = totalRows * ROW_HEIGHT;
     var virtualHeight = Math.min(fullHeight, MAX_VIRTUAL_HEIGHT);
     var proportional = virtualHeight < fullHeight;
-    var visibleRows = Math.max(1, Math.ceil((view.height || 400) / ROW_HEIGHT));
+    /* Before the container is measured, assume a screenful rather than a single row, so the grid
+       has something to show instead of an empty band. */
+    var visibleRows = Math.max(1, Math.ceil((view.height || 600) / ROW_HEIGHT));
 
     function scrollTopForRow(row) {
       var el = scrollRef.current;
@@ -696,9 +698,12 @@
     var firstRow, lastRow, rowOffset;
     if (proportional) {
       var maxFirst = Math.max(0, totalRows - visibleRows);
-      var frac = view.height && virtualHeight > view.height
-        ? view.scrollTop / (virtualHeight - view.height)
-        : 0;
+      /* The mapping used to collapse to zero whenever the measured height was missing or the
+         virtual height was not bigger than it, which is what a large rom hit: the scrollbar
+         moved and the grid kept showing the first rows, then nothing. The span is clamped
+         instead, so any scroll position maps somewhere. */
+      var span = Math.max(1, virtualHeight - Math.max(0, view.height || 0));
+      var frac = Math.min(1, Math.max(0, view.scrollTop / span));
       firstRow = Math.max(0, Math.min(maxFirst, Math.round(frac * maxFirst)));
       lastRow = Math.min(totalRows - 1, firstRow + visibleRows + OVERSCAN);
       rowOffset = firstRow;
