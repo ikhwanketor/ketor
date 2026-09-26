@@ -339,7 +339,14 @@
     /* Build the value index here: the table detector keeps its own, and this function
        has to stand on its own. */
     var map = Object.create(null);
-    for (var at = 0; at + rules.size <= bytes.length; at += 2) {
+    /* Two byte pointers are indexed at every offset. A 6502 or Game Boy writer can
+       keep a pointer at an odd address - LDA #$00 / STA $0301 is ordinary code - and
+       stepping by two silently hid every one of those: on a test rom with 24 NES
+       pointers every second one was invisible. Four byte pointers stay on the even
+       offsets, where the cost of a full scan on a multi megabyte image would buy
+       nothing. */
+    var step = rules.size >= 4 ? 2 : 1;
+    for (var at = 0; at + rules.size <= bytes.length; at += step) {
       var v = readValue(bytes, at, rules.size, rules.little);
       if (v < 0) continue;
       var list = map[v];

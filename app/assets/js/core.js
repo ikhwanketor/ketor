@@ -2467,7 +2467,6 @@ let _recordTable = null;
          entry is rewritten, so nothing else in the image shifts (Atlas does the same).
          allowMessageShift true asks for the other path - grow in place by borrowing the
          padding of the messages after it - and false refuses the growth and reports it. */
-      let shiftBudgetLeft = 0;
       const grownRecordCount = modifications.filter(m => m.needsRelocation).length;
       if (grownRecordCount > 0) {
         relocationLog.push(grownRecordCount + ' record(s) need more room than they have; each one moves to free space and only its own table entry is rewritten' +
@@ -2634,7 +2633,7 @@ let _recordTable = null;
            enough to break eight. The default therefore moves the record to free space
            and rewrites its own table entry, which the same measurement shows passing. */
         const willBorrow = needsRelocation && pointersForWrite.length > 0 &&
-          system.allowMessageShift === true && shiftBudgetLeft > 0;
+          system.allowMessageShift === true;
         if (willBorrow) {
           const borrowCandidates = knownRecordPointer
             ? pointersForWrite.filter(p => Number(p.ptrOffset) === Number(knownRecordPointer.ptrOffset))
