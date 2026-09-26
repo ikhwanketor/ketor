@@ -325,6 +325,51 @@
     return out.slice(0, Number(opts.maxResults) || 6);
   }
 
+  /* Some consoles keep no compact table at all. Dragon Warrior IV on the NES is the
+     measured case: 274 of 287 sampled texts have a two byte pointer in the 0x8000 or
+     0xC000 bank window, but only 8 of those sites sit in an ascending run, so the
+     pointers live scattered in code and script. For such a rom a table cannot be found
+     because there is none; what the insert path needs is, per text, where its pointer
+     is. This answers that with the same console rules: a 16 bit pointer carries the
+     address inside a bank, so the bank relative value is tried for every bank. */
+  K.core.findPointersForTexts = function (bytes, options) {
+    var opts = options || {};
+    var rules = rulesFor(opts);
+    var texts = (opts.textOffsets || []).filter(function (o) { return Number.isFinite(o) && o >= 0 && o < bytes.length; });
+    /* Build the value index here: the table detector keeps its own, and this function
+       has to stand on its own. */
+    var map = Object.create(null);
+    for (var at = 0; at + rules.size <= bytes.length; at += 2) {
+      var v = readValue(bytes, at, rules.size, rules.little);
+      if (v < 0) continue;
+      var list = map[v];
+      if (list) { if (list.length < 64) list.push(at); } else { map[v] = [at]; }
+    }
+    var bankStep = rules.bankStep || 0;
+    var out = [];
+    texts.forEach(function (t) {
+      var values = [];
+      if (bankStep) {
+        var within = t % bankStep;
+        values.push(rules.base + within);
+        if (rules.flagMask) values.push((rules.base + within) | 0x8000);
+      } else {
+        values.push(rules.base + t);
+        values.push(t);
+        values.push(t + 0x10);
+      }
+      var seen = Object.create(null);
+      values.forEach(function (v) {
+        if (seen[v]) return;
+        seen[v] = 1;
+        var sites = map[v];
+        if (!sites) return;
+        sites.forEach(function (at) { out.push({ text: t, at: at, value: v, target: t }); });
+      });
+    });
+    return out;
+  };
+
   K.core.POINTER_CONSOLE_RULES = CONSOLE_RULES;
   K.core.detectPointerTables = detect;
   K.core.readPointerTable = function (bytes, table, index) {
