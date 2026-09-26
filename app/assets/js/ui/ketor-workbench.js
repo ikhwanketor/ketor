@@ -1044,8 +1044,13 @@
     rootClasses.push('orientation-' + vp.orientation);
     if (state.sidebarVisible && isCompact) rootClasses.push('drawer-open');
 
+    var rightPanelWanted = !!(Ketor.ui.getRightPanelProvider && Ketor.ui.getRightPanelProvider(state.activeActivity));
     var rootStyle = {
-      '--kt-sidebar-width': state.sidebarVisible ? (state.sidebarWidth + 'px') : '0px'
+      '--kt-sidebar-width': state.sidebarVisible ? (state.sidebarWidth + 'px') : '0px',
+      /* The right hand panel is a grid column: its width is the panel width when it is
+         open, a thin strip when it is collapsed (so it can be brought back) and zero
+         when this activity has nothing to put there. */
+      '--kt-rightpanel-width': rightPanelWanted ? (rightPanelVisible ? (rightPanelWidth + 'px') : '20px') : '0px'
     };
 
     var progress = useMemo(function () {

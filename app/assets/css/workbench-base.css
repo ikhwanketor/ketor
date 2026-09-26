@@ -28,24 +28,30 @@
 
 /* ---- Desktop mode grid ---- */
 .kt-workbench.mode-desktop {
-  grid-template-columns: var(--kt-activitybar-width, 48px) var(--kt-sidebar-width, 300px) 1fr;
+  /* The right hand settings panel is a grid area of its own. Putting it in the flow
+     instead made it a fourth child of the middle row, so it landed on the next row,
+     bottom left, which is where a user found it (build 81). */
+  grid-template-columns: var(--kt-activitybar-width, 48px) var(--kt-sidebar-width, 300px) 1fr var(--kt-rightpanel-width, 0px);
   grid-template-rows: var(--kt-titlebar-height, 30px) 1fr var(--kt-statusbar-height, 22px);
   grid-template-areas:
-    "titlebar    titlebar    titlebar"
-    "activitybar sidebar     editor"
-    "statusbar   statusbar   statusbar";
+    "titlebar    titlebar    titlebar  titlebar"
+    "activitybar sidebar     editor    rightpanel"
+    "statusbar   statusbar   statusbar statusbar";
 }
 .kt-workbench.mode-desktop.no-activitybar {
-  grid-template-columns: 0 var(--kt-sidebar-width, 300px) 1fr;
+  grid-template-columns: 0 var(--kt-sidebar-width, 300px) 1fr var(--kt-rightpanel-width, 0px);
 }
 .kt-workbench.mode-desktop.no-sidebar {
-  grid-template-columns: var(--kt-activitybar-width, 48px) 0 1fr;
+  grid-template-columns: var(--kt-activitybar-width, 48px) 0 1fr var(--kt-rightpanel-width, 0px);
 }
 .kt-workbench.mode-desktop.no-activitybar.no-sidebar {
-  grid-template-columns: 0 0 1fr;
+  grid-template-columns: 0 0 1fr var(--kt-rightpanel-width, 0px);
 }
 
 /* ---- Compact mode grid ---- */
+.kt-workbench.mode-compact .kt-right-panel,
+.kt-workbench.mode-compact .kt-right-panel-show { display: none; }
+
 .kt-workbench.mode-compact {
   grid-template-columns: 1fr;
   grid-template-rows: 1fr auto auto;
@@ -440,6 +446,7 @@
 /* ---- Editor column ---- */
 /* Right hand settings panel: the activity settings, beside the work. */
 .kt-right-panel {
+  grid-area: rightpanel;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -475,6 +482,7 @@
 .kt-right-panel-resize-handle:hover,
 .kt-right-panel-resize-handle.dragging { background: var(--kt-focus-border); }
 .kt-right-panel-show {
+  grid-area: rightpanel;
   align-self: stretch;
   width: 18px;
   border: none;
