@@ -426,8 +426,6 @@
      changed is remembered as a range and its hex patch is ignored on later builds, the
      same way the payload offsets already are. */
   var _insertOwnedRanges = [];
-  var _insertBaseBuffer = null;   // the image the next pass starts from
-  var _insertPasses = 0;
   var _lastBuildBase = null;
   function _rememberInsertRanges(before, after) {
     _insertOwnedRanges = [];
@@ -453,8 +451,7 @@
   }
   K.translate.getInsertOwnedRanges = function () { return _insertOwnedRanges.slice(); };
 
-  function buildModifiedRom(scope, continuation) {
-    if (!continuation) { _insertBaseBuffer = null; _insertPasses = 0; }
+  function buildModifiedRom(scope) {
     var compileScope = scope === 'group' ? 'group' : 'all';
     _ensureWorkers();
     if (!_workers.build) { _set({ status: 'Build unavailable.' }); return; }
@@ -590,7 +587,7 @@
     // Patches made in the Hex Editor are part of the ROM now, so they are
     // applied before any text is inserted (decision R2.2 #6). The loaded
     // buffer itself is never modified.
-    var rb = _insertBaseBuffer || _state.romBytes;   // a later pass builds on the previous one
+    var rb = _state.romBytes;
     var patched = new Uint8Array(rb.buffer.slice(rb.byteOffset, rb.byteOffset + rb.byteLength));
     var appliedPatches = 0;
     var hexState = (K.hex && typeof K.hex.getState === 'function') ? K.hex.getState() : null;
@@ -681,17 +678,6 @@
       });
       if (_lineBudgetNote) warnings.push('Line budget: ' + _lineBudgetNote);
       var owned = _rememberInsertRanges(_lastBuildBase, bytes);
-      var deferredText = log.filter(function (l) { return String(l).indexOf('Pass deferred:') === 0; })[0];
-      var deferredCount = deferredText ? Number((/Pass deferred:\s*(\d+)/.exec(deferredText) || [0, 0])[1]) : 0;
-      _insertBaseBuffer = bytes;
-      if (deferredCount > 0 && _insertPasses < 40) {
-        _insertPasses++;
-        log.push('Pass ' + (_insertPasses + 1) + ': building again on top of this result for the ' + deferredCount + ' deferred block(s).');
-        setTimeout(function () { buildModifiedRom(_state.compileScope || 'all', true); }, 30);
-      } else if (deferredCount === 0) {
-        if (_insertPasses > 0) log.push('All ' + (_insertPasses + 1) + ' pass(es) finished; nothing is deferred any more.');
-        _insertPasses = 0;
-      }
       log.push('Insert ownership: ' + owned + ' range(s) of this build are excluded from the hex patches on the next one, so a second Insert All cannot shift the same records twice.');
 
       var summary = {

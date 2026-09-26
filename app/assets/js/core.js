@@ -1824,11 +1824,6 @@ let _recordTable = null;
 
       const blocks = groupTextsIntoBlocks(allTexts);
       const modifications = [];
-      /* One growth per pass: a single shift is proven correct, several chained shifts
-         in one build still drift by two bytes at a record boundary. The app repeats the
-         build on top of the result until nothing is deferred. */
-      let grewOnce = false;
-      let deferred = 0;
       let totalRequiredSpace = 0;
 
       for (const block of blocks) {
@@ -2806,12 +2801,6 @@ let _recordTable = null;
             relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: [WARNING] Needs ${Number(newBlockBytes.length) - Number(originalBlockLength)} byte(s) more than this record has. Nothing was written because moving text in this game corrupts the dialogue. Shorten the page, or set allowMessageShift to try the shift path.`);
             continue;
           }
-          /* One growth per pass ... */
-          if (needsRelocation && grewOnce) {
-            deferred++;
-            relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: deferred to the next pass because one record already grew in this one.`);
-            continue;
-          }
           /* The known table names the pointer of every record, so a record that has to
              grow must not depend on the heuristic search finding it. Without this, a
              record whose search came up empty was skipped with "no safe pointers found"
@@ -2837,7 +2826,6 @@ let _recordTable = null;
           if (needsRelocation && validPointers.length > 0) {
             const borrowed = growByBorrowingFollowingPadding(validPointers);
             if (borrowed) {
-              grewOnce = true;
               romCopy.set(newBlockBytes, block.start);
               relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: Grew in place by ${borrowed.grew} byte(s) instead of moving; ${borrowed.moved} message(s) after it slid forward and ${borrowed.repointed} pointer(s) were recalculated.`);
               continue;
@@ -2936,9 +2924,6 @@ let _recordTable = null;
          one does not, the original bytes are handed back instead of a rom that would
          freeze or skip dialogue. The entries are read from the current image, so the
          check sees the layout the game will see. */
-      if (deferred > 0) {
-        relocationLog.push(`Pass deferred: ${deferred} block(s) still need room and are written by the next pass.`);
-      }
       const selfCheckBad = (() => {
         const table = recordTable();
         const sites = table.sites || [];
