@@ -116,6 +116,25 @@ suite.test('the glyphs the text window draws come out of VRAM', function () {
   assertEqual(inUse.length, 1, 'only one of the four tiles has pixels');
 });
 
+suite.test('the palette is found by the colours the screen shows', function () {
+  const state = buildState();
+  const read = SS.read(new Uint8Array(buildPng(state)), { inflate: inflate });
+  const found = SS.locatePaletteByScreenshot(read.screenshot, new Uint8Array(state));
+  assert(found, 'the palette was not found from the screen colours');
+  assertEqual(found.at, PALETTE_AT, 'and it is the run the colours come from');
+  assertEqual(found.how, 'screenshot colours', 'the method says how it found it');
+  /* the fixture screen shows black, blue and white; the fixture palette holds black, red, green and blue, so two of the three are covered. */
+  assert(found.covered >= 2, 'the colours the screen shares with that palette are counted, got ' + found.covered);
+  assert(found.share > 0.5, 'and they cover most of the screen');
+});
+
+suite.test('a state with no palette at all is not given one', function () {
+  const empty = new Uint8Array(0x1000);
+  const read = SS.read(new Uint8Array(buildPng(buildState())), { inflate: inflate });
+  const found = SS.locatePaletteByScreenshot(read.screenshot, empty);
+  assert(!found, 'a run of zeros must not pass itself off as a palette');
+});
+
 suite.test('a run of zeros is not mistaken for a palette', function () {
   const zeros = new Uint8Array(0x800);
   assert(SS.paletteScore(zeros, 0) === 0, 'an empty run scores zero');

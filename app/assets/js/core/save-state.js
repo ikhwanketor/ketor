@@ -138,6 +138,44 @@
     return { width: width, height: height, bpp: bpp, pixels: out };
   }
 
+  /* The screen is the ground truth for the palette: every colour on it came out of palette RAM,
+     so the window that covers those colours is the palette. On the state the translator sent this
+     found the run at 0x7A0, covering 112 of the 167 colours on screen (the runner up was its own
+     neighbour at 0x7A2, so the peak is single and clear), while looking for a window that is
+     merely rich in colours offered 59401 candidates inside EWRAM - that was data, not colours.
+     It locates colours. It says nothing about where VRAM is: the tile layout still needs the
+     emulator's own writer order, and a screenshot is a composited frame, not a set of tiles. */
+  function locatePaletteByScreenshot(screenshot, state, options) {
+    var opts = options || {};
+    if (!screenshot || !screenshot.pixels) return null;
+    var wanted = {}, total = 0;
+    for (var i = 0; i < screenshot.pixels.length; i += screenshot.bpp) {
+      var key = (screenshot.pixels[i] << 16) | (screenshot.pixels[i + 1] << 8) | screenshot.pixels[i + 2];
+      if (!wanted[key]) { wanted[key] = 1; total++; }
+    }
+    if (total === 0) return null;
+    var best = null;
+    for (var at = 0; at + 0x400 <= state.length; at += 2) {
+      var seen = {}, covered = 0;
+      for (var k = 0; k < 0x400; k += 2) {
+        var word = state[at + k] | (state[at + k + 1] << 8);
+        var c = colourKey(word);
+        if (wanted[c] && !seen[c]) { seen[c] = 1; covered++; }
+      }
+      if (!best || covered > best.covered) best = { at: at, covered: covered };
+    }
+    if (!best) return null;
+    var share = best.covered / total;
+    if (share < (Number(opts.minShare) || 0.4)) return null;
+    return { at: best.at, covered: best.covered, total: total, share: share, how: 'screenshot colours' };
+  }
+
+  /* The packed colour the screenshot is written in, from a BGR555 palette word. */
+  function colourKey(word) {
+    var c = colourOf(word);
+    return (c.r << 16) | (c.g << 8) | c.b;
+  }
+
   /* State bytes in, machine blocks out. A plain (uncompressed) state is accepted too, so a
      state from another emulator is not refused just because it is not wrapped in a PNG. */
   function readState(bytes, options) {
@@ -163,6 +201,11 @@
     if (!state) return null;
     var blocks = splitGbaBlocks(state);
     var palette = locatePalette(state, blocks);
+    /* Prefer the palette the screen proves over the one a size calculation put there. */
+    if ((!palette || palette.how !== 'block sizes') && screenshot) {
+      var byScreen = locatePaletteByScreenshot(screenshot, state);
+      if (byScreen) palette = { at: byScreen.at, vramAt: -1, how: byScreen.how, covered: byScreen.covered, total: byScreen.total };
+    }
     return {
       kind: kind,
       size: state.length,
@@ -175,6 +218,7 @@
       vram: (palette && palette.how === 'block sizes') ? (blocks ? blocks.vram : null) : null,
       paletteAt: palette ? palette.at : -1,
       paletteHow: palette ? palette.how : 'not found',
+      paletteCovered: palette && palette.covered !== undefined ? palette.covered : -1,
       colours: palette ? readColours(state, palette.at) : [],
       screenshot: screenshot
     };
@@ -244,6 +288,8 @@
     paletteScore: paletteScore,
     splitGbaBlocks: splitGbaBlocks,
     locatePalette: locatePalette,
+    locatePaletteByScreenshot: locatePaletteByScreenshot,
+    colourKey: colourKey,
     colourOf: colourOf,
     decodeScreenshot: decodeScreenshot,
     read: readState,
