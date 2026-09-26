@@ -516,23 +516,14 @@ window.__PT_APP_READY__ = false;
         if (system.name === "PlayStation 1") return "profile_ps1";
         if (system.name === "GBA" && !usePaddingByte && !hasMultiByteTextEncoding) return "profile_gba_nonpadding";
         if (system.name === "GBA" && usePaddingByte && !hasMultiByteTextEncoding) return "profile_gba_dwe_singlebyte";
-        /* A GBA rom whose text is more than one byte a character still runs on a GBA. Both lines
-           above are written for a one byte table, so a sixteen bit table (4100=A in khcom.tbl)
-           fell through to the generic profile with the padding byte on and every GBA rule - the
-           strict pointer validation, the absolute transforms, the profile checks further down -
-           was skipped. That is the bug the translator hit. The console decides the console; the
-           table decides the encoding, not the profile. */
-        if (system.name === "GBA" && usePaddingByte) return "profile_gba_dwe_multibyte";
-        if (system.name === "GBA") return "profile_gba_multibyte";
         return "profile_default";
       })();
       const isGbaNonPaddingProfile = pointerProfile === "profile_gba_nonpadding";
       const isGbaDweSingleByteProfile = pointerProfile === "profile_gba_dwe_singlebyte";
-      const isGbaMultibyteProfile = pointerProfile === "profile_gba_multibyte" || pointerProfile === "profile_gba_dwe_multibyte";
       const isNesProfile = pointerProfile === "profile_nes";
       const isSnesProfile = pointerProfile === "profile_snes";
       const isGbLikeProfile = pointerProfile === "profile_gb" || pointerProfile === "profile_gbc";
-      const isStrictGbaPointerValidation = (system.name === "GBA") && (isGbaNonPaddingProfile || isGbaDweSingleByteProfile || isGbaMultibyteProfile || usePaddingByte);
+      const isStrictGbaPointerValidation = (system.name === "GBA") && (isGbaNonPaddingProfile || usePaddingByte);
       const isAbsoluteLikeGbaTransform = (transformId) => (
         transformId === 'gba' ||
         transformId === 'gba_offset' ||
