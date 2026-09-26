@@ -152,11 +152,11 @@ suite.test('nothing about pointers is put in front of the user', async function 
     'the sidebar must not talk about pointers or insert ranges: ' + text.slice(0, 200));
 });
 
-suite.test('the in game panel is its own right hand panel, not a box in the editor', async function (t) {
+suite.test('the page layout is an inspector inside the translation activity', async function (t) {
   const fixture = buildSyntheticRom({ records: 12 });
   const loaded = await loadRom(fixture);
-  const panel = loaded.env.K.ui.rightPanelProviders.translation;
-  t.assert(typeof panel === 'function', 'the translation activity offers a right hand panel');
+  const panel = loaded.env.K.ui.KetorPageLayoutPanel;
+  t.assert(typeof panel === 'function', 'the translation activity offers a page layout inspector');
   const K = loaded.K;
   K.search.applyTranslations([{ startByte: fixture.records[1].textStart, translatedText: 'Baris satu[LINE]Baris dua yang panjang sekali supaya terlihat membungkus di dalam kotak.' }]);
   K.translate.selectOffset(fixture.records[1].textStart);

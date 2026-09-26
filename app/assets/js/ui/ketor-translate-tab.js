@@ -492,6 +492,12 @@
   }
 
   function TranslateTab() {
+    /* The page layout inspector, the same pattern the Tile Editor uses for its inspector:
+       it sits inside this activity, on the right, and the toolbar button below shows or
+       hides it. On by default, because seeing the page while translating is the point. */
+    var layoutPanelState = useState(true);
+    var showLayoutPanel = layoutPanelState[0];
+    var setShowLayoutPanel = layoutPanelState[1];
     var t = K.translate.useTranslate();
     var s = K.search ? K.search.useSearch() : null;
     var apiKeySt = uS('');
@@ -1048,7 +1054,14 @@
           style: { flex: '0 1 250px', minWidth: 100, fontSize: 11, fontFamily: MONO }
         }) : null,
 
-        e('span', { style: { flex: 1 } })
+        e('span', { style: { flex: 1 } }),
+
+        e('button', {
+          type: 'button', className: 'kt-btn small',
+          style: TOOL_BTN,
+          title: 'Show or hide the page layout of the text being edited',
+          onClick: function () { setShowLayoutPanel(!showLayoutPanel); }
+        }, (showLayoutPanel ? 'Hide' : 'Show') + ' page layout')
       ),
 
       e('div', {
@@ -1082,7 +1095,14 @@
           onChange: function (value) {
             K.search.setTranslatedText(active.startByte, value);
           }
-        }) : null
+        }) : null,
+
+        showLayoutPanel ? e('div', {
+          style: {
+            flex: '0 0 320px', minWidth: 220, display: 'flex', flexDirection: 'column',
+            minHeight: 0, overflow: 'auto'
+          }
+        }, K.ui.KetorPageLayoutPanel ? e(K.ui.KetorPageLayoutPanel, null) : null) : null
       )
     );
   }

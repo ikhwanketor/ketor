@@ -156,5 +156,7 @@
      the user asking for it. The Tile Editor keeps its own inspector inside the activity
      instead (its toolbar has the show/hide button); that pattern is the one to copy if this
      panel should ever move inside the tab. Both wear the shared KtBox chrome. */
-  K.ui.registerRightPanelProvider('translation', PageLayoutPanel, { title: 'Page layout' });
+  /* No workbench level registration: this panel is the inspector of the Translation
+     activity (see ketor-translate-tab.js), the same way the Tile Editor keeps its inspector
+     inside its own activity with a show/hide button in its toolbar. */
 })(window);
