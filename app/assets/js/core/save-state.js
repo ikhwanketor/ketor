@@ -275,6 +275,87 @@
     return out;
   }
 
+  /* A VBA state is gzip and, unlike the mGBA PNG states, it really does carry VRAM and the
+     palette. Its writer order is known from the source (CPUWriteState): after the header comes
+     IWRAM 0x8000, then the palette 0x400, then EWRAM 0x40000, then VRAM 0x18000. The header is
+     large (the state is 2MB while those blocks are only 0x60C00), so the palette is found by the
+     colours the screen shows and VRAM follows from the order. Measured on a state saved together
+     with a screenshot: palette at 0x1C40 covering 256 of 263 screen colours (97.3%), VRAM at
+     0x42040 with 381 tiles in use and a run of glyph tiles. */
+  function colourWordsOfScreenshot(screenshot) {
+    var words = [], seen = {};
+    for (var i = 0; i < screenshot.pixels.length; i += screenshot.bpp) {
+      var r = screenshot.pixels[i], g = screenshot.pixels[i + 1], b = screenshot.pixels[i + 2];
+      var word = ((b >> 3) << 10) | ((g >> 3) << 5) | (r >> 3);
+      if (!seen[word]) { seen[word] = 1; words.push(word); }
+    }
+    return words;
+  }
+
+  /* The same idea as locatePaletteByScreenshot, without needing the pixels: a list of BGR555
+     words is enough, and a test can hand one in directly. */
+  function locatePaletteByWords(words, state, options) {
+    var opts = options || {};
+    if (!words || !words.length) return null;
+    var want = new Uint8Array(65536);
+    for (var i = 0; i < words.length; i++) want[words[i] & 0xFFFF] = 1;
+    var half = new Uint16Array(state.buffer, state.byteOffset, Math.floor(state.length / 2));
+    /* Distinct colours, not entries: a run of zeros matches the transparent black of the screen
+       on every entry it holds, and counting entries let a window of padding beat the palette.
+       The stamp array keeps the count exact without allocating per window. */
+    var stamp = new Int32Array(65536);
+    var stampId = 0;
+    var best = null;
+    for (var w = 0; w + 256 <= half.length; w++) {
+      stampId++;
+      var hit = 0;
+      for (var k = 0; k < 256; k++) {
+        var word = half[w + k];
+        if (!want[word] || stamp[word] === stampId) continue;
+        stamp[word] = stampId;
+        hit++;
+      }
+      /* A window that overlaps a palette covers the same colours as the palette itself, so the
+         last of the equal best is taken: that is the window starting at the first colour. */
+      if (!best || hit >= best.hit) best = { w: w, hit: hit };
+    }
+    if (!best) return null;
+    var share = best.hit / words.length;
+    if (share < (Number(opts.minShare) || 0.5)) return null;
+    return { at: best.w * 2, covered: best.hit, total: words.length, share: share, how: 'screenshot colours' };
+  }
+
+  /* A VBA state: gunzip, find the palette from what the screen showed, and take VRAM where the
+     writer order puts it. The blocks are only handed out when the palette was proven by the
+     screen, exactly like the PNG reader. */
+  function readVbaState(bytes, options) {
+    var opts = options || {};
+    var inflateSync = opts.inflate || defaultInflate;
+    var state = bytes;
+    if (bytes[0] === 0x1F && bytes[1] === 0x8B) {
+      try { state = inflateSync(bytes); } catch (e) { return null; }
+      state = new Uint8Array(state);
+    }
+    if (state.length < 0x60C00) return null;
+    var words = opts.words || (opts.screenshot ? colourWordsOfScreenshot(opts.screenshot) : null);
+    var palette = words ? locatePaletteByWords(words, state, opts) : null;
+    var vramAt = palette ? palette.at + 0x400 + 0x40000 : -1;
+    var vram = (palette && vramAt + 0x18000 <= state.length) ? state.slice(vramAt, vramAt + 0x18000) : null;
+    return {
+      kind: 'vba-sgm',
+      size: state.length,
+      state: state,
+      paletteAt: palette ? palette.at : -1,
+      paletteCovered: palette ? palette.covered : -1,
+      paletteTotal: palette ? palette.total : -1,
+      paletteHow: palette ? palette.how : 'not found',
+      colours: palette ? readColours(state, palette.at) : [],
+      vramAt: vramAt,
+      vram: vram,
+      blocksTrusted: !!palette
+    };
+  }
+
   function defaultInflate(bytes) {
     if (global.pako && typeof global.pako.inflate === 'function') return global.pako.inflate(bytes);
     if (typeof require === 'function') { try { return require('zlib').inflateSync(Buffer.from(bytes)); } catch (e) { } }
@@ -293,6 +374,9 @@
     colourOf: colourOf,
     decodeScreenshot: decodeScreenshot,
     read: readState,
+    readVbaState: readVbaState,
+    locatePaletteByWords: locatePaletteByWords,
+    colourWordsOfScreenshot: colourWordsOfScreenshot,
     fontTiles: fontTiles,
     glyphsInUse: glyphsInUse
   };

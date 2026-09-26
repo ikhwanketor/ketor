@@ -140,6 +140,17 @@ suite.test('a state with no palette at all is not given one', function () {
   assert(!found, 'a run of zeros must not pass itself off as a palette');
 });
 
+suite.test('a VBA state whose palette cannot be proven hands out no VRAM', function () {
+  const state = Buffer.alloc(0x1c40 + 0x60c00);
+  const read = SS.readVbaState(new Uint8Array(zlib.gzipSync(state)), {
+    inflate: (b) => new Uint8Array(zlib.gunzipSync(Buffer.from(b))),
+    words: [0x001f, 0x03e0]
+  });
+  assert(read, 'the state still opens');
+  assertEqual(read.vram, null, 'but no VRAM is offered without a palette the screen proves');
+  assertEqual(read.blocksTrusted, false, 'and it says so');
+});
+
 suite.test('a run of zeros is not mistaken for a palette', function () {
   const zeros = new Uint8Array(0x800);
   assert(SS.paletteScore(zeros, 0) === 0, 'an empty run scores zero');
