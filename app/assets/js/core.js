@@ -482,6 +482,13 @@ window.__PT_APP_READY__ = false;
           return typeof char === 'string' && char.length > 0;
         });
       const hasMultiByteTextEncoding = multiBytePrintableEntries.length >= 12;
+      /* Pointers that name an address inside a bank cannot express an address in
+         another bank: writing one for a record that moved across a bank boundary
+         produces a value that reads back as a different address. The mask is the
+         window such a pointer can reach. */
+      const BANK_RELATIVE_TRANSFORMS = { nes_bank: 0x3FFF, gb_bank: 0x3FFF, snes_bank: 0x7FFF };
+      const bankMaskFor = (transformId) => BANK_RELATIVE_TRANSFORMS[transformId] || 0;
+      const isBankRelativeTransform = (transformId) => bankMaskFor(transformId) > 0;
       const systemPipelineMap = {
         "NES": "pipeline_nes",
         "SNES": "pipeline_snes",
@@ -1122,6 +1129,11 @@ window.__PT_APP_READY__ = false;
           case 'nes_base-': return offset - 0x8000;
           case 'nes_header': return offset + 0x10;
           case 'nes_prg': return offset + 0x7FF0;
+          /* The NES switchable window: file offset 0x0000-0x3FFF inside a bank is CPU
+             0x8000-0xBFFF, so the stored value is the offset inside the bank plus
+             0x8000. The detector builds the same value, which is how a per text
+             pointer is handed to the engine. */
+          case 'nes_bank': return (offset & 0x3FFF) | 0x8000;
           case 'gba': return offset | 0x08000000;
           case 'gba_offset': return offset; // Return raw offset (0x00xxxxxx)
           case 'gba_mirror1': return offset | 0x09000000;
@@ -1344,6 +1356,12 @@ window.__PT_APP_READY__ = false;
           const banks = Math.min(256, Math.ceil(size / consoleBank.step));
           for (let i = 0; i + 2 <= size; i += 2) {
             const w = little ? (originalRom[i] | (originalRom[i + 1] << 8)) : ((originalRom[i] << 8) | originalRom[i + 1]);
+            /* All ones is what an empty bank is filled with, not a pointer. Reading it
+               as one marked the last byte of every bank as referenced, and since a free
+               run is rejected when any byte of it is referenced, a NES rom had no free
+               run anywhere its pointers could reach: the per text detector found the
+               pointers and the move was still refused for lack of room. */
+            if (w === 0xFFFF) continue;
             const hi = w - consoleBank.cpuBase;
             if (hi < 0 || hi >= consoleBank.window) continue;
             for (let b = 0; b < banks; b++) add(b * consoleBank.step + hi);
@@ -1637,6 +1655,22 @@ let _recordTable = null;
             const texts = inside.length ? inside : b.texts;
             let end = b.end;
             texts.forEach(function (t) { end = Math.max(end, Number(t.startByte) + Number(t.byteLength) - 1); });
+            /* A record's end code and its padding sit after the last page, and the last
+               page's stored length does not always reach them. A block that stopped at the
+               last page therefore dropped the end code of the record it wrote: the shift
+               kept the record at its address, its text read correctly, and the record no
+               longer closed (batch 95, record 0xEF6B8, 23 pages). The next table entry says
+               where the record really ends, so the block is taken to there. */
+            if (b.ridx + 1 < entries.length && (nextStart - 1) > end) {
+              let recordEnd = nextStart - 1;
+              /* The end code has to be part of the block; the zero padding after it must
+                 not be, because that padding is exactly what a grown record borrows when
+                 the shift path pays for the growth. Including it made the write longer
+                 than the space the shift had freed and pushed the next record down by the
+                 difference (record 0xEFBCD). */
+              while (recordEnd > end && originalRom[recordEnd] === 0x00) recordEnd--;
+              end = recordEnd;
+            }
             if (texts.length > b.texts.length) {
               relocationLog.push(`Record at 0x${recStart.toString(16).toUpperCase()}: written as one unit with all ${texts.length} page(s) instead of ${b.texts.length}, so the growth lands at the end of the record.`);
             }
@@ -1885,6 +1919,41 @@ let _recordTable = null;
         };
       };
 
+      /* Every record must still carry its header where its entry points and still close
+         with the end code. The entries are read from the current image, so the check sees
+         the layout the game will see. It is a function because the shift path asks the same
+         question after every shift it makes: a shift is kept only when the whole rom still
+         checks out, which is what lets the tool try the reference layout first and move
+         only the records the shift cannot keep. */
+      const findBrokenRecords = () => {
+        const table = recordTable();
+        const sites = table.sites || [];
+        const bad = [];
+        const total = Math.min(sites.length, (table.entries || []).length);
+        if (total < 8) return bad;
+        for (let i = 0; i < total - 1; i++) {
+          const at = sites[i];
+          let v = 0;
+          for (let b = 3; b >= 0; b--) v = (v * 256) + romCopy[at + b];
+          const from = (v >>> 0) - (table.base || 0);
+          let vNext = 0;
+          for (let b = 3; b >= 0; b--) vNext = (vNext * 256) + romCopy[sites[i + 1] + b];
+          const to = (vNext >>> 0) - (table.base || 0);
+          if (from < 0 || from >= romCopy.length) { bad.push(from); continue; }
+          let closes = false;
+          if (to > from && to <= romCopy.length && (to - from) <= 0x10000) {
+            for (let p = to - 1; p >= from; p--) { if (romCopy[p] === terminatorHex) { closes = true; break; } }
+          } else {
+            const limit = Math.min(romCopy.length, from + 0x10000);
+            for (let p = from; p < limit; p++) { if (romCopy[p] === terminatorHex) { closes = true; break; } }
+          }
+          const originalStart = (table.entries || [])[i];
+          const headerKept = originalStart === undefined ||
+            (romCopy[from] === originalRom[originalStart] && romCopy[from + 1] === originalRom[originalStart + 1]);
+          if (!closes || !headerKept) bad.push(from);
+        }
+        return bad;
+      };
       const blocks = groupTextsIntoBlocks(allTexts);
       const modifications = [];
       let totalRequiredSpace = 0;
@@ -2177,7 +2246,7 @@ let _recordTable = null;
           const hintPointersRaw = getHintPointersForTargets(searchTargetOffsets);
           if (hintPointersRaw.length > 0) {
             pointers = mergePointerLists(pointers, addPointerMeta(hintPointersRaw, 0.99, 'group_hint'));
-            relocationLog.push(`Block at 0x${effectiveBlock.start.toString(16).toUpperCase()}: Loaded ${hintPointersRaw.length} pointer hint(s) from saved groups.`);
+            relocationLog.push(`Block at 0x${effectiveBlock.start.toString(16).toUpperCase()}: Loaded ${hintPointersRaw.length} pointer hint(s) from saved groups and from the per text detector.`);
           }
 
           if (isGbaNonPaddingProfile) {
@@ -2344,10 +2413,18 @@ let _recordTable = null;
             const preferred = finalPointers.filter(p => (
               p.transformId === 'nes_prg' ||
               p.transformId === 'nes_header' ||
+              p.transformId === 'nes_bank' ||
               (p.transformId === 'raw' && (p.ptrSize || system.pointerSize) === 2)
             ));
             if (preferred.length > 0) finalPointers = preferred;
-            finalPointers = filterByPointerRunsWithStep(finalPointers, 2, maxPointers, 2);
+            /* The run filter exists to throw away coincidences: a real table sits in a
+               run of constant spacing. A hint is not a coincidence - it is where the
+               per text detector found this text address in the image - and on the NES
+               the pointers are scattered by nature, so hints stay outside the filter
+               and are merged back. */
+            const hints = finalPointers.filter(p => p.validationReason === 'group_hint');
+            const guessed = finalPointers.filter(p => p.validationReason !== 'group_hint');
+            finalPointers = mergePointerLists(filterByPointerRunsWithStep(guessed, 2, maxPointers, 2), hints);
           }
           if (isSnesProfile && finalPointers.length > 0) {
             const preferred = finalPointers.filter(p => (
@@ -2467,6 +2544,8 @@ let _recordTable = null;
          entry is rewritten, so nothing else in the image shifts (Atlas does the same).
          allowMessageShift true asks for the other path - grow in place by borrowing the
          padding of the messages after it - and false refuses the growth and reports it. */
+      let borrowKept = 0;
+      let borrowRolledBack = 0;
       const grownRecordCount = modifications.filter(m => m.needsRelocation).length;
       if (grownRecordCount > 0) {
         relocationLog.push(grownRecordCount + ' record(s) need more room than they have; each one moves to free space and only its own table entry is rewritten' +
@@ -2504,12 +2583,13 @@ let _recordTable = null;
            wrong: the growth then fell back to free space while the entries were still
            written with the address the search had picked earlier, and five records
            ended up aiming at a zeroed run (build 92, 0xE95F4). */
+      let borrowStopReason = '';
       const growByBorrowingFollowingPadding = (list) => {
           /* Everything below reads the image as it is now, not as it started. With two records growing in one build the second shift has to plan against the layout the first shift produced; reading the original file made the second shift overwrite the first one, so the entries pointed at content that had never moved (21 records at 0xEAB78). */
           if (!needsRelocation) return null;
           const grow = Number(newBlockBytes.length) - Number(originalBlockLength);
-          if (!(grow > 0)) return null;
-          if ((Number(system.pointerSize) || 4) !== 4 || String(system.pointerEndianness || 'little') !== 'little') return null;
+          if (!(grow > 0)) { borrowStopReason = 'the record did not grow'; return null; }
+          if ((Number(system.pointerSize) || 4) !== 4 || String(system.pointerEndianness || 'little') !== 'little') { borrowStopReason = 'this console does not use four byte little endian pointers'; return null; }
           const stride = 4;
           const valueAt = (at) => (romCopy[at] | (romCopy[at + 1] << 8) | (romCopy[at + 2] << 16) | (romCopy[at + 3] << 24)) >>> 0;
           const targetAt = (at) => {
@@ -2527,7 +2607,7 @@ let _recordTable = null;
             .sort((a, b) => a - b);
           const blockStart = Number(block.start);
           const site = sites.filter(at => targetAt(at) === blockStart)[0];
-          if (!Number.isFinite(site)) return null;
+          if (!Number.isFinite(site)) { borrowStopReason = 'no pointer of this record was found'; return null; }
           let lo = site;
           while (lo - stride >= 0) {
             const prev = targetAt(lo - stride);
@@ -2535,19 +2615,36 @@ let _recordTable = null;
             if (prev < 0 || cur < 0 || prev >= cur || (cur - prev) > 0x10000) break;
             lo -= stride;
           }
+          /* The geometry of the region comes from this walk. A record that has already moved
+             to free space keeps its bytes in the region - a move never clears the original -
+             so for those the walk falls back to the address the table had for them and carries
+             on: their padding is still there to borrow. Without that fallback one moved record
+             ended the walk, every record below it was refused a shift, and the hybrid fell
+             back to moving all of them (batch 95, 48 record fixture and the real project). */
+          const walkTable = recordTable();
+          const walkSites = walkTable.sites || [];
+          const walkEntries = walkTable.entries || [];
+          const walkStride = Number(walkTable.stride) || stride;
+          const firstSite = walkSites.length ? Number(walkSites[0]) : NaN;
           const entries = [];
           let hi = lo;
+          let previousEntry = -1;
+          let walkIndex = Number.isFinite(firstSite) ? Math.round((hi - firstSite) / walkStride) : -1;
           while (hi + stride <= romCopy.length) {
-            const cur = targetAt(hi);
-            const next = targetAt(hi + stride);
-            if (cur < 0 || next < 0 || next <= cur || (next - cur) > 0x10000) break;
+            let cur = targetAt(hi);
+            if (cur < 0) break;
+            if (previousEntry >= 0 && (cur <= previousEntry || (cur - previousEntry) > 0x10000)) {
+              if (walkIndex >= 0 && walkIndex < walkEntries.length) cur = Number(walkEntries[walkIndex]);
+            }
+            if (previousEntry >= 0 && !(cur > previousEntry)) { hi += stride; walkIndex++; continue; }
             entries.push(cur);
+            previousEntry = cur;
             hi += stride;
+            walkIndex++;
           }
-          entries.push(targetAt(hi));
-          if (entries.length < 4) return null;
+          if (entries.length < 4) { borrowStopReason = 'the table walk stopped after ' + entries.length + ' entries'; return null; }
           const idx = entries.indexOf(blockStart);
-          if (idx < 0 || idx >= entries.length - 1) return null;
+          if (idx < 0 || idx >= entries.length - 1) { borrowStopReason = 'the record is the last one the table walk reached (idx ' + idx + ' of ' + entries.length + ')'; return null; }
           const spans = [];
           for (let i = idx; i < entries.length - 1; i++) {
             const s = entries[i];
@@ -2557,7 +2654,7 @@ let _recordTable = null;
             spans.push({ start: s, len: e - s - pad, pad: pad });
           }
           const grown = spans[0];
-          if (grown.start !== blockStart || grown.len <= 0) return null;
+          if (grown.start !== blockStart || grown.len <= 0) { borrowStopReason = 'this block does not begin a record span'; return null; }
           const keep = 2;
           let need = grow;
           /* Take at most (pad - 2) from each message and never less than nothing:
@@ -2579,12 +2676,12 @@ let _recordTable = null;
             if (to > sp.start) plan.push({ from: sp.start, len: sp.len, to: to });
             cursor = to + sp.len + q;
           }
-          if (need > 0) return null;
+          if (need > 0) { borrowStopReason = 'the padding after it covers all but ' + need + ' of the ' + grow + ' byte(s) needed'; return null; }
           if (plan.length === 0) return { grew: grow, moved: 0, repointed: 0 };
           const tailStart = plan[0].from;
           const last = plan[plan.length - 1];
           const tailEnd = last.from + last.len;
-          if (tailEnd > romCopy.length || tailStart <= blockStart) return null;
+          if (tailEnd > romCopy.length || tailStart <= blockStart) { borrowStopReason = 'the shifted range does not sit after the record'; return null; }
           const movedTo = (off) => {
             for (let i = 0; i < plan.length; i++) {
               const p = plan[i];
@@ -2610,6 +2707,11 @@ let _recordTable = null;
             romCopy.set(tail.subarray(p.from - tailStart, p.from - tailStart + p.len), p.to);
           });
           let repointed = 0;
+          /* Every word this shift rewrites is remembered with the bytes it had, and the
+             tail is remembered as it was, so the whole shift can be undone when the
+             check afterwards says it broke something. A shift that cannot be undone
+             cannot be tried first. */
+          const rewrites = [];
           for (let i = 0; i + 4 <= romCopy.length; i += 2) {
             if (i >= tailStart && i < tailEnd) continue;
             const v = (romCopy[i] | (romCopy[i + 1] << 8) | (romCopy[i + 2] << 16) | (romCopy[i + 3] << 24)) >>> 0;
@@ -2617,33 +2719,133 @@ let _recordTable = null;
             const moved = movedTo(v & 0x01FFFFFF);
             if (moved < 0) continue;
             const nv = (0x08000000 + moved) >>> 0;
+            rewrites.push({ at: i, bytes: [romCopy[i], romCopy[i + 1], romCopy[i + 2], romCopy[i + 3]] });
             romCopy[i] = nv & 0xFF;
             romCopy[i + 1] = (nv >> 8) & 0xFF;
             romCopy[i + 2] = (nv >> 16) & 0xFF;
             romCopy[i + 3] = (nv >>> 24) & 0xFF;
             repointed++;
           }
-          return { grew: grow, moved: plan.length, repointed: repointed };
+          return {
+            grew: grow,
+            moved: plan.length,
+            repointed: repointed,
+            plan: plan,
+            tailStart: tailStart,
+            tailEnd: tailEnd,
+            tailBefore: tail,
+            rewrites: rewrites,
+            movedTo: movedTo
+          };
         };
 
-        /* Growing in place is the layout the reference indonesian patch uses, so it stays
-           available - but only when it is asked for. Measured on this rom: one grown
-           record shifts cleanly, while twenty two of them in one build left nine records
-           without their end code (build 92, first at 0xEB485), and sixty texts were
-           enough to break eight. The default therefore moves the record to free space
-           and rewrites its own table entry, which the same measurement shows passing. */
-        const willBorrow = needsRelocation && pointersForWrite.length > 0 &&
-          system.allowMessageShift === true;
+        /* Puts the image back exactly as it was before a shift. */
+        const undoBorrow = (borrow) => {
+          if (!borrow || !borrow.tailBefore) return;
+          romCopy.set(borrow.tailBefore, borrow.tailStart);
+          (borrow.rewrites || []).forEach(function (w) {
+            romCopy[w.at] = w.bytes[0];
+            romCopy[w.at + 1] = w.bytes[1];
+            romCopy[w.at + 2] = w.bytes[2];
+            romCopy[w.at + 3] = w.bytes[3];
+          });
+        };
+
+        /* Did the shift keep everything it moved where it can be read? Three questions,
+           all answerable without guessing:
+             - every text that sat inside the moved tail has a new address (a text is
+               not padding, so one without a destination means the plan missed it),
+             - at that new address the bytes still read as the same original text,
+             - and, when the rom has a table, every entry that now aims into the tail
+               still finds the record header it used to find.
+           A shift that fails any of them is undone and the record moves instead. */
+        const verifyBorrow = (borrow) => {
+          if (!borrow || !borrow.movedTo) return { ok: true };
+          const tailStart = borrow.tailStart;
+          const tailEnd = borrow.tailEnd;
+          const table = recordTable();
+          const sites = table.sites || [];
+          const entries = table.entries || [];
+          for (let i = 0; i < Math.min(sites.length, entries.length); i++) {
+            let v = 0;
+            for (let b = 3; b >= 0; b--) v = (v * 256) + romCopy[sites[i] + b];
+            const from = (v >>> 0) - (table.base || 0);
+            if (from < 0 || from >= romCopy.length) {
+              if (v !== 0) return { ok: false, why: 'entry ' + i + ' aims outside the rom' };
+              continue;
+            }
+            if (from < tailStart || from >= tailEnd) continue;
+            const originalStart = entries[i];
+            if (!Number.isFinite(originalStart)) continue;
+            if (romCopy[from] !== originalRom[originalStart] || romCopy[from + 1] !== originalRom[originalStart + 1]) {
+              return { ok: false, why: 'record 0x' + Number(originalStart).toString(16).toUpperCase() + ' lost its header' };
+            }
+          }
+          /* The tail is compared with itself as it was before the shift, not with the
+             original rom: a record inside the tail may already hold a translation, and
+             checking it against the english bytes would undo every honest shift. */
+          const tailBefore = borrow.tailBefore;
+          for (const start of originalEncodedByStart.keys()) {
+            if (start < tailStart || start >= tailEnd) continue;
+            const to = borrow.movedTo(start);
+            if (to < 0) return { ok: false, why: 'text 0x' + Number(start).toString(16).toUpperCase() + ' was left behind' };
+            const from = start - tailStart;
+            for (let k = 0; k < 4 && from + k < tailBefore.length; k++) {
+              if (romCopy[to + k] !== tailBefore[from + k]) {
+                return { ok: false, why: 'text 0x' + Number(start).toString(16).toUpperCase() + ' does not read back at its new address' };
+              }
+            }
+          }
+          return { ok: true };
+        };
+
+        /* Hybrid by default, which is what a translator asked for: try the shift first,
+           because it is the layout the reference indonesian patch uses and it keeps every
+           record at its own address, then move the records the shift cannot keep. A shift
+           is kept only when it verifies (verifyBorrow above); the ones that do not are
+           undone and their record moves instead, so the combination is safe even though
+           the shift path on its own is not - twenty two unverified shifts in one build
+           left nine records without their end code. allowMessageShift true asks for the
+           shift and nothing else, false asks for nothing to move. */
+        const shiftAllowed = system.allowMessageShift !== false && system.forceRelocationOnly !== true;
+        const willBorrow = needsRelocation && pointersForWrite.length > 0 && shiftAllowed;
         if (willBorrow) {
           const borrowCandidates = knownRecordPointer
             ? pointersForWrite.filter(p => Number(p.ptrOffset) === Number(knownRecordPointer.ptrOffset))
             : pointersForWrite;
+          borrowStopReason = '';
           const borrowed = growByBorrowingFollowingPadding(borrowCandidates);
-          if (borrowed) {
-            romCopy.set(newBlockBytes, block.start);
-            relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': Grew in place by ' + borrowed.grew + ' byte(s) instead of moving; ' + borrowed.moved + ' message(s) after it slid forward and ' + borrowed.repointed + ' pointer(s) were recalculated.');
-            continue;
+          if (!borrowed && borrowStopReason) {
+            relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': the shift was not possible - ' + borrowStopReason + '.');
           }
+          if (borrowed) {
+            /* A shift is kept only when both questions answer yes: the local one (did
+               everything it moved end up where it can be read) and the whole rom one
+               (does every record still carry its header and close). The second costs a
+               pass over the table, which is nothing next to writing a rom the game
+               cannot read. When either says no, the shift is undone and this record
+               moves to free space instead - the hybrid the translator asked for. */
+            const verdict = verifyBorrow(borrowed);
+            const brokenAfterShift = verdict.ok ? findBrokenRecords() : [];
+            if (verdict.ok && brokenAfterShift.length === 0) {
+              romCopy.set(newBlockBytes, block.start);
+              borrowKept++;
+              relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': Grew in place by ' + borrowed.grew + ' byte(s); ' + borrowed.moved + ' message(s) after it slid forward, ' + borrowed.repointed + ' pointer(s) recalculated, and the shift checked out.');
+              continue;
+            }
+            undoBorrow(borrowed);
+            borrowRolledBack++;
+            const why = verdict.ok
+              ? 'record 0x' + (Number(brokenAfterShift[0]) >>> 0).toString(16).toUpperCase() + ' would have been left broken'
+              : verdict.why;
+            relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': the shift was undone (' + why + '), so this record moves to free space instead.');
+          }
+        }
+        /* Asked for the shift and nothing else: a record that cannot shift is reported
+           rather than moved. */
+        if (needsRelocation && willBorrow && system.allowMessageShift === true) {
+          relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': [WARNING] This record cannot grow where it is - the padding after it is used up or the shift did not check out - and this build was asked to shift only. Nothing was written; shorten the page or leave the option unset so it can move to free space.');
+          continue;
         }
         /* Either the borrow was not asked for or the region has no padding left, so the
            record moves to free space through its own table entry. The address is taken
@@ -2755,6 +2957,17 @@ let _recordTable = null;
             const expected = originalEncodedByStart.get(ptr.targetOffset);
             if (!relaxValidation && expected && !matchesEncodedAt(originalRom, ptr.targetOffset, expected)) continue;
             const newTargetOffset = newOffset + rel;
+            /* A bank relative pointer has to stay in its own bank. Dropped and counted
+               rather than written: the alternative is a pointer that reads back as an
+               address nobody intended. */
+            if (isBankRelativeTransform(ptr.transformId)) {
+              const mask = bankMaskFor(ptr.transformId);
+              stats.bankChecked = (stats.bankChecked || 0) + 1;
+              if ((Number(newTargetOffset) & ~mask) !== (Number(ptr.targetOffset) & ~mask)) {
+                stats.bankSkipped = (stats.bankSkipped || 0) + 1;
+                continue;
+              }
+            }
             const newPointerValue = applyPointerTransform(ptr.transformId, newTargetOffset, ptr.base || 0);
             if (!Number.isFinite(newPointerValue)) continue;
             if (newPointerValue < 0 || newPointerValue > 0xFFFFFFFF) continue;
@@ -2809,6 +3022,21 @@ let _recordTable = null;
               continue;
             }
             newOffset = at;
+          } else if (needsRelocation && isBankRelativeTransform((pointersForWrite[0] || {}).transformId)) {
+            /* A bank relative pointer can only name an address in its own bank, so the
+               record lands in that bank or does not move at all. The window is searched
+               first; when it has no free run the block is reported instead of written
+               somewhere the pointer cannot reach. */
+            const bankTransform = pointersForWrite.filter(p => isBankRelativeTransform(p.transformId))[0];
+            const mask = bankMaskFor(bankTransform.transformId);
+            const bankBase = Number(block.start) & ~mask;
+            const requiredBytes = newBlockBytes.length + terminatorBytes.length;
+            const at = findFreeSpaceInRange(romCopy, bankBase, Math.min(romCopy.length, bankBase + mask + 1), requiredBytes, [0x00, 0xFF, terminatorHex]);
+            if (at === -1) {
+              relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': [WARNING] This record needs ' + (Number(newBlockBytes.length) - Number(originalBlockLength)) + ' byte(s) more room and its pointer can only name an address inside its own ' + Math.round((mask + 1) / 1024) + ' KB bank, which has no free run. Nothing was written; shorten the page.');
+              continue;
+            }
+            newOffset = at - (at % 2);
           } else if (needsRelocation && isGbaNonPaddingProfile) {
             const fillers = [0x00, 0xFF, terminatorHex];
             const requiredBytes = newBlockBytes.length + terminatorBytes.length;
@@ -2926,6 +3154,9 @@ let _recordTable = null;
           if (validPointers.length === 0 && pointersForWrite.length > 0) {
             validationResult = buildValidPointers(newOffset, true);
             validPointers = validationResult.list;
+          }
+          if (needsRelocation && (validationResult.stats.bankSkipped || 0) > 0) {
+            relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': ' + validationResult.stats.bankSkipped + ' pointer(s) cannot follow this record out of its bank and were left alone.');
           }
           if (needsRelocation && isStrictGbaPointerValidation && validPointers.length > 0) {
             const isInPointerRegion = (ptrOffset) => {
@@ -3096,51 +3327,18 @@ let _recordTable = null;
           relocationLog.push(`  -> Try using shorter translations or find pointers manually.`);
         }
       }
-      /* Self check before the image is handed over. Three defects in a row reached
-         the game because nothing looked at the finished image: a record that lost
-         its end code, a page written over the page after it, and blocks writing at
-         addresses an earlier shift had already moved. Every record must still carry
-         its header where its entry points and still close with the end code; when
-         one does not, the original bytes are handed back instead of a rom that would
-         freeze or skip dialogue. The entries are read from the current image, so the
-         check sees the layout the game will see. */
-      const selfCheckBad = (() => {
-        const table = recordTable();
-        const sites = table.sites || [];
-        const bad = [];
-        const total = Math.min(sites.length, (table.entries || []).length);
-        if (total < 8) return bad;
-        for (let i = 0; i < total - 1; i++) {
-          const at = sites[i];
-          let v = 0;
-          for (let b = 3; b >= 0; b--) v = (v * 256) + romCopy[at + b];
-          const from = (v >>> 0) - (table.base || 0);
-          let vNext = 0;
-          for (let b = 3; b >= 0; b--) vNext = (vNext * 256) + romCopy[sites[i + 1] + b];
-          const to = (vNext >>> 0) - (table.base || 0);
-          if (from < 0 || from >= romCopy.length) { bad.push(from); continue; }
-          /* The span test only means something while the records still sit next to each
-             other. A record written to free space has its neighbours far away, or even
-             below its new address (the next table entry can point lower), and the bytes
-             in between are not a record at all. For those the end code is looked for
-             from where the pointer aims, within one record's worth of bytes. */
-          let closes = false;
-          if (to > from && to <= romCopy.length && (to - from) <= 0x10000) {
-            for (let p = to - 1; p >= from; p--) { if (romCopy[p] === terminatorHex) { closes = true; break; } }
-          } else {
-            const limit = Math.min(romCopy.length, from + 0x10000);
-            for (let p = from; p < limit; p++) { if (romCopy[p] === terminatorHex) { closes = true; break; } }
-          }
-          const originalStart = (table.entries || [])[i];
-          const headerKept = originalStart === undefined ||
-            (romCopy[from] === originalRom[originalStart] && romCopy[from + 1] === originalRom[originalStart + 1]);
-          if (!closes || !headerKept) bad.push(from);
-        }
-        return bad;
-      })();
+      const selfCheckBad = findBrokenRecords();
+      if (selfCheckBad.length > 0) {
+        const badAt = Number(selfCheckBad[0]) >>> 0;
+        const dump = [0, 1, 2, 3, 4, 5, 6, 7].map(k => (romCopy[badAt + k] || 0).toString(16)).join(' ');
+      }
       if (selfCheckBad.length > 0 && system.keepBrokenImageForTests !== true) {
         relocationLog.push(`[WARNING] Self check failed: ${selfCheckBad.length} record(s) lost their end code or their header (first at 0x${selfCheckBad[0].toString(16).toUpperCase()}). The original bytes are handed back instead of a rom that would freeze or skip dialogue. Build in smaller scopes - one group, or a few neighbouring texts - and run Insert All again.`);
         return { modifiedRom: originalRom.slice(0), relocationLog };
+      }
+      if (borrowKept > 0 || borrowRolledBack > 0) {
+        relocationLog.push('Growth report: ' + borrowKept + ' record(s) grew in place after the shift checked out' +
+          (borrowRolledBack > 0 ? ', and ' + borrowRolledBack + ' shift(s) were undone and moved instead' : '') + '.');
       }
       relocationLog.push(`Self check passed: all ${(recordTable().entries || []).length} records close with the end code and keep their header.`);
       return { modifiedRom: romCopy, relocationLog };
@@ -6951,7 +7149,7 @@ let _recordTable = null;
                       const tokenizer = createTokenizer(allTokens);
                       self.postMessage({ type: 'progress', value: 20, requestId: safeRequestId, silentLive: isSilentLive });
 
-                      const { modifiedRom: newRomData, relocationLog } = rebuildRom(
+                      let buildResult = rebuildRom(
                           new Uint8Array(originalRom),
                           allTexts,
                           { masterCharToHex },
@@ -6962,7 +7160,40 @@ let _recordTable = null;
                           encodeOptions
                       );
                       self.postMessage({ type: 'progress', value: 95, requestId: safeRequestId, silentLive: isSilentLive });
-                       
+                      let buildLog = Array.isArray(buildResult && buildResult.relocationLog) ? buildResult.relocationLog : [];
+                      /* The self check is the last word, and a build it refuses is redone with
+                         relocation only: a shift that broke a record must never be the reason a
+                         user gets no rom at all. */
+                      const buildRefused = buildLog.some(function (line) { return String(line).indexOf('Self check failed') >= 0; });
+                      if (buildRefused && system.allowMessageShift !== false && system.forceRelocationOnly !== true) {
+                        const retrySystem = Object.assign({}, system, { forceRelocationOnly: true });
+                        const retry = rebuildRom(
+                            new Uint8Array(originalRom),
+                            allTexts,
+                            { masterCharToHex },
+                            retrySystem,
+                            tokenizer,
+                            usePaddingByte,
+                            pointerGroups,
+                            encodeOptions
+                        );
+                        const retryLog = Array.isArray(retry && retry.relocationLog) ? retry.relocationLog : [];
+                        const retryRefused = retryLog.some(function (line) { return String(line).indexOf('Self check failed') >= 0; });
+                        buildResult = retry;
+                        /* Keep the evidence from the pass that was thrown away: the user is
+                           entitled to see which shifts were undone and what the check said. */
+                        const discarded = buildLog.filter(function (line) {
+                          return /undone|Self check failed|Growth report|not possible|cannot grow|paid out|no padding/.test(String(line));
+                        }).slice(0, 40);
+                        buildLog = ['A shift broke a record, so this build was redone with every grown record moved to free space instead.']
+                          .concat(discarded)
+                          .concat(['--- the build that was kept ---'])
+                          .concat(retryLog);
+                        if (!retryRefused) buildLog.push('The relocation only build passed the self check.');
+                      }
+                      const newRomData = buildResult.modifiedRom;
+                      const relocationLog = buildLog;
+
                       self.postMessage({
                         type: 'buildResult',
                         requestId: safeRequestId,
@@ -6997,7 +7228,7 @@ let _recordTable = null;
                           encodeOptions
                       );
                       self.postMessage({ type: 'progress', value: 90 });
-                      const relocationLog = Array.isArray(replay?.relocationLog) ? replay.relocationLog : [];
+
                       let updatedPointers = 0;
                       for (const line of relocationLog) {
                         const m = String(line).match(/Updated\\s+(\\d+)\\s+pointer/);

@@ -59,21 +59,29 @@
      to find a record, and what may happen to a record that outgrows the room it has.
      The readout is the truth the build will use, not a suggestion: source, site,
      entry size and base come straight from the table the engine is handed. */
+  /* Four ways to pay for a record that outgrows its room. The first is the one a
+     translator asked for: shift first, verify every shift, and move the records the
+     shift cannot keep. The others exist because a game can prefer one layout. */
   var INSERT_MODES = [
     {
-      id: 'move',
-      label: 'Move the record to free space',
-      title: 'The record is copied to free space and only its own table entry is rewritten. Nothing else in the rom shifts. This is what Atlas does and the only mode that works for thousands of texts.'
+      id: 'hybrid',
+      label: 'Shift first, move what fails',
+      title: 'Each grown record is shifted in place first - the layout the reference indonesian patch uses, everything keeps its address - and every shift is checked against the whole rom. A shift that would leave a record broken is undone and that record moves to free space instead.'
     },
     {
-      id: 'shift',
-      label: 'Shift the messages after it',
-      title: 'The record grows where it is, the padding of the messages after it pays for the growth, and every pointer into the moved part is recalculated. The layout the reference indonesian patch uses, but measured to break records when many of them grow at once.'
+      id: 'moveonly',
+      label: 'Always move to free space',
+      title: 'Nothing in the message region is touched: every grown record is copied to free space and only its own pointer is rewritten. The Atlas rule, and the fastest for a whole translation.'
+    },
+    {
+      id: 'shiftonly',
+      label: 'Only shift, never move',
+      title: 'A grown record is shifted in place or reported; nothing is ever copied elsewhere. Use it when you want the message region to keep exactly the layout the original game had.'
     },
     {
       id: 'never',
       label: 'Never move, only report',
-      title: 'Nothing is written for a record that needs more room; the build reports how many bytes it is short. '
+      title: 'Nothing is written for a record that needs more room; the build reports how many bytes it is short.'
     }
   ];
 
@@ -93,8 +101,10 @@
     var onUseTable = uC(function (candidate) { K.translate.declarePointerTable(candidate); }, []);
     var onClearTable = uC(function () { K.translate.clearPointerTable(); }, []);
     var onInsertMode = uC(function (modeId) {
-      var value = modeId === 'shift' ? true : (modeId === 'never' ? false : null);
-      K.translate.setBuildOptions({ allowMessageShift: value });
+      if (modeId === 'moveonly') K.translate.setBuildOptions({ allowMessageShift: false, allowRelocation: true });
+      else if (modeId === 'shiftonly') K.translate.setBuildOptions({ allowMessageShift: true, allowRelocation: false });
+      else if (modeId === 'never') K.translate.setBuildOptions({ allowMessageShift: false, allowRelocation: false });
+      else K.translate.setBuildOptions({ allowMessageShift: null, allowRelocation: null });
     }, []);
 
     var onCompileGroup = uC(function () { K.translate.buildModifiedRom('group'); }, []);
@@ -141,9 +151,11 @@
     }, []);
 
     var pointerInfo = K.translate.getPointerTableInfo();
-    var insertMode = (t.buildOptions && t.buildOptions.allowMessageShift === true)
-      ? 'shift'
-      : ((t.buildOptions && t.buildOptions.allowMessageShift === false) ? 'never' : 'move');
+    var bo = t.buildOptions || {};
+    var insertMode = 'hybrid';
+    if (bo.allowMessageShift === false && bo.allowRelocation === true) insertMode = 'moveonly';
+    else if (bo.allowMessageShift === true) insertMode = 'shiftonly';
+    else if (bo.allowMessageShift === false) insertMode = 'never';
 
     var hasTexts = texts.length > 0;
     var selectedGroup = null;

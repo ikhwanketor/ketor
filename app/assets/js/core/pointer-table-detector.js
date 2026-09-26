@@ -353,25 +353,32 @@
       if (list) { if (list.length < 64) list.push(at); } else { map[v] = [at]; }
     }
     var bankStep = rules.bankStep || 0;
+    var maxSites = Number(opts.maxSitesPerValue) > 0 ? Number(opts.maxSitesPerValue) : 64;
     var out = [];
     texts.forEach(function (t) {
+      /* Every candidate carries how its value is built, because the insert path has to
+         write the pointer back the same way: a bank relative pair (NES, Game Boy,
+         SNES) is a different write from a flat base plus offset (GBA, NDS). */
       var values = [];
       if (bankStep) {
         var within = t % bankStep;
-        values.push(rules.base + within);
-        if (rules.flagMask) values.push((rules.base + within) | 0x8000);
+        values.push({ value: rules.base + within, kind: 'bank' });
+        if (rules.flagMask) values.push({ value: (rules.base + within) | 0x8000, kind: 'bank' });
       } else {
-        values.push(rules.base + t);
-        values.push(t);
-        values.push(t + 0x10);
+        values.push({ value: rules.base + t, kind: 'base' });
+        values.push({ value: t, kind: 'raw' });
+        values.push({ value: t + 0x10, kind: 'header' });
       }
       var seen = Object.create(null);
-      values.forEach(function (v) {
+      values.forEach(function (candidate) {
+        var v = candidate.value;
         if (seen[v]) return;
         seen[v] = 1;
         var sites = map[v];
         if (!sites) return;
-        sites.forEach(function (at) { out.push({ text: t, at: at, value: v, target: t }); });
+        sites.slice(0, maxSites).forEach(function (at) {
+          out.push({ text: t, at: at, value: v, kind: candidate.kind, size: rules.size, target: t });
+        });
       });
     });
     return out;

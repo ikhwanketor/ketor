@@ -68,12 +68,34 @@ suite.test('nothing grows: the image is handed back untouched', async function (
   t.assert(/Self check passed/.test(built.log.join('\n')), 'the self check should have passed');
 });
 
-suite.test('one record grows: it moves to free space and only its own entry changes', async function (t) {
+suite.test('the default is hybrid: the shift is tried first and kept when it checks out', async function (t) {
+  const fixture = buildSyntheticRom({ records: 12 });
+  const target = fixture.records[3];
+  const translated = {};
+  translated[target.textStart] = grow(target.text, 8);
+  const built = await build(fixture, translated, { knownPointerTable: fixture.table });
+  t.assert(built.out, 'the build produced no image: ' + built.state.status);
+
+  const before = readTable(fixture.rom, fixture.table);
+  const after = readTable(built.out, fixture.table);
+  t.assertEqual(before[3], after[3], 'a verified shift keeps the record at its own address');
+
+  const report = inspectRecords(built.out, fixture, fixture.rom);
+  t.assertEqual(report.broken.length, 0, 'no record may be broken: ' + JSON.stringify(report.broken.slice(0, 3)));
+  const text = built.log.join('\n');
+  t.assert(/Grew in place/.test(text), 'the log should say the record grew where it was');
+  t.assert(/checked out/.test(text), 'and that the shift was checked');
+  t.assert(/Self check passed/.test(text), 'the self check should have passed');
+});
+
+suite.test('move only mode: the record moves to free space and only its own entry changes', async function (t) {
   const fixture = buildSyntheticRom({ records: 12 });
   const target = fixture.records[3];
   const translated = {};
   translated[target.textStart] = grow(target.text, 20);
-  const built = await build(fixture, translated, { knownPointerTable: fixture.table });
+  const built = await build(fixture, translated, {
+    knownPointerTable: fixture.table, allowMessageShift: false, allowRelocation: true
+  });
   t.assert(built.out, 'the build produced no image: ' + built.state.status);
 
   const before = readTable(fixture.rom, fixture.table);
@@ -89,8 +111,10 @@ suite.test('one record grows: it moves to free space and only its own entry chan
 
   const report = inspectRecords(built.out, fixture, fixture.rom);
   t.assertEqual(report.broken.length, 0, 'no record may be broken: ' + JSON.stringify(report.broken.slice(0, 3)));
-  t.assert(/Self check passed/.test(built.log.join('\n')), 'the self check should have passed');
-  t.assert(/Relocated to/.test(built.log.join('\n')), 'the log should say the record moved');
+  const text = built.log.join('\n');
+  t.assert(/Self check passed/.test(text), 'the self check should have passed');
+  t.assert(/Relocated to/.test(text), 'the log should say the record moved');
+  t.assert(!/Grew in place/.test(text), 'nothing may be shifted in this mode');
 });
 
 suite.test('every record grows: each one moves, nothing else shifts', async function (t) {
@@ -98,6 +122,27 @@ suite.test('every record grows: each one moves, nothing else shifts', async func
   const translated = {};
   fixture.records.forEach(function (r) { translated[r.textStart] = grow(r.text, 8); });
   const built = await build(fixture, translated, { knownPointerTable: fixture.table });
+  t.assert(built.out, 'the build produced no image: ' + built.state.status);
+
+  const after = readTable(built.out, fixture.table);
+  const report = inspectRecords(built.out, fixture, fixture.rom);
+  /* In the hybrid, a record either keeps its address (the shift paid for the growth and
+     checked out) or moves (the shift could not pay). What is not allowed is a record
+     that is missing or broken, and that is what is asserted here. */
+  t.assertEqual(report.moved + report.inPlace, fixture.count, 'every record must be accounted for');
+  t.assertEqual(report.broken.length, 0, 'no record may be broken: ' + JSON.stringify(report.broken.slice(0, 3)));
+  const text = built.log.join('\n');
+  t.assert(/Self check passed/.test(text), 'the self check should have passed');
+  t.assert(/Growth report: \d+ record\(s\) grew in place/.test(text), 'the report should say how the growth was paid for');
+});
+
+suite.test('every record grows in move only mode: each one moves to its own address', async function (t) {
+  const fixture = buildSyntheticRom({ records: 48 });
+  const translated = {};
+  fixture.records.forEach(function (r) { translated[r.textStart] = grow(r.text, 8); });
+  const built = await build(fixture, translated, {
+    knownPointerTable: fixture.table, allowMessageShift: false, allowRelocation: true
+  });
   t.assert(built.out, 'the build produced no image: ' + built.state.status);
 
   const after = readTable(built.out, fixture.table);
@@ -109,7 +154,7 @@ suite.test('every record grows: each one moves, nothing else shifts', async func
   t.assert(/Self check passed/.test(built.log.join('\n')), 'the self check should have passed');
 });
 
-suite.test('allowMessageShift true: the record grows where it is instead', async function (t) {
+suite.test('shift only mode: the record grows where it is and stays there', async function (t) {
   const fixture = buildSyntheticRom({ records: 12 });
   const target = fixture.records[2];
   const translated = {};

@@ -328,6 +328,7 @@
     return { budget: widest, originalLines: origLines.length, translatedLines: newLines.length, over: over };
   }
   var _lineBudgetNote = '';
+  var relocationLogNote = '';
 
   function measureOriginal(row) {
     if (!row) return 0;
@@ -471,14 +472,7 @@
   }
 
   function _consoleRulesId() {
-    var rules = (K.core && K.core.POINTER_CONSOLE_RULES) ? K.core.POINTER_CONSOLE_RULES : null;
-    if (!rules) return null;
-    var wanted = String(_state.romSystem || '').toLowerCase();
-    var keys = Object.keys(rules);
-    for (var i = 0; i < keys.length; i++) {
-      if (String(rules[keys[i]].name || '').toLowerCase() === wanted) return keys[i];
-    }
-    return null;
+    return _consoleRulesIdFor(_state.romSystem);
   }
 
   /* The record terminator the detector should accept, taken from the loaded table
@@ -497,6 +491,88 @@
     }
     if (end && end.length) return [end[end.length - 1]];
     return [0x00];
+  }
+
+  /* Two rule entries can share a console name - "NES" is both the bank relative pair
+     (nes) and a legacy entry that carries no bank step (nesBank). Taking the first
+     match silently picked the one that cannot find a banked pointer, so the richest
+     rule wins: the one that knows how the address is built. */
+  function _consoleRulesIdFor(systemName) {
+    var rules = (K.core && K.core.POINTER_CONSOLE_RULES) ? K.core.POINTER_CONSOLE_RULES : null;
+    if (!rules) return null;
+    var wanted = String(systemName || '').toLowerCase();
+    var matches = Object.keys(rules).filter(function (key) {
+      return String(rules[key].name || '').toLowerCase() === wanted;
+    });
+    if (!matches.length) return null;
+    if (matches.length === 1) return matches[0];
+    var score = function (key) {
+      var rule = rules[key];
+      var s = 0;
+      if (Number(rule.bankStep) > 0) s += 8;
+      if (rule.threeByte) s += 4;
+      if (rule.flagMask) s += 2;
+      if (Number(rule.window) > 0) s += 1;
+      return s;
+    };
+    matches.sort(function (a, b) { return score(b) - score(a); });
+    return matches[0];
+  }
+
+  /* Which write the engine has to use to store this kind of value again. A bank
+     relative pair is not the same write as a flat base plus offset, and getting it
+     wrong would point the game at an address nobody intended. */
+  function _transformIdForHit(kind, rulesId) {
+    if (kind === 'bank') {
+      if (rulesId === 'nes' || rulesId === 'nes32') return 'nes_bank';
+      if (rulesId === 'gb' || rulesId === 'gbc') return 'gb_bank';
+      if (rulesId === 'snes' || rulesId === 'snesHi') return 'snes_bank';
+      return null;
+    }
+    if (kind === 'base') return rulesId === 'gba' ? 'gba' : null;
+    if (kind === 'raw') return 'raw';
+    return null;
+  }
+
+  /* Consoles that keep no table: the pointers live scattered in code, so structure
+     cannot find them. They are found per text here - the same detector that measured
+     233 of 287 texts on Dragon Warrior IV - and handed to the worker as hints, which
+     is the path a saved group already used. */
+  function _detectedPointerGroups(texts, system, knownTable) {
+    if (knownTable) return [];
+    if (!_state.buildOptions || _state.buildOptions.useDetectedPointers === false) return [];
+    if (!K.core || typeof K.core.findPointersForTexts !== 'function' || !_state.romBytes) return [];
+    var rulesId = _consoleRulesIdFor(system && system.name);
+    if (!rulesId) return [];
+    var offsets = (texts || []).map(function (t) { return Number(t.startByte); }).filter(function (v) { return Number.isFinite(v); });
+    if (!offsets.length) return [];
+    var hits = [];
+    try {
+      hits = K.core.findPointersForTexts(_state.romBytes, {
+        console: rulesId,
+        textOffsets: offsets,
+        maxSitesPerValue: 8
+      });
+    } catch (_) { return []; }
+    var byText = {};
+    (hits || []).forEach(function (hit) {
+      var transformId = _transformIdForHit(hit.kind, rulesId);
+      if (!transformId) return;
+      var key = String(hit.text);
+      if (!byText[key]) byText[key] = [];
+      if (byText[key].length >= 4) return;
+      byText[key].push({
+        ptrOffset: Number(hit.at),
+        targetOffset: Number(hit.text),
+        ptrSize: Number(hit.size) || (Number(system && system.pointerSize) || 2),
+        transformId: transformId
+      });
+    });
+    var groups = [];
+    Object.keys(byText).forEach(function (key) {
+      groups.push({ targetOffset: Number(key), pointers: byText[key] });
+    });
+    return groups;
   }
 
   function detectPointers() {
@@ -794,6 +870,15 @@
       _lastBuiltTexts[Number(t.startByte)] = String(t.translatedText || '');
     });
 
+    /* Consoles without a table get their pointers found here, per text. */
+    var detectedPointerGroups = _detectedPointerGroups(contextTexts, system, knownTable);
+    var detectedPointerCount = detectedPointerGroups.reduce(function (sum, g) { return sum + g.pointers.length; }, 0);
+    if (detectedPointerCount > 0) {
+      relocationLogNote = 'Per text pointer detector: ' + detectedPointerCount + ' pointer(s) for ' + detectedPointerGroups.length + ' text(s) handed to the build.';
+    } else {
+      relocationLogNote = '';
+    }
+
     _workers.build.postMessage({
       type: 'buildRom',
       payload: {
@@ -809,7 +894,7 @@
         // cannot follow, which is what made a compiled ROM unusable.
         system: system,
         usePaddingByte: false,
-        pointerGroups: []
+        pointerGroups: detectedPointerGroups
       }
     }, [romBuffer]);
   }
@@ -867,6 +952,7 @@
         if (text.indexOf('[WARNING]') >= 0) warnings.push(text);
       });
       if (_lineBudgetNote) warnings.push('Line budget: ' + _lineBudgetNote);
+      if (typeof relocationLogNote === 'string' && relocationLogNote) log.push(relocationLogNote);
       var owned = _rememberInsertRanges(_lastBuildBase, bytes);
       log.push('Insert ownership: ' + owned + ' range(s) of this build are excluded from the hex patches on the next one, so a second Insert All cannot shift the same records twice.');
 
@@ -1080,7 +1166,9 @@
       pointers: {
         table: (_state.buildOptions && _state.buildOptions.knownPointerTable) || null,
         allowMessageShift: (_state.buildOptions && _state.buildOptions.allowMessageShift !== undefined)
-          ? _state.buildOptions.allowMessageShift : null
+          ? _state.buildOptions.allowMessageShift : null,
+        allowRelocation: (_state.buildOptions && _state.buildOptions.allowRelocation !== undefined)
+          ? _state.buildOptions.allowRelocation : null
       },
       groups: s.groups.map(function (g) {
         return { id: g.id, name: g.name, color: g.color, offsets: g.offsets, createdAt: g.createdAt };
@@ -1132,8 +1220,11 @@
     if (payload.pointers && payload.pointers.table) {
       declarePointerTable(payload.pointers.table);
     }
-    if (payload.pointers && payload.pointers.allowMessageShift !== undefined && payload.pointers.allowMessageShift !== null) {
-      setBuildOptions({ allowMessageShift: payload.pointers.allowMessageShift === true });
+    if (payload.pointers && (payload.pointers.allowMessageShift !== undefined || payload.pointers.allowRelocation !== undefined)) {
+      var modeOptions = {};
+      if (payload.pointers.allowMessageShift !== undefined) modeOptions.allowMessageShift = payload.pointers.allowMessageShift === true ? true : (payload.pointers.allowMessageShift === false ? false : null);
+      if (payload.pointers.allowRelocation !== undefined) modeOptions.allowRelocation = payload.pointers.allowRelocation === true ? true : (payload.pointers.allowRelocation === false ? false : null);
+      setBuildOptions(modeOptions);
     }
 
     var savedName = payload.rom && payload.rom.name;

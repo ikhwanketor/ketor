@@ -131,10 +131,11 @@ suite.test('the panel renders the readout, the detector and the three modes', as
   t.assert(text.indexOf('Pointers & Insert Range') >= 0, 'the section should be there: ' + text.slice(0, 200));
   t.assert(text.indexOf('Verified profile for this rom') >= 0 || text.indexOf('Declared table') >= 0, 'the readout should name the table source: ' + text.slice(0, 300));
   t.assert(text.indexOf('Detect pointer table') >= 0, 'the detect action should be there');
-  t.assert(text.indexOf('Move the record to free space') >= 0, 'the default mode should be listed');
-  t.assert(text.indexOf('Shift the messages after it') >= 0, 'the shift mode should be listed');
+  t.assert(text.indexOf('Shift first, move what fails') >= 0, 'the hybrid mode should be listed');
+  t.assert(text.indexOf('Always move to free space') >= 0, 'the move only mode should be listed');
+  t.assert(text.indexOf('Only shift, never move') >= 0, 'the shift only mode should be listed');
   t.assert(text.indexOf('Never move, only report') >= 0, 'the refusal mode should be listed');
-  t.assert(text.indexOf('● Move the record') >= 0, 'the active mode should be marked');
+  t.assert(text.indexOf('● Shift first') >= 0, 'the active mode should be marked');
 });
 
 module.exports = { suite: suite };
