@@ -64,21 +64,25 @@
     });
   }
 
-  function PageLayoutPanel() {
+  function PageLayoutPanel(props) {
+    var given = props || {};
     var t = K.translate.useTranslate();
     var s = K.search ? K.search.useSearch() : null;
     var originalState = uS(false);
     var showOriginal = originalState[0];
     var setShowOriginal = originalState[1];
 
+    /* The row comes from the editor. Looking it up here was wrong: the editor picks from the
+       list that is on screen (the group and page the user is looking at) while this panel
+       picked from every text of the project, so it showed a different page than the one being
+       translated - "nothing translated yet" beside a translated editor. */
+    var active = given.row || null;
     var texts = (s && s.texts) ? s.texts : [];
-    var active = null;
-    if (t.selectedOffset !== null && t.selectedOffset !== undefined) {
+    if (!active && t.selectedOffset !== null && t.selectedOffset !== undefined) {
       for (var i = 0; i < texts.length; i++) {
         if (Number(texts[i].startByte) === Number(t.selectedOffset)) { active = texts[i]; break; }
       }
     }
-    if (!active && texts.length) active = texts[0];
 
     var toggle = e('button', {
       type: 'button',
@@ -93,7 +97,7 @@
         e('div', { className: 'kt-hint' }, 'Select a text in the list to see the page as the game shows it.'));
     }
 
-    var budget = K.translate.lineBudget(active);
+    var budget = given.budget || K.translate.lineBudget(active);
     var width = Math.max(8, Number(budget.budget) || 32);
     var text = showOriginal ? active.originalText : active.translatedText;
     var layout = K.translate.previewLayout(text, width);

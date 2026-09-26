@@ -1100,9 +1100,16 @@
         showLayoutPanel ? e('div', {
           style: {
             flex: '0 0 320px', minWidth: 220, display: 'flex', flexDirection: 'column',
-            minHeight: 0, overflow: 'auto'
+            minHeight: 0, overflow: 'auto', padding: 8, gap: 8,
+            background: 'var(--kt-sidebar-bg)',
+            borderLeft: '1px solid var(--kt-widget-border-default)'
           }
-        }, K.ui.KetorPageLayoutPanel ? e(K.ui.KetorPageLayoutPanel, null) : null) : null
+        }, K.ui.KetorPageLayoutPanel
+          ? e(K.ui.KetorPageLayoutPanel, {
+              row: active,
+              budget: active ? K.translate.lineBudget(active) : null
+            })
+          : null) : null
       )
     );
   }
