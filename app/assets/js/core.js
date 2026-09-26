@@ -2030,6 +2030,7 @@ let _recordTable = null;
 
         const segments = [];
         const textOffsetsInBlock = new Map();
+        const encodedByStart = new Map();
         const textRanges = [];
         let totalLength = 0;
         let runningOffset = 0;
@@ -2093,6 +2094,10 @@ let _recordTable = null;
           if (typeof textItem.startByte === 'number' && typeof textItem.byteLength === 'number') {
             textRanges.push({ start: textItem.startByte, end: textItem.startByte + textItem.byteLength - 1 });
           }
+          /* What this text looks like once written (translation, restored engine tokens and
+             trailer): the insert check compares against these bytes, not against a fresh
+             encoding of the raw translation, which reported restored pages as missing. */
+          encodedByStart.set(Number(textItem.startByte), encoded);
           textOffsetsInBlock.set(textItem.startByte, runningOffset);
           if (isGbaNonPaddingProfile) {
             const aliases = textAliasMap.get(textItem.startByte) || [textItem.startByte];
@@ -2206,6 +2211,7 @@ let _recordTable = null;
           needsPointerUpdate,
           pointers: [],
           textOffsetsInBlock,
+          encodedByStart,
           textRanges,
           sortedTexts
         };
@@ -2491,6 +2497,27 @@ let _recordTable = null;
         relocationLog.push(`ROM expanded to ${Math.round(romCopy.length / 1024)}KB to make space for larger texts.`);
       }
       let romView = new DataView(romCopy.buffer);
+      /* Everything above the highest byte the game actually uses is padding: the cartridge
+         was filled to 8MB and no asset lives there. A record moved into that padding changes
+         nothing the engine can read, so the padding is the first place tried. A run of zeros
+         in the middle of the image is only a fallback: it can be tile data the game copies
+         into video memory, and writing text into one of those corrupted the graphics (the
+         screen glitched when Soma was hit - user report, 27 Sep). */
+      const tailFreeStart = (() => {
+        let lastUsed = -1;
+        for (let i = originalRom.length - 1; i >= 0; i--) {
+          const by = originalRom[i];
+          if (by !== 0x00 && by !== 0xFF) { lastUsed = i; break; }
+        }
+        if (lastUsed < 0) return -1;
+        /* A cushion of 0x100 bytes: a table that reads a little past its own end still
+           finds filler and never one of the records written here. */
+        let at = lastUsed + 1 + 0x100;
+        at += (4 - (at % 4)) % 4;
+        return at < originalRom.length ? at : -1;
+      })();
+      let tailCursor = tailFreeStart;
+      let tailAllocations = 0;
       /* Free space is mapped once and handed out from a cursor. The search used to walk
          the whole image for every record that moved, so a build that moved hundreds of
          them never finished; mapping the filler runs once and carving every allocation
@@ -2553,6 +2580,28 @@ let _recordTable = null;
           run.cursor = at;
           return at;
         };
+        /* 1. The padding at the end of the cartridge. */
+        if (tailCursor >= 0) {
+          let at = tailCursor;
+          at += (4 - (at % 4)) % 4;
+          let end = at + need;
+          /* Skip a spot the image points at, even in the padding. */
+          for (let guard = 0; guard < 64 && end + 4 <= originalRom.length && rangeIsReferenced(at, end + 4); guard++) {
+            at = end + 4;
+            at += (4 - (at % 4)) % 4;
+            end = at + need;
+          }
+          if (end + 4 <= originalRom.length) {
+            if (tailAllocations === 0) {
+              relocationLog.push('Free space: the records that move are put in the padding after everything the game uses (from 0x' + at.toString(16).toUpperCase() + '), so no graphic, table or sound is touched.');
+            }
+            tailAllocations++;
+            tailCursor = end + 4;
+            return at;
+          }
+          tailCursor = -1;
+        }
+        /* 2. A run of 0xFF anywhere else: that is how a cartridge is padded. */
         const ffRun = freeSpaceRuns.filter(r => r.filler === 0xFF && fits(r))[0];
         if (ffRun) return carve(ffRun);
         const anyRun = freeSpaceRuns.filter(fits)[0];
@@ -2572,13 +2621,13 @@ let _recordTable = null;
       /* A record that outgrows its room is moved to free space and only its own table
          entry is rewritten, so nothing else in the image shifts (Atlas does the same).
          allowMessageShift true asks for the other path - grow in place by borrowing the
-         padding of the messages after it - and false refuses the growth and reports it. */
+         padding of the messages after it - and false refuses the move as well and reports it. */
       let borrowKept = 0;
       let borrowRolledBack = 0;
       const grownRecordCount = modifications.filter(m => m.needsRelocation).length;
       if (grownRecordCount > 0) {
-        relocationLog.push(grownRecordCount + ' record(s) need more room than they have; each one moves to free space and only its own table entry is rewritten' +
-          (system.allowMessageShift === true ? ', unless the padding after it can pay for the growth.' : ', so nothing else in the image shifts.'));
+        relocationLog.push(grownRecordCount + ' record(s) need more room than they have; each one moves to the padding at the end of the cartridge and only its own table entry is rewritten' +
+          (system.allowMessageShift === true ? ', unless the padding after it can pay for the growth.' : ', so the texts that do fit stay exactly where they were.'));
       }
 
       /* Highest first. A block that grows shifts the records after it, so every block
@@ -2735,6 +2784,13 @@ let _recordTable = null;
           plan.forEach(function (p) {
             romCopy.set(tail.subarray(p.from - tailStart, p.from - tailStart + p.len), p.to);
           });
+          /* Only words that aim at a record head that actually moved may be rewritten. Asking
+             the whole image and rewriting every pointer shaped word also rewrote graphics: a
+             tile word can look exactly like 0x08xxxxxx with an offset inside the shifted area,
+             and the game glitched whenever the player was hit (user report, 27 Sep). A record
+             head is what the engine stores; pages inside a record are reached by walking it, so
+             no pointer aims at them. */
+          const movedHeads = new Set(plan.map(p => p.from));
           let repointed = 0;
           /* Every word this shift rewrites is remembered with the bytes it had, and the
              tail is remembered as it was, so the whole shift can be undone when the
@@ -2745,7 +2801,9 @@ let _recordTable = null;
             if (i >= tailStart && i < tailEnd) continue;
             const v = (romCopy[i] | (romCopy[i + 1] << 8) | (romCopy[i + 2] << 16) | (romCopy[i + 3] << 24)) >>> 0;
             if ((v & 0xFF000000) !== 0x08000000) continue;
-            const moved = movedTo(v & 0x01FFFFFF);
+            const target = v & 0x01FFFFFF;
+            if (!movedHeads.has(target)) continue;
+            const moved = movedTo(target);
             if (moved < 0) continue;
             const nv = (0x08000000 + moved) >>> 0;
             rewrites.push({ at: i, bytes: [romCopy[i], romCopy[i + 1], romCopy[i + 2], romCopy[i + 3]] });
@@ -2859,12 +2917,15 @@ let _recordTable = null;
            free space and rewrites its pointer, and neither of them slides the rest of the
            file or recalculates every pointer. The shift path below is kept as an experiment
            behind allowMessageShift true only, and the panel does not offer it. */
-        /* Growing in place, paid for by the padding of the messages after it, is the default
-           again: it is the reference patch layout, it keeps the rom exactly the same size, and
-           a shift is kept only when it verifies against what it touched (verifyBorrow) plus the
-           per text insert check at the end. allowMessageShift false refuses it; true forces it
-           even when a move would be possible. */
-        const shiftAllowed = system.allowMessageShift !== false && system.forceRelocationOnly !== true;
+        /* Moving, not shifting, is the default. A shift grows one record where it stands by
+           pushing every message after it forward and recalculating their pointers; the texts that
+           already fit are then no longer at their own offset, which is exactly what the translator
+           asked us to stop doing, and a build with a shift in it glitched the graphics in the game.
+           So a record that is too long moves to the padding at the end of the cartridge and only
+           its own entry in the table is rewritten; nothing else in the image is touched.
+           allowMessageShift true asks for the shift as an experiment (it is still verified, and it
+           is undone when the check says it broke something). */
+        const shiftAllowed = system.allowMessageShift === true && system.forceRelocationOnly !== true;
         const willBorrow = needsRelocation && pointersForWrite.length > 0 && shiftAllowed;
         if (willBorrow) {
           const borrowCandidates = knownRecordPointer
@@ -3417,7 +3478,8 @@ let _recordTable = null;
           if (!textData || !String(textData.translatedText || '').length) continue;
           const rel = mod.textOffsetsInBlock ? mod.textOffsetsInBlock.get(Number(textItem.startByte)) : undefined;
           if (rel === undefined) continue;
-          const encoded = smartTextParse(textData.translatedText, tokenizer, masterCharToHex, usePaddingByte, encodeOptions);
+          const written = mod.encodedByStart ? mod.encodedByStart.get(Number(textItem.startByte)) : null;
+          const encoded = written || smartTextParse(textData.translatedText, tokenizer, masterCharToHex, usePaddingByte, encodeOptions);
           if (!encoded || !encoded.length) continue;
           insertChecked++;
           const at = writtenAt + Number(rel);
@@ -7265,7 +7327,7 @@ let _recordTable = null;
                          relocation only: a shift that broke a record must never be the reason a
                          user gets no rom at all. */
                       const buildRefused = buildLog.some(function (line) { return String(line).indexOf('Self check failed') >= 0; });
-                      if (buildRefused && system.allowMessageShift !== false && system.forceRelocationOnly !== true) {
+                      if (buildRefused && system.allowMessageShift === true && system.forceRelocationOnly !== true) {
                         const retrySystem = Object.assign({}, system, { forceRelocationOnly: true });
                         const retry = rebuildRom(
                             new Uint8Array(originalRom),

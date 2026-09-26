@@ -68,10 +68,11 @@ suite.test('nothing grows: the image is handed back untouched', async function (
   t.assert(/Self check passed/.test(built.log.join('\n')), 'the self check should have passed');
 });
 
-suite.test('the default grows the record in place and keeps the rom the size it was', async function (t) {
-  /* The user was explicit: a bigger rom is dangerous (the header declares a size and flash
-     carts have one), and only a text that overflows may be moved. A grown record is paid for
-     by the padding of the messages after it, so nothing has to leave the rom at all. */
+suite.test('the default moves only the record that is too long and leaves the others alone', async function (t) {
+  /* The user was explicit twice over: a bigger rom is dangerous, and a text that fits must
+     stay at the offset it already has. The record that is too long is put in the padding at the
+     end of the cartridge and only its own table entry changes - nothing else in the image is
+     touched, so no other text moves and no other pointer is rewritten. */
   const fixture = buildSyntheticRom({ records: 12 });
   const target = fixture.records[3];
   const translated = {};
@@ -82,14 +83,19 @@ suite.test('the default grows the record in place and keeps the rom the size it 
 
   const before = readTable(fixture.rom, fixture.table);
   const after = readTable(built.out, fixture.table);
-  t.assertEqual(before[3], after[3], 'a record that grew in place keeps its address');
   let changed = 0;
   for (let i = 0; i < before.length; i++) if (before[i] !== after[i]) changed++;
-  t.assertEqual(changed, 0, 'and no pointer has to be rewritten for it');
+  t.assertEqual(changed, 1, 'exactly the entry of the record that was too long may change');
+  t.assert(after[3] !== before[3], 'that record is at a new address');
+  for (let i = 0; i < before.length; i++) {
+    if (i === 3) continue;
+    t.assertEqual(after[i], before[i], 'record ' + i + ' must keep the address it had');
+  }
   const report = inspectRecords(built.out, fixture, fixture.rom);
   t.assertEqual(report.broken.length, 0, 'no record may be broken: ' + JSON.stringify(report.broken.slice(0, 3)));
+  t.assertEqual(report.moved, 1, 'only one record moved');
   const text = built.log.join('\\n');
-  t.assert(/Grew in place/.test(text), 'the log should say it grew where it was: ' + text.slice(0, 200));
+  t.assert(!/Grew in place/.test(text), 'nothing may be shifted by default: ' + text.slice(0, 200));
   t.assert(/Insert check: all/.test(text), 'and every translated text should be verified present');
   t.assert(/Self check passed/.test(text), 'the self check should have passed');
 });
@@ -119,7 +125,7 @@ suite.test('move only mode: the record moves to free space inside the rom, one e
   t.assert(/Insert check: all/.test(text), 'and the insert check should be green');
   t.assert(!/Grew in place/.test(text), 'nothing may be shifted in this mode');
 });
-suite.test('every record grows: all grow in place and the rom keeps its size', async function (t) {
+suite.test('every record grows: each one moves and the rom keeps its size', async function (t) {
   const fixture = buildSyntheticRom({ records: 48 });
   const translated = {};
   fixture.records.forEach(function (r) { translated[r.textStart] = grow(r.text, 8); });
@@ -127,10 +133,11 @@ suite.test('every record grows: all grow in place and the rom keeps its size', a
   t.assert(built.out, 'the build produced no image: ' + built.state.status);
   t.assertEqual(built.out.length, fixture.rom.length, 'the image must not grow');
   const report = inspectRecords(built.out, fixture, fixture.rom);
-  t.assert(report.moved <= 1, 'at most the last record may have to move (it has no padding after it): ' + report.moved + ' moved');
+  t.assertEqual(report.moved, fixture.count, 'every record was too long, so every one moved');
   t.assertEqual(report.moved + report.inPlace, fixture.count, 'every record must be accounted for');
   t.assertEqual(report.broken.length, 0, 'no record may be broken: ' + JSON.stringify(report.broken.slice(0, 3)));
   const text = built.log.join('\\n');
+  t.assert(!/Grew in place/.test(text), 'nothing may be shifted by default');
   t.assert(/Self check passed/.test(text), 'the self check should have passed');
   t.assert(/Insert check: all/.test(text), 'and the insert check should be green');
 });

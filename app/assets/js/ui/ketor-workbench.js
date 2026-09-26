@@ -925,8 +925,8 @@
           var logLines = (tr2 && Array.isArray(tr2.buildLog)) ? tr2.buildLog : [];
           if (sum) {
             A.appendLog('success',
-              'Insert report: ' + sum.relocated + ' text(s) relocated and repointed, ' +
-              sum.inPlace + ' written in place, ' + sum.pointersUpdated + ' pointer(s) updated' +
+              'Insert report: ' + sum.relocated + ' text(s) were too long and moved to the padding at the end of the rom (their own pointer rewritten), ' +
+              sum.inPlace + ' text(s) fit and stayed at their own offset, ' + sum.pointersUpdated + ' pointer(s) updated' +
               (sum.warnings.length ? ', ' + sum.warnings.length + ' warning(s)' : ', no warnings') +
               (sum.scope === 'group' ? ' (selected group)' : ' (all groups)'), 'compile');
           }
