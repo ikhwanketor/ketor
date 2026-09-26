@@ -419,6 +419,38 @@
      scope 'group' limits the work to the entries of the selected group, the
      way Kruptar compiles one group at a time; scope 'all' recomputes and
      inserts every group at once. */
+  /* Offsets this insert owns. A build writes the payload and slides the records that
+     follow it, so a second build that starts from a buffer holding the first one shifts
+     the same records twice: the records then lose their headers and the worker's self
+     check refuses the rom (that is the "22 record(s)" failure). Everything the insert
+     changed is remembered as a range and its hex patch is ignored on later builds, the
+     same way the payload offsets already are. */
+  var _insertOwnedRanges = [];
+  var _lastBuildBase = null;
+  function _rememberInsertRanges(before, after) {
+    _insertOwnedRanges = [];
+    if (!before || !after) return 0;
+    var start = -1;
+    var limit = Math.min(before.length, after.length);
+    for (var i = 0; i < limit; i++) {
+      if (before[i] !== after[i]) {
+        if (start < 0) start = i;
+      } else if (start >= 0) {
+        _insertOwnedRanges.push([start, i]);
+        start = -1;
+      }
+    }
+    if (start >= 0) _insertOwnedRanges.push([start, limit]);
+    return _insertOwnedRanges.length;
+  }
+  function _insideInsertRange(off) {
+    for (var i = 0; i < _insertOwnedRanges.length; i++) {
+      if (off >= _insertOwnedRanges[i][0] && off < _insertOwnedRanges[i][1]) return true;
+    }
+    return false;
+  }
+  K.translate.getInsertOwnedRanges = function () { return _insertOwnedRanges.slice(); };
+
   function buildModifiedRom(scope) {
     var compileScope = scope === 'group' ? 'group' : 'all';
     _ensureWorkers();
@@ -568,12 +600,14 @@
       Object.keys(hexState.patches).forEach(function (key) {
         var off = parseInt(key, 10);
         if (insertedOffsets[off]) return;
+        if (_insideInsertRange(off)) return;   // the insert's own writes, including the records it shifted
         if (Number.isFinite(off) && off >= 0 && off < patched.length) {
           patched[off] = hexState.patches[key] & 0xFF;
           appliedPatches++;
         }
       });
     }
+    _lastBuildBase = patched.slice();
     var romBuffer = patched.buffer;
     _lastBuildPatches = appliedPatches;
     _pendingBuildCount = buildTexts.length;
@@ -643,6 +677,9 @@
         if (text.indexOf('[WARNING]') >= 0) warnings.push(text);
       });
       if (_lineBudgetNote) warnings.push('Line budget: ' + _lineBudgetNote);
+      var owned = _rememberInsertRanges(_lastBuildBase, bytes);
+      log.push('Insert ownership: ' + owned + ' range(s) of this build are excluded from the hex patches on the next one, so a second Insert All cannot shift the same records twice.');
+
       var summary = {
         at: Date.now(),
         bytes: bytes.length,
