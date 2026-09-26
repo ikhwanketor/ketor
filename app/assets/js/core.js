@@ -3431,6 +3431,51 @@ let _recordTable = null;
               if (!isGbaNonPaddingProfile) {
                 freeSpaceOffset += newBlockBytes.length + terminatorBytes.length;
               }
+              /* Atlas writes the pointer of every entry it inserts. One moved block here can be
+                 named by more than one entry in the table, because a dialogue is a run of pages
+                 and the table names each page a script can start from (entry 10 to 15 of this
+                 cartridge are pages 0 to 5 of one conversation). Writing only the head left the
+                 other entries aiming at the old bytes, which still say what the game said before
+                 the translation, so a script that starts at a later page still read the original
+                 text. Every entry that names a text written into this block is written now, and
+                 nothing else in the image is touched. */
+              if (textOffsetsInBlock.size > 0) {
+                const kTable = recordTable();
+                const kBase = kTable ? (Number(kTable.base) || 0) : 0;
+                const kSize = kTable ? (Number(kTable.size) || 4) : 4;
+                const kLittle = String(system.pointerEndianness || 'little') === 'little';
+                let innerRepointed = 0;
+                if (kTable && kTable.bySite && kBase === 0x08000000) {
+                  textOffsetsInBlock.forEach(function (rel, oldStart) {
+                    if (!Number.isFinite(rel)) return;
+                    const site = Number(kTable.bySite[Number(oldStart)]);
+                    if (!Number.isFinite(site)) return;
+                    if (validPointers.some(function (p) { return Number(p.ptrOffset) === site; })) return;
+                    const value = (kBase + newOffset + rel) >>> 0;
+                    if (kSize >= 4) {
+                      romView.setUint32(site, value, kLittle);
+                    } else if (kSize === 3) {
+                      if (kLittle) {
+                        romCopy[site] = value & 0xFF;
+                        romCopy[site + 1] = (value >> 8) & 0xFF;
+                        romCopy[site + 2] = (value >> 16) & 0xFF;
+                      } else {
+                        romCopy[site] = (value >> 16) & 0xFF;
+                        romCopy[site + 1] = (value >> 8) & 0xFF;
+                        romCopy[site + 2] = value & 0xFF;
+                      }
+                    } else if (kSize === 2) {
+                      romView.setUint16(site, value & 0xFFFF, kLittle);
+                    } else {
+                      return;
+                    }
+                    innerRepointed++;
+                  });
+                }
+                if (innerRepointed > 0) {
+                  relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': ' + innerRepointed + ' more table entry(ies) name a page inside this run, so they were pointed at the moved copy as well - a page a script can start from keeps working.');
+                }
+              }
               relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: Relocated to 0x${newOffset.toString(16).toUpperCase()}. Updated ${validPointers.length} pointer(s).`);
               if (isStrictGbaPointerValidation) {
                 const pointerSample = validPointers.slice(0, 8).map(p => `0x${p.ptrOffset.toString(16).toUpperCase()}(${p.transformId})`);
