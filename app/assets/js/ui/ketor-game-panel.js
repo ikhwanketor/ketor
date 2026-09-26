@@ -1,25 +1,15 @@
 /* ============================================================
-   Ketor - Page layout panel (right side)
+   Ketor - Page layout inspector (Translation activity)
    ------------------------------------------------------------
-   The page as the game shows it, beside the text being edited.
+   Two boxes, the same shape as the other inspectors: one holds the
+   page drawn as the engine draws it, the other the facts about it.
+   Short labels only - a translator reading this panel is looking at
+   the page, not at documentation.
 
-   The chrome is the shared box (K.ui.KtBox: collapse chevron,
-   uppercase title, actions), the same one the Groups panel, the
-   Table tab and the Hex Editor use, so the right hand side of the
-   workbench looks like one application instead of one panel per
-   author.
-
-   What is faithful today is the layout, and it is faithful because
-   it was measured on the rom rather than assumed: a record holds
-   pages joined by 05 09, a page holds lines joined by 06 (the
-   [LINE] token), and the extractor gives one page per text. The
-   width comes from the original page.
-
-   The in game picture itself (font, window frame, background,
-   portrait) comes from the game profile when the profile knows where
-   those are, never from a guess. That is what makes this panel
-   universal: it asks the profile, and a profile is plain JSON that a
-   user can write or load for any game on any console.
+   The layout is faithful because it was measured on the rom, not
+   assumed: pages are joined by 05 09, lines by 06 (the [LINE] token),
+   and the extractor gives one page per text. The width is the width
+   of the original page.
    ============================================================ */
 
 (function (global) {
@@ -32,17 +22,10 @@
   var uS = R.useState;
   var MONO = "Consolas, 'Courier New', monospace";
 
-  /* The shared box chrome when it is there, a plain box when it is not (a test harness
-     that loads this file alone should not fail because the kit is missing). */
   function Box(props) {
     if (typeof K.ui.KtBox === 'function') return e(K.ui.KtBox, props);
-    return e('div', {
-      className: 'kt-ui-box',
-      style: { display: 'flex', flexDirection: 'column', minHeight: 0, border: '1px solid var(--kt-widget-border-default)', borderRadius: 3, background: 'var(--kt-sidebar-bg)', overflow: 'hidden' }
-    },
-      e('div', {
-        style: { display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px', borderBottom: '1px solid var(--kt-widget-border-default)' }
-      },
+    return e('div', { className: 'kt-ui-box', style: { display: 'flex', flexDirection: 'column', minHeight: 0, border: '1px solid var(--kt-widget-border-default)', borderRadius: 3, background: 'var(--kt-sidebar-bg)', overflow: 'hidden' } },
+      e('div', { style: { display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px', borderBottom: '1px solid var(--kt-widget-border-default)' } },
         e('div', { style: { flex: 1, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em', opacity: 0.7 } }, props.title || ''),
         props.actions || null
       ),
@@ -58,10 +41,17 @@
       return e('span', {
         key: keyPrefix + '-' + i,
         style: isToken
-          ? { color: '#f0c674', background: 'rgba(240,198,116,0.12)', borderRadius: 3, padding: '0 3px', fontSize: '0.92em' }
+          ? { color: '#ffd479', background: 'rgba(255,212,121,0.14)', borderRadius: 2, padding: '0 2px' }
           : null
       }, part);
     });
+  }
+
+  function Row(props) {
+    return e('div', { style: { display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 11, lineHeight: '16px' } },
+      e('span', { style: { opacity: 0.65 } }, props.label),
+      e('span', { style: Object.assign({ fontFamily: MONO }, props.style || {}) }, props.value)
+    );
   }
 
   function PageLayoutPanel(props) {
@@ -72,15 +62,10 @@
     var showOriginal = originalState[0];
     var setShowOriginal = originalState[1];
 
-    /* The row comes from the editor. Looking it up here was wrong: the editor picks from the
-       list that is on screen (the group and page the user is looking at) while this panel
-       picked from every text of the project, so it showed a different page than the one being
-       translated - "nothing translated yet" beside a translated editor. */
     var active = given.row || null;
-    var texts = (s && s.texts) ? s.texts : [];
-    if (!active && t.selectedOffset !== null && t.selectedOffset !== undefined) {
-      for (var i = 0; i < texts.length; i++) {
-        if (Number(texts[i].startByte) === Number(t.selectedOffset)) { active = texts[i]; break; }
+    if (!active && s && s.texts && t.selectedOffset !== null && t.selectedOffset !== undefined) {
+      for (var i = 0; i < s.texts.length; i++) {
+        if (Number(s.texts[i].startByte) === Number(t.selectedOffset)) { active = s.texts[i]; break; }
       }
     }
 
@@ -93,8 +78,8 @@
     }, showOriginal ? 'Original' : 'Translation');
 
     if (!active) {
-      return e(Box, { id: 'translate-page-layout', title: 'Page layout', style: { minHeight: 0 } },
-        e('div', { className: 'kt-hint' }, 'Select a text in the list to see the page as the game shows it.'));
+      return e(Box, { id: 'translate-page-layout', title: 'Page layout', style: { flex: 1, minHeight: 0 } },
+        e('div', { style: { fontSize: 11, opacity: 0.65 } }, 'Select a text.'));
     }
 
     var budget = given.budget || K.translate.lineBudget(active);
@@ -106,61 +91,50 @@
     var profileInfo = (K.translate.getProfileInfo) ? K.translate.getProfileInfo() : null;
     var fontKnown = !!(profileInfo && profileInfo.profile && profileInfo.profile.graphics && profileInfo.profile.graphics.font);
 
-    return e(Box, {
-      id: 'translate-page-layout',
-      title: 'Page layout',
-      actions: toggle,
-      style: { minHeight: 0 }
-    },
-      empty
-        ? e('div', { className: 'kt-hint', style: { fontStyle: 'italic' } }, 'Nothing translated yet for this page.')
-        : e('div', {
-            style: {
-              background: '#0b1020',
-              border: '2px solid #8fa6d8',
-              borderRadius: 4,
-              boxShadow: 'inset 0 0 0 2px #1b2545',
-              padding: '10px 12px',
-              minHeight: 70,
-              fontFamily: MONO,
-              fontSize: 13,
-              lineHeight: '18px',
-              color: '#f2f5ff',
-              textShadow: '1px 1px 0 #000'
-            }
-          },
-            layout.lines.map(function (line, i) {
-              return e('div', {
-                key: 'l' + i,
-                style: { whiteSpace: 'pre-wrap', color: line.over ? '#ff9d9d' : '#f2f5ff' }
-              }, renderTokens(line.text, 'l' + i));
-            })
-          ),
-      e('div', {
-        className: 'kt-hint',
-        style: { marginTop: 8, color: over > 0 ? 'var(--kt-error-fg)' : undefined }
+    return e('div', { style: { display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0 } },
+      e(Box, {
+        id: 'translate-page-layout',
+        title: 'Page layout',
+        actions: toggle,
+        style: { flex: '1 1 auto', minHeight: 0 }
       },
-        layout.lines.length + ' line(s), original page width ' + width + ' characters' +
-        (over > 0 ? ', ' + over + ' line(s) wider than the original page' : '') + '.'
+        e('div', {
+          style: {
+            background: '#0d1226',
+            border: '1px solid #55688f',
+            borderRadius: 3,
+            padding: '8px 10px',
+            minHeight: 64,
+            fontFamily: MONO,
+            fontSize: 13,
+            lineHeight: '17px',
+            color: '#f4f7ff'
+          }
+        },
+          empty
+            ? e('div', { style: { opacity: 0.5, fontStyle: 'italic' } }, 'no translation yet')
+            : layout.lines.map(function (line, i) {
+                return e('div', {
+                  key: 'l' + i,
+                  style: { whiteSpace: 'pre-wrap', color: line.over ? '#ff9d9d' : '#f4f7ff' }
+                }, renderTokens(line.text, 'l' + i));
+              })
+        )
       ),
-      e('div', { className: 'kt-hint', style: { marginTop: 6, opacity: 0.7 } },
-        fontKnown
-          ? 'Lines, page width and glyphs come from this game profile, so this is how the engine will draw the page.'
-          : 'Lines and page width follow the rom. The letters are still the system font: this game profile does not name a font yet. Filling "graphics.font" in the profile (or loading one) is what turns this into the real in game picture.')
+      e(Box, { id: 'translate-page-facts', title: 'Details', style: { flex: '0 0 auto' } },
+        e(Row, { label: 'lines', value: String(layout.lines.length) }),
+        e(Row, { label: 'page width', value: width + ' chars' }),
+        e(Row, {
+          label: 'too wide',
+          value: over > 0 ? over + ' line(s)' : 'none',
+          style: over > 0 ? { color: 'var(--kt-error-fg)' } : { opacity: 0.75 }
+        }),
+        e(Row, { label: 'glyphs', value: fontKnown ? 'game font' : 'system font' }),
+        e(Row, { label: 'profile', value: profileInfo && profileInfo.profile ? profileInfo.profile.id : 'none' })
+      )
     );
   }
 
-  /* The panel is an inspector of the Translation activity, the same pattern the Tile Editor
-     uses for its own inspector: it lives inside the activity, on the right, and the activity
-     toolbar has the button that shows or hides it. The workbench level right panel stays for
-     settings that belong to the whole workbench, not to one activity. */
+  /* The inspector of the Translation activity (see ketor-translate-tab.js). */
   K.ui.KetorPageLayoutPanel = PageLayoutPanel;
-
-  /* Registered as the right hand panel of the Translation activity, so it is there without
-     the user asking for it. The Tile Editor keeps its own inspector inside the activity
-     instead (its toolbar has the show/hide button); that pattern is the one to copy if this
-     panel should ever move inside the tab. Both wear the shared KtBox chrome. */
-  /* No workbench level registration: this panel is the inspector of the Translation
-     activity (see ketor-translate-tab.js), the same way the Tile Editor keeps its inspector
-     inside its own activity with a show/hide button in its toolbar. */
 })(window);
