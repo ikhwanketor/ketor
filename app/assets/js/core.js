@@ -2203,8 +2203,25 @@ let _recordTable = null;
           needsPointerUpdate = false;
         }
 
+        /* The translator asked the app to know, for every text in the group, whether it came
+           out longer than the room it had, exactly the same, or shorter - and to say which of
+           them is the reason a record had to move. Encoded length against the room the text
+           already owned answers it exactly, and it is the same number the writer used. */
+        const lengthClasses = { longer: 0, same: 0, shorter: 0 };
+        sortedTexts.forEach(function (item) {
+          const enc = encodedByStart.get(Number(item.startByte));
+          if (!enc) return;
+          const room = Number(item.byteLength) || 0;
+          if (enc.length > room) lengthClasses.longer++;
+          else if (enc.length === room) lengthClasses.same++;
+          else lengthClasses.shorter++;
+        });
+        if (lengthClasses.longer + lengthClasses.same + lengthClasses.shorter > 0) {
+          relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': ' + lengthClasses.longer + ' text(s) longer than their room, ' + lengthClasses.same + ' exactly the same length, ' + lengthClasses.shorter + ' shorter.');
+        }
         const mod = {
           block: effectiveBlock,
+          lengthClasses,
           newBlockBytes,
           originalBlockLength,
           needsRelocation,
@@ -2486,6 +2503,23 @@ let _recordTable = null;
         modifications.push(mod);
       }
 
+      /* One line for the whole build: how many of the texts this build wrote came out longer
+         than the room they had (those are the only ones that force a record to move), how many
+         came out exactly the same length and how many are shorter - and the last two keep the
+         offset they already had, with no pointer written for them. */
+      const lengthTotals = { longer: 0, same: 0, shorter: 0 };
+      modifications.forEach(function (m) {
+        const c = m && m.lengthClasses;
+        if (!c) return;
+        lengthTotals.longer += c.longer;
+        lengthTotals.same += c.same;
+        lengthTotals.shorter += c.shorter;
+      });
+      if (lengthTotals.longer + lengthTotals.same + lengthTotals.shorter > 0) {
+        relocationLog.push('Length check: of the texts this build wrote, ' + lengthTotals.longer + ' came out longer than the room they had' +
+          (lengthTotals.longer > 0 ? ' - a record that holds one of those is the only kind that has to move' : '') + ', ' +
+          lengthTotals.same + ' came out exactly the same length and ' + lengthTotals.shorter + ' shorter; those stay at their own offset and no pointer is written for them.');
+      }
       let freeSpaceOffset = findFreeSpace(romCopy, totalRequiredSpace);
       if (freeSpaceOffset === -1 && totalRequiredSpace > 0) {
         const newSize = romCopy.length + totalRequiredSpace + 0x2000;
@@ -3431,26 +3465,41 @@ let _recordTable = null;
               if (!isGbaNonPaddingProfile) {
                 freeSpaceOffset += newBlockBytes.length + terminatorBytes.length;
               }
-              /* Atlas writes the pointer of every entry it inserts. One moved block here can be
-                 named by more than one entry in the table, because a dialogue is a run of pages
-                 and the table names each page a script can start from (entry 10 to 15 of this
-                 cartridge are pages 0 to 5 of one conversation). Writing only the head left the
-                 other entries aiming at the old bytes, which still say what the game said before
-                 the translation, so a script that starts at a later page still read the original
-                 text. Every entry that names a text written into this block is written now, and
-                 nothing else in the image is touched. */
-              if (textOffsetsInBlock.size > 0) {
+              /* Atlas writes the pointer of every entry it inserts, and here a moved block is a
+                 whole span of the image: the record the table names plus the messages that sit
+                 inside that same span. Those were copied into the moved block, and while their
+                 entries still aim at the old bytes they keep saying what the game said before the
+                 translation - a script that starts at one of them reads the original text. Every
+                 entry whose target lands inside a text this block wrote is given the address of
+                 that text's copy, through the same relative offset the text was written with, so
+                 it stays right whether the pages were repacked or kept at their own offsets.
+                 Nothing outside the span is touched. */
+              if (needsRelocation && originalBlockLength > 0 && textRanges.length > 0) {
                 const kTable = recordTable();
                 const kBase = kTable ? (Number(kTable.base) || 0) : 0;
                 const kSize = kTable ? (Number(kTable.size) || 4) : 4;
                 const kLittle = String(system.pointerEndianness || 'little') === 'little';
                 let innerRepointed = 0;
-                if (kTable && kTable.bySite && kBase === 0x08000000) {
-                  textOffsetsInBlock.forEach(function (rel, oldStart) {
-                    if (!Number.isFinite(rel)) return;
-                    const site = Number(kTable.bySite[Number(oldStart)]);
-                    if (!Number.isFinite(site)) return;
-                    if (validPointers.some(function (p) { return Number(p.ptrOffset) === site; })) return;
+                if (kTable && kTable.entries && kTable.sites && kBase === 0x08000000) {
+                  const spanStart = Number(block.start);
+                  const spanEnd = spanStart + Number(originalBlockLength);
+                  const ranges = [];
+                  textRanges.forEach(function (rg) {
+                    const rel = textOffsetsInBlock.get(Number(rg.start));
+                    if (Number.isFinite(rel)) ranges.push({ start: Number(rg.start), end: Number(rg.end), rel: Number(rel) });
+                  });
+                  for (let ki = 0; ki < kTable.entries.length; ki++) {
+                    const target = Number(kTable.entries[ki]);
+                    if (!(target >= spanStart && target < spanEnd)) continue;
+                    const site = Number(kTable.sites[ki]);
+                    if (!Number.isFinite(site)) continue;
+                    if (validPointers.some(function (p) { return Number(p.ptrOffset) === site; })) continue;
+                    let rel = null;
+                    for (let ri = 0; ri < ranges.length; ri++) {
+                      const rg = ranges[ri];
+                      if (target >= rg.start && target <= rg.end) { rel = rg.rel + (target - rg.start); break; }
+                    }
+                    if (rel === null) continue;
                     const value = (kBase + newOffset + rel) >>> 0;
                     if (kSize >= 4) {
                       romView.setUint32(site, value, kLittle);
@@ -3467,13 +3516,13 @@ let _recordTable = null;
                     } else if (kSize === 2) {
                       romView.setUint16(site, value & 0xFFFF, kLittle);
                     } else {
-                      return;
+                      continue;
                     }
                     innerRepointed++;
-                  });
+                  }
                 }
                 if (innerRepointed > 0) {
-                  relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': ' + innerRepointed + ' more table entry(ies) name a page inside this run, so they were pointed at the moved copy as well - a page a script can start from keeps working.');
+                  relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': ' + innerRepointed + ' entry(ies) of the table name a message inside this span, so they were pointed at the moved copy as well - a script that starts at one of those messages reads the translated text instead of the old one.');
                 }
               }
               relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: Relocated to 0x${newOffset.toString(16).toUpperCase()}. Updated ${validPointers.length} pointer(s).`);

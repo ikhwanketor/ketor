@@ -1125,6 +1125,16 @@
         }
         if (text.indexOf('[WARNING]') >= 0) warnings.push(text);
       });
+      /* What the build says about the length of every text it wrote: longer than the room it
+         had, exactly the same, or shorter. Only a longer text can force a record to move. */
+      var longerTexts = 0, sameTexts = 0, shorterTexts = 0;
+      log.forEach(function (line) {
+        var lm = String(line || '').match(/Length check: of the texts this build wrote, (\d+) came out longer[\s\S]*?, (\d+) came out exactly the same length and (\d+) shorter/);
+        if (!lm) return;
+        longerTexts = Number(lm[1]) || 0;
+        sameTexts = Number(lm[2]) || 0;
+        shorterTexts = Number(lm[3]) || 0;
+      });
       if (_lineBudgetNote) warnings.push('Line budget: ' + _lineBudgetNote);
       if (typeof relocationLogNote === 'string' && relocationLogNote) log.push(relocationLogNote);
       if (typeof _tableNote === 'string' && _tableNote) log.push(_tableNote);
@@ -1144,6 +1154,9 @@
         inPlace: inPlace,
         pointersUpdated: pointersUpdated,
         warnings: warnings,
+        longerTexts: longerTexts,
+        sameTexts: sameTexts,
+        shorterTexts: shorterTexts,
         lines: log.length
       };
 

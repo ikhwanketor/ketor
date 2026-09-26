@@ -927,6 +927,7 @@
             A.appendLog('success',
               'Insert report: of ' + sum.texts + ' translated text(s), ' + sum.relocated + ' record(s) were too long and moved to the padding at the end of the rom (only their own pointer changed), ' +
               sum.inPlace + ' record(s) fit and stayed at their own offset, ' + sum.pointersUpdated + ' pointer(s) updated' +
+              (sum.longerTexts !== undefined ? ' (' + sum.longerTexts + ' text(s) came out longer than their room, ' + sum.sameTexts + ' exactly the same length, ' + sum.shorterTexts + ' shorter)' : '') +
               (sum.warnings.length ? ', ' + sum.warnings.length + ' warning(s)' : ', no warnings') +
               (sum.scope === 'group' ? ' (selected group)' : ' (all groups)'), 'compile');
           }
