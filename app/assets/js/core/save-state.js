@@ -7,6 +7,10 @@
    VBA-M writes a state as a PNG: the visible screen is the image itself and the machine's
    memory sits in a 'gbAs' chunk, zlib compressed. A GBA state is IWRAM 0x8000, EWRAM 0x40000,
    VRAM 0x18000, palette 0x400, OAM 0x400 and IO 0x400, after a 0x400 header of registers.
+   The offsets below are the layout a GBA state is written in, and they are still a hypothesis:
+   the state the translator sent inflates to 0x61000 bytes and its tail from 0x60000 on is zeros,
+   so the palette is not where the sizes point. Searching for it is no answer either - 59401
+   windows of EWRAM scored above 60 distinct halfwords on that state, which is data, not colours.
    Nothing here guesses a shape: the blocks are taken by their size, and the palette is checked
    by counting the colours it actually holds. */
 (function (global) {
@@ -163,7 +167,12 @@
       kind: kind,
       size: state.length,
       blocks: blocks,
-      vram: blocks ? blocks.vram : (palette && palette.vramAt >= 0 ? state.slice(palette.vramAt, palette.vramAt + 0x18000) : null),
+      /* VRAM is only handed out when the block sizes placed it. A palette that had to be
+         searched for says nothing about where VRAM is, and a wrong VRAM would be read as a
+         font: the caller gets null and has to say so instead of showing shapes that are not
+         glyphs. */
+      blocksTrusted: !!(palette && palette.how === 'block sizes'),
+      vram: (palette && palette.how === 'block sizes') ? (blocks ? blocks.vram : null) : null,
       paletteAt: palette ? palette.at : -1,
       paletteHow: palette ? palette.how : 'not found',
       colours: palette ? readColours(state, palette.at) : [],
