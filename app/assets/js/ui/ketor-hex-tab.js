@@ -194,8 +194,7 @@
         text = props.edit.digits.length ? props.edit.digits + '_' : '__';
       }
 
-      /* Address and offset, labelled, so the tooltip answers the same question the readout does. */
-      var title = 'address 0x' + hex8(off) + '  offset 0x' + hex8(off) + '   dec ' + value + '   bin ' + value.toString(2).padStart(8, '0') +
+      var title = '0x' + hex8(off) + '   dec ' + value + '   bin ' + value.toString(2).padStart(8, '0') +
         (isAsciiPrintable(value) ? "   '" + String.fromCharCode(value) + "'" : '') +
         (patched ? '\npatched, was ' + hex2(raw) : '') +
         (bookmark ? '\nbookmark: ' + bookmark.label : '') +
@@ -765,20 +764,7 @@
     // Status information is rendered in the right rail (bottom right of the
     // grid) instead of taking a full width row under it.
     var infoRows = [
-      /* The gutter column shows where a byte sits, and that number is an address. The readout
-         says address and offset as two labelled lines instead of one unlabelled number, so the
-         two cannot be confused: with the image loaded at address zero they are the same byte,
-         and the moment that stops being true the labels are already there. */
-      {
-        label: 'Address',
-        value: '0x' + hex8(t.cursorOffset),
-        title: 'Where this byte sits in the image, the same number the gutter column shows'
-      },
-      {
-        label: 'Offset',
-        value: '0x' + hex8(t.cursorOffset) + ' (' + t.cursorOffset + ')',
-        title: 'Distance from the start of the loaded image; the same byte as the address above while the image is loaded at address zero'
-      },
+      { label: 'Offset', value: hex8(t.cursorOffset) + ' (' + t.cursorOffset + ')' },
       {
         label: 'Section',
         value: currentSection ? currentSection.label : '-',
