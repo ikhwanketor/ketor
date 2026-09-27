@@ -3124,6 +3124,68 @@ let _recordTable = null;
           }
         };
 
+          /* An entry that names a message inside this block has to be pointed at where that
+             message now sits - whether the block stayed where it was or moved. The pages of
+             a block are re-encoded (a translation is rarely the same length as the words it
+             replaces), so a page that came out shorter moves every page after it, and the
+             table still names the old addresses. The user's Kingdom Hearts build wrote the
+             intro's block in place, its pages shifted two bytes, and the game then read a
+             terminator at the address its table named: only the first line of the intro
+             appeared in game. This used to run only on a move, which is why a build that
+             reported success and passed every check still lost the lines. */
+          const repointEntriesInsideBlock = (baseOffset, validPointers) => {
+            if (!(Number(originalBlockLength) > 0) || textRanges.length === 0) return;
+            const kTable = recordTable();
+            const kBase = kTable ? (Number(kTable.base) || 0) : 0;
+            const kSize = kTable ? (Number(kTable.size) || 4) : 4;
+            const kLittle = String(system.pointerEndianness || 'little') === 'little';
+            let innerRepointed = 0;
+            if (kTable && kTable.entries && kTable.sites && kBase === 0x08000000) {
+              const spanStart = Number(block.start);
+              const spanEnd = spanStart + Number(originalBlockLength);
+              const ranges = [];
+              textRanges.forEach(function (rg) {
+                const rel = textOffsetsInBlock.get(Number(rg.start));
+                if (Number.isFinite(rel)) ranges.push({ start: Number(rg.start), end: Number(rg.end), rel: Number(rel) });
+              });
+              for (let ki = 0; ki < kTable.entries.length; ki++) {
+                const target = Number(kTable.entries[ki]);
+                if (!(target >= spanStart && target < spanEnd)) continue;
+                const site = Number(kTable.sites[ki]);
+                if (!Number.isFinite(site)) continue;
+                if (validPointers.some(function (p) { return Number(p.ptrOffset) === site; })) continue;
+                let rel = null;
+                for (let ri = 0; ri < ranges.length; ri++) {
+                  const rg = ranges[ri];
+                  if (target >= rg.start && target <= rg.end) { rel = rg.rel + (target - rg.start); break; }
+                }
+                if (rel === null) continue;
+                const value = (kBase + Number(baseOffset) + rel) >>> 0;
+                if (kSize >= 4) {
+                  romView.setUint32(site, value, kLittle);
+                } else if (kSize === 3) {
+                  if (kLittle) {
+                    romCopy[site] = value & 0xFF;
+                    romCopy[site + 1] = (value >> 8) & 0xFF;
+                    romCopy[site + 2] = (value >> 16) & 0xFF;
+                  } else {
+                    romCopy[site] = (value >> 16) & 0xFF;
+                    romCopy[site + 1] = (value >> 8) & 0xFF;
+                    romCopy[site + 2] = value & 0xFF;
+                  }
+                } else if (kSize === 2) {
+                  romView.setUint16(site, value & 0xFFFF, kLittle);
+                } else {
+                  continue;
+                }
+                innerRepointed++;
+              }
+            }
+            if (innerRepointed > 0) {
+              relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': ' + innerRepointed + ' entry(ies) of the table name a message inside this span and were pointed at where that message was written.');
+            }
+          };
+
         const writeInPlace = () => {
           mod.writtenAt = block.start;
           romCopy.set(newBlockBytes, block.start);
@@ -3510,6 +3572,8 @@ let _recordTable = null;
                 relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: [WARNING] Pointer update failed (NO POINTERS FOUND). Applied fixed-slot in-place fallback (updated ${slotResult.writtenCount} text slot(s), truncated ${slotResult.truncatedCount}).`);
               } else {
                 writeInPlace();
+                /* no pointer was written on this path, so no site has to be skipped */
+                repointEntriesInsideBlock(block.start, []);
                 relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: [WARNING] Pointer update failed (NO POINTERS FOUND). In-place data written.`);
               }
               if (isStrictGbaPointerValidation) {
@@ -3523,6 +3587,7 @@ let _recordTable = null;
               romCopy.set(terminatorBytes, newOffset + newBlockBytes.length);
             } else {
               writeInPlace();
+              repointEntriesInsideBlock(block.start, validPointers);
             }
             validPointers.forEach(ptr => {
               if (ptr.ptrSize === 2) {
@@ -3627,6 +3692,8 @@ let _recordTable = null;
             relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: [WARNING] Pointer update failed (NO POINTERS FOUND). Applied fixed-slot in-place fallback (updated ${slotResult.writtenCount} text slot(s), truncated ${slotResult.truncatedCount}).`);
           } else {
             writeInPlace();
+            /* nothing was repointed here either: only the pages inside the block move */
+            repointEntriesInsideBlock(block.start, []);
             relocationLog.push(`Block at 0x${block.start.toString(16).toUpperCase()}: Injected in-place.`);
           }
         } else {
