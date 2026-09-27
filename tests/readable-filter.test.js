@@ -140,4 +140,70 @@ suite.test('the switch is a checkbox in the advanced block of the sidebar', asyn
     'the checkbox is in the advanced block: ' + strings.filter(function (s) { return /readable/i.test(s); }).join(' | '));
 });
 
+/* The sentence that explains the filter, kept in one place so the case below can ask for it
+   by name instead of by a fragment. */
+const READABLE_HINT = 'Keeps texts that read like words. Uncheck to index every printable run, graphics and fonts included. Extract again to apply.';
+
+/* The search sidebar of the workbench, with the advanced block open. loadWorkbench() renders
+   useState with the closed value, so the state hook is replaced the way the case above does. */
+function sidebarTree() {
+  const panel = loadWorkbench();
+  const vm = require('vm');
+  const path = require('path');
+  const file = path.join(panel.REPO, 'app', 'assets', 'js', 'ui', 'ketor-search-sidebar.js');
+  panel.win.React.useState = function (value) { return [true, function () {}]; };
+  vm.runInNewContext(require('fs').readFileSync(file, 'utf8'), panel.win, { filename: file });
+  return { panel: panel, tree: panel.K.ui.sidebarProviders.search() };
+}
+
+/* Every component called with its props the way React would, so a title a component hands to
+   an html node becomes visible - treeStrings() alone stops at the component. The same walk
+   tile-statusbar.test.js uses for the rail the tab draws itself. */
+function draw(node) {
+  if (Array.isArray(node)) return node.map(draw);
+  if (!node || typeof node !== 'object' || !node.props) return node;
+  if (typeof node.type === 'function') return draw(node.type(node.props));
+  const props = Object.assign({}, node.props);
+  if (props.children !== undefined) props.children = draw(props.children);
+  return { type: node.type, props: props };
+}
+
+/* The strings a panel always draws: the ones sitting in a children slot of a drawn element.
+   A title is not among them - that text reaches the screen only after a pointer rests on the
+   row, which is the whole difference this case is about. */
+function drawnStrings(node, out) {
+  const list = out || [];
+  if (typeof node === 'string') { list.push(node); return list; }
+  if (Array.isArray(node)) { node.forEach(function (item) { drawnStrings(item, list); }); return list; }
+  if (node && node.props) drawnStrings(node.props.children, list);
+  return list;
+}
+
+/* Which elements carry a given tooltip, so a title that reached an html node can be told from
+   one that stopped at the component - the second one would show nothing in a browser. */
+function tooltipHosts(node, text, out) {
+  const list = out || [];
+  if (Array.isArray(node)) { node.forEach(function (item) { tooltipHosts(item, text, list); }); return list; }
+  if (node && node.props) {
+    if (node.props.title === text) list.push(node.type);
+    tooltipHosts(node.props.children, text, list);
+  }
+  return list;
+}
+
+suite.test('the explanation is the tooltip of the checkbox, not a line that is always drawn', function (t) {
+  /* One sentence, two ways to show it. As a child string it took a paragraph of the list at
+     every moment; as a title it costs nothing until the pointer asks for it. treeStrings()
+     reads both, so the case tells them apart by where the string sits. */
+  const sidebar = sidebarTree();
+  const tree = draw(sidebar.tree);
+  const hosts = tooltipHosts(tree, READABLE_HINT);
+  t.assert(hosts.indexOf('label') >= 0,
+    'Check hands the sentence to the label it draws, so a pointer over the row shows it: ' + JSON.stringify(hosts));
+  t.assert(sidebar.panel.treeStrings(tree).indexOf(READABLE_HINT) >= 0,
+    'and the harness reads the tooltip (treeStrings collects props.title)');
+  t.assert(drawnStrings(tree).indexOf(READABLE_HINT) < 0,
+    'while no drawn string is that sentence any more: ' + drawnStrings(tree).filter(function (s) { return /Keeps texts/.test(s); }).join(' | '));
+});
+
 module.exports = { suite };

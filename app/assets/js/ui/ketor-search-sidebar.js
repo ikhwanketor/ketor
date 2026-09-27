@@ -53,8 +53,13 @@
     );
   }
 
+  /* title is optional: a checkbox that needs a sentence to explain itself hands it
+     here and the pointer shows it over the whole row. Putting it on the label and not on
+     the input keeps one attribute and one hit area - the label is what the user points
+     at, the checkbox square alone is a small target. */
   function Check(props) {
     return e('label', {
+      title: props.title,
       style: {
         display: 'flex', alignItems: 'center', gap: 6,
         padding: '3px 0', fontSize: 11, color: 'var(--kt-sidebar-fg)',
@@ -242,14 +247,12 @@
           e(Check, {
             label: 'Readable texts only',
             checked: opts.readableOnly !== false,
-            onChange: function (v) { setOpt({ readableOnly: v }); }
+            onChange: function (v) { setOpt({ readableOnly: v }); },
+            /* The sentence was a line of text under the checkbox until batch 175. It is
+               read once, when the option is first met, and it cost the list a paragraph
+               of height for the rest of the session - so it is the tooltip of the row now. */
+            title: 'Keeps texts that read like words. Uncheck to index every printable run, graphics and fonts included. Extract again to apply.'
           }),
-          e('div', {
-            style: {
-              padding: '0 0 6px 22px', fontSize: 10, lineHeight: 1.45,
-              color: 'var(--kt-sidebar-fg)', opacity: 0.7
-            }
-          }, 'Keeps texts that read like words. Uncheck to index every printable run, graphics and fonts included. Extract again to apply.'),
           showStrictMode ? e(Check, {
             label: 'Strict extractor',
             checked: opts.strictExtractorMode === true,
