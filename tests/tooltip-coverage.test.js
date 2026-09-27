@@ -667,25 +667,9 @@ const ALLOWLIST = {
     "ketor-search-tab.js|button|Add to Group (|kt-btn|-": "\"Add to Group (\" button — no tooltip yet; batch 187",
   },
 
-  /* ---- translate: 12 gaps; batch 189 adds the tooltips and deletes every entry below ---- */
-  translate: {
-    "ketor-translate-sidebar.js|Action|label=Open Search Text|-|-": "action button \"Open Search Text\" — no tooltip yet; batch 189",
-    "ketor-translate-sidebar.js|Action|label=Edit in Search Text|-|-": "action button \"Edit in Search Text\" — no tooltip yet; batch 189",
-    "ketor-translate-tab.js|textarea|placeholder=lineTok ? 'Type the translation, or use Auto Translate. Enter inserts the line break token.' : 'Type the translation, or use Auto Translate'|-|-": "textarea (placeholder=lineTok ? 'Type the translation, or use Auto Translate. Enter inserts the line break token.' : 'Type the translation, or use Auto Translate') — no tooltip yet; batch 189",
-    "ketor-translate-tab.js|button|Open Search Text|kt-btn|-": "\"Open Search Text\" button — no tooltip yet; batch 189",
-    "ketor-translate-tab.js|button|Open Hex Editor|kt-btn secondary|-": "\"Open Hex Editor\" button — no tooltip yet; batch 189",
-    "ketor-translate-tab.js|input|placeholder=word or token to find|kt-input|-": "input (placeholder=word or token to find) — no tooltip yet; batch 189",
-    "ketor-translate-tab.js|input|placeholder=replacement (empty deletes it)|kt-input|-": "input (placeholder=replacement (empty deletes it)) — no tooltip yet; batch 189",
-    "ketor-translate-tab.js|button|<<|kt-btn small|-": "\"<<\" button — no tooltip yet; batch 189",
-    "ketor-translate-tab.js|button|<|kt-btn small|-": "\"<\" button — no tooltip yet; batch 189",
-    "ketor-translate-tab.js|button|>|kt-btn small|-": "\">\" button — no tooltip yet; batch 189",
-    "ketor-translate-tab.js|button|>>|kt-btn small|-": "\">>\" button — no tooltip yet; batch 189",
-    "ketor-translate-tab.js|select|value=freeMode ? 'free' : 'custom'|kt-select|-": "select (value=freeMode ? 'free' : 'custom') — no tooltip yet; batch 189",
-  },
-
   /* ---- font, groups, chrome, dialog, patch, about and panel: closed by batch 184; hex:
-     closed by batch 185. The tooltips are in place and their entries were deleted, so the
-     list can only shrink ---- */
+     closed by batch 185; translate: closed by batch 186. The tooltips are in place and
+     their entries were deleted, so the list can only shrink ---- */
 };
 
 /* Every entry of every area, keyed by the audit signature, with the area and the reason

@@ -177,6 +177,7 @@
               }, 'No groups yet. Extract and group texts in the Search Text activity.'),
               e(Action, {
                 label: 'Open Search Text',
+                title: 'Opens the Search Text activity, where texts are collected into groups; it stays disabled until a ROM is loaded',
                 first: true,
                 disabled: !t.romBytes,
                 onClick: onOpenSearch
@@ -212,6 +213,7 @@
               e('div', { style: { padding: '6px 12px 0 12px' } },
                 e(Action, {
                   label: 'Edit in Search Text',
+                  title: 'Opens the Search Text activity to rename a group or change which entries belong to it, since groups are edited there',
                   first: true,
                   onClick: onOpenSearch
                 })

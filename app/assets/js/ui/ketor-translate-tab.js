@@ -342,6 +342,7 @@
       ),
       e(Ruler, { length: local.length, caret: caret.x }),
       e('textarea', {
+        title: 'The editable box of the pair; Size below counts the bytes the build will write, red once it outgrows the original',
         value: local,
         spellCheck: false,
         onChange: function (ev) { push(ev.target.value); },
@@ -683,8 +684,16 @@
         e('div', { className: 'ap-hint' },
           'No groups yet. Extract texts and create a group in Search Text (or mark a byte range in Hex Editor).'),
         e('div', { style: { display: 'flex', gap: 8, marginTop: 16, justifyContent: 'center' } },
-          e('button', { type: 'button', className: 'kt-btn', onClick: onOpenSearch }, 'Open Search Text'),
-          e('button', { type: 'button', className: 'kt-btn secondary', onClick: onOpenHex }, 'Open Hex Editor')
+          e('button', {
+            type: 'button', className: 'kt-btn',
+            title: 'Go to Search Text to extract ROM texts and build the first group; this tab can translate nothing until a group exists',
+            onClick: onOpenSearch
+          }, 'Open Search Text'),
+          e('button', {
+            type: 'button', className: 'kt-btn secondary',
+            title: 'Go to the Hex Editor to mark a byte range and keep it as a group, when you would rather pick the bytes by hand',
+            onClick: onOpenHex
+          }, 'Open Hex Editor')
         )
       );
     }
@@ -818,6 +827,7 @@
         e('input', {
           type: 'text', className: 'kt-input',
           value: findText,
+          title: 'What Replace in group looks for; only translations of this group are searched, original lines are never matched',
           placeholder: 'word or token to find',
           onKeyDown: onToolKeyDown,
           onChange: function (ev) { setFindText(ev.target.value); },
@@ -827,6 +837,7 @@
         e('input', {
           type: 'text', className: 'kt-input',
           value: replText,
+          title: 'What every match is replaced with; leave it empty and the matches are deleted instead, which cannot be undone',
           placeholder: 'replacement (empty deletes it)',
           onKeyDown: onToolKeyDown,
           onChange: function (ev) { setReplText(ev.target.value); },
@@ -901,19 +912,23 @@
           totalPages > 1 ? e('span', { style: { display: 'flex', alignItems: 'center', gap: 4 } },
             e('button', {
               type: 'button', className: 'kt-btn small',
+              title: 'Jump to the first page of the entry list; shown only when the group has more entries than one page holds',
               onClick: function () { K.translate.setPage(1); }, disabled: page <= 1
             }, '<<'),
             e('button', {
               type: 'button', className: 'kt-btn small',
+              title: 'Step back one page in the filtered entry list; it is disabled while the first page is showing',
               onClick: function () { K.translate.setPage(page - 1); }, disabled: page <= 1
             }, '<'),
             e('span', null, page + ' / ' + totalPages),
             e('button', {
               type: 'button', className: 'kt-btn small',
+              title: 'Step forward one page in the filtered entry list; it is disabled while the last page is showing',
               onClick: function () { K.translate.setPage(page + 1); }, disabled: page >= totalPages
             }, '>'),
             e('button', {
               type: 'button', className: 'kt-btn small',
+              title: 'Jump straight to the last page of the entry list, skipping every page in between',
               onClick: function () { K.translate.setPage(totalPages); }, disabled: page >= totalPages
             }, '>>')
           ) : null
@@ -978,6 +993,7 @@
           'Provider',
           e('select', {
             className: 'kt-select',
+            title: 'Chooses how translation is done: Free uses the public fallback services with no key, AI uses your own provider',
             value: freeMode ? 'free' : 'custom',
             onChange: function (ev) {
               K.translate.setProviderMode(ev.target.value === 'custom' ? 'custom' : 'free');
