@@ -853,6 +853,20 @@
     return readsLikeText(entry) ? entry : null;
   }
 
+  /* The codes a table names are structure, not content: [SPACE], [END], <0000>. What is
+     left after them is what a person reads, and the reading test below and the exemption
+     for a record a table named both measure that. */
+  function textWithoutCodes(text) {
+    return String(text === undefined || text === null ? '' : text)
+      .replace(/\[[^\]]*\]/g, ' ').replace(/<[^>]*>/g, ' ').replace(/\{[^}]*\}/g, ' ')
+      .replace(/[\r\n\t]/g, ' ');
+  }
+
+  /* The characters a message is written with: letters, digits, the space, and the
+     punctuation a sentence breathes with ("Oh...Mmm......" is a real line). Every other
+     byte is one the table could not name, and it is what counts against a text. */
+  var MESSAGE_CHARS = /[A-Za-z0-9 .,!?'"():;%&*+\-\/]/g;
+
   /* Can a person read this?
      The extractor has judged its own finds with a language score since the NES work
      (retroQualityFilter / retroLanguageScore in core.js): bracket token ratio, letter ratio,
@@ -867,16 +881,15 @@
   function humanReadable(en) {
     var s = String((en && (en.originalText !== undefined ? en.originalText : en.text)) || '');
     if (!s) return false;
-    /* Codes the table named are structure, not content: [SPACE], [END], <0000>. */
-    var body = s.replace(/\[[^\]]*\]/g, ' ').replace(/<[^>]*>/g, ' ').replace(/\{[^}]*\}/g, ' ')
-      .replace(/[\r\n\t]/g, ' ');
+    var body = textWithoutCodes(s);
     var letters = (body.match(/[A-Za-z]/g) || []).length;
     var digits = (body.match(/[0-9]/g) || []).length;
     var spaces = (body.match(/ /g) || []).length;
     /* Punctuation is how a sentence breathes ("Oh...Mmm......" is a real line), so only
        characters outside the printable set count against a text: accented bytes and the
-       control bytes a table could not name. */
-    var odd = (body.match(/[^A-Za-z0-9 .,!?'"():;%&*+\-\/]/g) || []).length;
+       control bytes a table could not name. Every character is either a message character
+       or one of those bytes, so the difference is that count. */
+    var odd = body.length - (body.match(MESSAGE_CHARS) || []).length;
     var vowels = (body.match(/[AEIOUaeiou]/g) || []).length;
     if (letters < 3) return false;
     /* Glyph soup: the bytes were never letters to begin with. */
@@ -908,6 +921,21 @@
     var s = String((en && (en.originalText !== undefined ? en.originalText : en.text)) || '');
     var letters = (s.match(/[A-Za-z]/g) || []).length;
     return s.length >= 6 && letters >= Math.max(3, Math.floor(s.length * 0.4));
+  }
+
+  /* Is this a short line a table named that holds no letters at all? Aria of Sorrow's
+     record at 0x0ED032 is the real case: its text is two engine tokens and "?!". The
+     reading test asks for letters and cannot pass a line like that, but the table that
+     named the record is evidence, so the record is kept (see recordsOnly). This test is
+     what keeps that exemption narrow: the line has to be short, and what is left of it
+     once the table's own codes are taken out has to be the characters a message is
+     written with - punctuation, digits and spaces. A run of bytes the table could not
+     name, or a long line, still has to read like text. */
+  function letterlessShortLine(en) {
+    var body = textWithoutCodes((en && (en.originalText !== undefined ? en.originalText : en.text)) || '').trim();
+    if (!body || body.length > 8) return false;
+    if (/[A-Za-z]/.test(body)) return false;
+    return !/[^A-Za-z0-9 .,!?'"():;%&*+\-\/]/.test(body);
   }
 
   /* The list is ordered by offset, as the user asked for. This comparator keeps the
@@ -1207,8 +1235,15 @@
       var sampleTest = readableOnlyOn() ? humanReadable : readsLikeText;
       var readable = tableSamples.filter(sampleTest).length;
       if (tableSamples.length === 0 || readable / tableSamples.length < 0.6) { droppedUnreadable++; return; }
+      /* A confirmed table is evidence, and it is the table the reading test above judged:
+         a record the table named is not judged again here. The heuristic asks for letters,
+         so it threw away a line that holds only punctuation - the record at 0x0ED032 of
+         Aria of Sorrow is "[SOMA PORTRAIT][SOMA]?!", and the saved project of the user has
+         it (measured in batch 176: the 100 Soma dialogues of that project came back 99).
+         Only a short line whose codes are all it held is let through on this evidence; the
+         runs of the scan and the fallback below keep the filter untouched. */
       tableKeep.forEach(function (en) {
-        if (!readableFilter(en)) return;
+        if (!readableFilter(en) && !letterlessShortLine(en)) return;
         var at = Number(en.startByte);
         if (!taken[at]) { taken[at] = true; keep.push(en); }
       });

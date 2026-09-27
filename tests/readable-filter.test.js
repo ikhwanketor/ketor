@@ -206,4 +206,84 @@ suite.test('the explanation is the tooltip of the checkbox, not a line that is a
     'while no drawn string is that sentence any more: ' + drawnStrings(tree).filter(function (s) { return /Keeps texts/.test(s); }).join(' | '));
 });
 
+/* A record that holds no letters at all is still a line of the game when the table names
+   it. Aria of Sorrow's record at 0x0ED032 is the real case: the text is two engine tokens
+   and "?!", the letter test asks for letters and threw the record away, and the saved
+   project of the user has it (reported in batch 176). */
+const TOKEN_ONLY = '[SOMA PORTRAIT][SOMA]?!';
+
+/* The table maps the two bracket characters the tokens are written with; tableContent()
+   only holds the characters a sentence needs. */
+const TOKEN_TABLE = tableContent() + '5B=[\n5D=]\n';
+
+/* The bytes of one record replaced by the token and punctuation line above. */
+function withTokenOnlyRecord(fixture, image, index) {
+  const rom = image.slice();
+  const r = fixture.records[index];
+  rom.fill(0x00, r.textStart, r.textStart + r.byteLength);
+  for (let k = 0; k < TOKEN_ONLY.length; k++) rom[r.textStart + k] = TOKEN_ONLY.charCodeAt(k);
+  rom.set(fixture.trailer, r.textStart + TOKEN_ONLY.length);
+  return rom;
+}
+
+/* The same soup as withGlyphSoup() over a range of records, so one record that reads can
+   sit beside them and prove the list still keeps what it should. */
+function withSoupRange(fixture, from, to) {
+  const rom = fixture.rom.slice();
+  for (let i = from; i < to; i++) {
+    const r = fixture.records[i];
+    let at = r.textStart;
+    for (let k = 0; k < 24; k++) rom[at++] = SOUP.charCodeAt((i * 3 + k) % SOUP.length);
+    rom.set(fixture.trailer, at);
+    rom.fill(0x00, at + fixture.trailer.length, r.textStart + r.byteLength);
+  }
+  return rom;
+}
+
+suite.test('the record a confirmed table names stays when its text is only punctuation', async function (t) {
+  /* The record holds no letters, so the letter test cannot pass it: the table that named
+     it is the evidence, and the gate below judges the table's samples, not this line. */
+  const fixture = buildSyntheticRom({ records: 24, textLength: 40 });
+  const rom = withTokenOnlyRecord(fixture, fixture.rom, 0);
+  const st = await extract(rom, tableMaps(TOKEN_TABLE));
+  const starts = (st.texts || []).map(function (x) { return Number(x.startByte); });
+  const at = fixture.records[0].textStart;
+  t.assert(starts.indexOf(at) >= 0,
+    'the punctuation record at 0x' + at.toString(16) + ' is offered: ' + st.status);
+  const entry = (st.texts || []).filter(function (x) { return Number(x.startByte) === at; })[0];
+  t.assert(entry && String(entry.originalText).indexOf('?!') >= 0,
+    'and it is the line the table named: ' + JSON.stringify(String(entry && entry.originalText)));
+});
+
+suite.test('a table whose own samples do not read is dropped all the same', async function (t) {
+  /* The exemption belongs to the record, not to the gate: the samples of this table are
+     glyph soup, so the table is a graphics table with a pointer shape and even its
+     punctuation line stays out. */
+  const fixture = buildSyntheticRom({ records: 24, textLength: 40 });
+  const rom = withTokenOnlyRecord(fixture, withGlyphSoup(fixture), 0);
+  const st = await extract(rom, tableMaps(TOKEN_TABLE));
+  const starts = (st.texts || []).map(function (x) { return Number(x.startByte); });
+  fixture.records.forEach(function (r) {
+    assert(starts.indexOf(r.textStart) < 0,
+      'no record of the soup table is offered, not even 0x' + r.textStart.toString(16) + ': ' + st.status);
+  });
+});
+
+suite.test('a scan run that does not read stays out when the table cannot be used', async function (t) {
+  /* One readable record beside eleven soup records: the samples fail the gate, so the list
+     falls back to the scan - and there the readable filter still stands, which is what
+     keeps a run of tile data out. */
+  const fixture = buildSyntheticRom({ records: 12, textLength: 40 });
+  const rom = withSoupRange(fixture, 0, 11);
+  const st = await extract(rom, tableMaps(tableContent()));
+  const starts = (st.texts || []).map(function (x) { return Number(x.startByte); });
+  for (let i = 0; i < 11; i++) {
+    assert(starts.indexOf(fixture.records[i].textStart) < 0,
+      'the soup run at 0x' + fixture.records[i].textStart.toString(16) + ' is left out: ' + st.status);
+  }
+  assert(starts.indexOf(fixture.records[11].textStart) >= 0,
+    'while the run that reads stays: ' + st.status);
+  assert(/readable only/i.test(String(st.status)), 'and the list says why it is short: ' + st.status);
+});
+
 module.exports = { suite };
