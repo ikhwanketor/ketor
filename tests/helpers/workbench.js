@@ -117,6 +117,10 @@ function loadWorkbench() {
   load(path.join(CORE, 'tile-codec.js'));
   load(path.join(CORE, 'save-state.js'));
   load(path.join(CORE, 'font-map.js'));
+  /* The debugger tab reads the display registers out of the rom, so the register
+     scanner and the tab itself are loaded the way the preview page loads them. */
+  load(path.join(CORE, 'gba-registers.js'));
+  load(path.join(UI, 'ketor-debugger-tab.js'));
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

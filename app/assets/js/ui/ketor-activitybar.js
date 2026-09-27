@@ -98,7 +98,7 @@
     { id: 'hex', icon: 'hex', tooltip: 'Hex Editor' },
     { id: 'translation', icon: 'globe', tooltip: 'Translation' },
     { id: 'tile', icon: 'paintcan', tooltip: 'Tile Editor' },
-    { id: 'font', icon: 'symbol-color', tooltip: 'Font Editor' },
+    { id: 'debugger', icon: 'debug', tooltip: 'Debugger' },
     { id: 'patch', icon: 'package', tooltip: 'Patch & Export' },
     { id: 'tests', icon: 'beaker', tooltip: 'Tests' }
   ];

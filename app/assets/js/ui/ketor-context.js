@@ -5,7 +5,7 @@
    VS Code's IWorkbenchLayoutService + IEditorService shape.
 
    State shape:
-   - activeActivity: string ('translate' | 'hex' | 'font' | ...)
+   - activeActivity: string ('translate' | 'hex' | 'debugger' | ...)
    - sidebarVisible: boolean
    - activityBarVisible: boolean
    - statusBarVisible: boolean

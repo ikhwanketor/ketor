@@ -10,7 +10,7 @@
    - Ketor.ui.registerTabProvider(kind, Component)
 
    Batch 13 will register providers to wire in real features
-   (extract, translate, hex editor, font editor, patch, tests).
+   (extract, translate, hex editor, debugger, patch, tests).
    ============================================================ */
 
 /* ============================================================
@@ -164,10 +164,10 @@
       placeholderTitle: 'Tile Editor',
       placeholderHint: 'Edit tile graphics (CHR, VRAM, NCGR, and other tile formats).'
     },
-    font: {
-      icon: 'symbol-color', title: 'Font Editor',
-      placeholderTitle: 'Font Editor',
-      placeholderHint: 'Detect and edit font tiles across supported consoles.'
+    debugger: {
+      icon: 'debug', title: 'Debugger',
+      placeholderTitle: 'Debugger',
+      placeholderHint: 'Read the display registers and flags a ROM sets up, without running it.'
     },
     patch: {
       icon: 'package', title: 'Patch & Export',
