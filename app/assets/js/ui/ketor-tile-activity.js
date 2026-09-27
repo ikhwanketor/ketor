@@ -79,7 +79,12 @@
     mapScanning: false,
     mapFlipH: false,
     mapFlipV: false,
-    zoom: 3,
+    zoom: 2,
+    /* The toolbar controls are ordinary buttons and a checkbox: no global keyboard
+       handler lives in this activity, so the offset and stride boxes stay free to
+       type in. Ctrl+C/V follows later for copy/paste of a region and is active only
+       while the canvas has the focus. */
+    grid: true,
     tiles: 128,
     candidates: [],
     scanning: false,
@@ -1746,6 +1751,32 @@
       ref: wrapRef, tabIndex: 0, onKeyDown: onKey,
       style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, outline: 'none' }
     },
+      /* Zoom, grid and the view label, the controls the canvas is read with. They are
+         plain buttons and a checkbox, so nothing here takes a keystroke away from the
+         offset and stride inputs. Ctrl+C/V joins this row later for copy/paste of a
+         region and only while the canvas itself has the focus. */
+      e('div', {
+        style: { display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px', borderBottom: '1px solid var(--kt-widget-border-default)', flexWrap: 'wrap' }
+      },
+        e('button', {
+          type: 'button', className: TB + ' secondary', disabled: Number(st.zoom) <= 1,
+          title: 'One pixel less per tile: 1x is the smallest the sheet gets',
+          onClick: function () { _set({ zoom: Math.max(1, (Number(st.zoom) || 1) - 1) }); }
+        }, 'Zoom -'),
+        e('span', { style: { fontFamily: MONO, opacity: 0.85 }, title: 'Pixels per tile' }, 'x' + (Number(st.zoom) || 1)),
+        e('button', {
+          type: 'button', className: TB + ' secondary', disabled: Number(st.zoom) >= 8,
+          title: 'One pixel more per tile: 8x is the largest the sheet gets',
+          onClick: function () { _set({ zoom: Math.min(8, (Number(st.zoom) || 1) + 1) }); }
+        }, 'Zoom +'),
+        e('label', { style: { display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }, title: 'Draw a one pixel grid over the sheet' },
+          e('input', {
+            type: 'checkbox', checked: _state.grid !== false,
+            onChange: function (ev) { _set({ grid: !!ev.target.checked }); }
+          }),
+          'Grid'),
+        e('span', { style: { opacity: 0.7 }, title: 'Which view of the sheet this tab draws' }, 'view: ' + st.view)
+      ),
       e('div', { style: { flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderBottom: '1px solid var(--kt-widget-border-default)', background: 'var(--kt-sidebar-bg)', fontSize: 11, flexWrap: 'nowrap' } },
         TOOLS.map(function (t) {
           return e('button', {
