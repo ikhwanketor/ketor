@@ -39,6 +39,17 @@ diketahui: tidak ada catatan batch, tidak ada berkas pendamping, dan tidak ada
 riwayat commit yang menjelaskan dari mana kode itu datang atau polanya diambil.
 Perlakukan sebagai kode tanpa provenans sampai ada yang bisa membuktikannya.
 
+## Folder `unused/`
+
+`unused/` menampung berkas yang **tidak dipakai aplikasi sama sekali**: tidak dimuat
+halaman mana pun, tidak dipanggil modul lain, dan tidak diuji perilakunya. Berkas di
+sini disimpan sebagai rujukan saja (membandingkan bentuk lama, menelusuri asal-usul),
+bukan kode yang tinggal diaktifkan kembali tanpa alasan yang jelas.
+
+| Berkas | Asal | Alasan diarsipkan |
+| --- | --- | --- |
+| `ketor-tasks-registry.js` | `app/assets/js/ui/ketor-tasks-registry.js` | Batch 182: satu-satunya penulis dan pembaca `Ketor.tasks.*` adalah berkas itu sendiri, sementara panel bawah sudah mengambil daftar tugas dari workbench context (`props.tasks` di `app/assets/js/ui/ketor-panel.js`). Tidak ada pemanggil nyata, jadi tag `<script>`-nya dicabut dari `app/index.html` dan berkasnya dipindahkan ke sini. |
+
 ## Peta cepat
 
 | Berkas | Isi |
@@ -47,3 +58,4 @@ Perlakukan sebagai kode tanpa provenans sampai ada yang bisa membuktikannya.
 | `assets/js/core.js` | mesin lama: text codec, `rebuildRom`, semua worker, patch, CSV, AI translate |
 | `assets/js/app-ui.js` | komponen React lama (satu berkas besar) |
 | `assets/css/main.css` | tema lama; `.btn-danger` (baris 181-189) sudah disalin ke `app/assets/css/vscode-components.css` |
+| `unused/ketor-tasks-registry.js` | registri tugas `Ketor.tasks` yang tak dipakai; lihat bagian `unused/` di atas |

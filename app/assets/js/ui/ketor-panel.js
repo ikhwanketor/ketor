@@ -5,7 +5,7 @@
    is "background" showing real-time running tasks.
 
    Tabs:
-   - Background: real-time running tasks (from Ketor.tasks + context)
+   - Background: real-time running tasks (from the workbench context)
    - Log: chronological log entries
    - Problems: validation errors/warnings
    ============================================================ */

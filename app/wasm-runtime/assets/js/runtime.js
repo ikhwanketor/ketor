@@ -880,13 +880,6 @@
       } catch (_) { }
     }
 
-    const menuClickOnlyState = {
-      button: null,
-      panels: [],
-      open: false,
-      docHandler: null
-    };
-
     function isLikelyMenuButton(node) {
       if (!node || !(node instanceof HTMLElement)) return false;
       const id = String(node.id || '').toLowerCase();
@@ -897,62 +890,6 @@
       if (cls.includes('menu-btn') || cls.includes('ejs_menu_btn') || cls.includes('ejs-menu-btn')) return true;
       if (aria.includes('menu')) return true;
       return txt === '☰' || txt === '≡';
-    }
-
-    function collectLikelyMenuNodes() {
-      const root = emuStage || document;
-      const all = Array.from(root.querySelectorAll('*'));
-      const buttons = all.filter(isLikelyMenuButton);
-      const panels = all.filter((el) => {
-        if (!(el instanceof HTMLElement)) return false;
-        if (buttons.includes(el)) return false;
-        const id = String(el.id || '').toLowerCase();
-        const cls = String(el.className || '').toLowerCase();
-        if (!id && !cls) return false;
-        const looksMenu = id.includes('menu') || cls.includes('menu');
-        if (!looksMenu) return false;
-        const r = el.getBoundingClientRect();
-        if (!r || r.width < 40 || r.height < 40) return false;
-        return true;
-      });
-      return { button: buttons[0] || null, panels };
-    }
-
-    function enforceSaveLoadOnlyMenu() {
-      try {
-        if (emuStage) emuStage.classList.add('pt-menu-save-load-only');
-      } catch (_) { }
-      const root = emuStage || document;
-      const all = Array.from(root.querySelectorAll('*'));
-      const menuItems = all.filter((el) => {
-        if (!(el instanceof HTMLElement)) return false;
-        const id = String(el.id || '').toLowerCase();
-        const cls = String(el.className || '').toLowerCase();
-        if (!(id.includes('menu') || cls.includes('menu'))) return false;
-        const txt = String(el.textContent || '').trim().toLowerCase();
-        if (!txt) return false;
-        if (txt.length > 120) return false;
-        return true;
-      });
-      for (const item of menuItems) {
-        try {
-          const id = String(item.id || '').toLowerCase();
-          const cls = String(item.className || '').toLowerCase();
-          const txt = String(item.textContent || '').trim().toLowerCase();
-          const keep =
-            txt.includes('save') ||
-            txt.includes('load') ||
-            id.includes('save') ||
-            id.includes('load') ||
-            id.includes('state') ||
-            cls.includes('save') ||
-            cls.includes('load') ||
-            cls.includes('state');
-          item.setAttribute('data-pt-menu-item', '1');
-          if (keep) item.setAttribute('data-pt-keep', '1');
-          else item.removeAttribute('data-pt-keep');
-        } catch (_) { }
-      }
     }
 
     function suppressBrandingOverlays() {
@@ -1062,28 +999,6 @@
             el.style.opacity = '1';
             el.style.display = '';
           }
-        } catch (_) { }
-      }
-    }
-
-    function applyMenuPanelState(open) {
-      menuClickOnlyState.open = !!open;
-      try {
-        if (emuStage) {
-          emuStage.classList.add('pt-menu-locked');
-          emuStage.classList.toggle('pt-menu-open', !!open);
-        }
-        document.body.classList.add('pt-menu-locked-global');
-        document.body.classList.toggle('pt-menu-open-global', !!open);
-      } catch (_) { }
-      forceHideMenuPanels(!!open);
-      for (const panel of menuClickOnlyState.panels) {
-        try {
-          panel.style.pointerEvents = open ? 'auto' : 'none';
-          panel.style.opacity = open ? '1' : '0';
-          panel.style.visibility = open ? 'visible' : 'hidden';
-          panel.style.transition = 'opacity 0s linear';
-          panel.style.zIndex = open ? '99' : '1';
         } catch (_) { }
       }
     }

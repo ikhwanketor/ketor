@@ -260,18 +260,25 @@ suite.test('the test harness loads the shared box before the modules that use Kt
 const CORE_ROOT = path.join(SCRIPT_ROOT, 'core');
 /* The one application page: app/index.html, the name Pages serves from app/. */
 const WORKBENCH = path.join(APP, 'index.html');
-const WORKBENCH_BUILD = '142';
+const WORKBENCH_BUILD = '143';
 const WORKBENCH_CORE_FILES = ['text-codec.js', 'rom-builder.js', 'worker-text-extract.js', 'worker-build.js', 'worker-table.js'];
 /* What the ui reads out of window.Ketor.core, one name per module. */
 const CORE_NAMES = ['escapeRegex', 'createTokenizer', 'smartTextParse', 'getSmartByteLength',
   'rebuildRom', 'createTextExtractorWorker', 'createBuildWorker', 'createTableWorker'];
 /* The helpers createBuildWorker stringifies into the worker it builds. */
 const WORKER_HELPERS = ['escapeRegex', 'createTokenizer', 'smartTextParse', 'rebuildRom'];
-/* What batch 180 moved out of app/. The path under legacy/ mirrors the path it had, and
-   the old page keeps its name under legacy/ only: batch 181 gave app/index.html to the
-   workbench, so that page is checked by its home in the archive instead. */
-const ARCHIVED = ['app/assets/js/core.js', 'app/assets/js/app-ui.js', 'app/assets/css/main.css'];
+/* What batch 180 and batch 182 moved out of app/. The path under legacy/ mirrors the path
+   it had, and the old page keeps its name under legacy/ only: batch 181 gave app/index.html
+   to the workbench, so that page is checked by its home in the archive instead. Batch 182
+   moved one module no page loaded into legacy/unused/ under its bare name, so
+   ARCHIVED_UNUSED says where the files that kept no app/ path ended up. */
+const ARCHIVED = ['app/assets/js/core.js', 'app/assets/js/app-ui.js', 'app/assets/css/main.css',
+  'app/assets/js/ui/ketor-tasks-registry.js'];
+const ARCHIVED_UNUSED = { 'app/assets/js/ui/ketor-tasks-registry.js': 'legacy/unused/ketor-tasks-registry.js' };
 const ARCHIVED_PAGE = 'legacy/index.html';
+/* Where a file batch 180 or later took out of app/ lives now: the mirror of its app/ path,
+   unless it was archived without one. */
+function archivedPath(rel) { return ARCHIVED_UNUSED[rel] || ('legacy/' + rel.slice('app/'.length)); }
 
 /* A window just bare enough to run the core modules: they touch nothing else at load. */
 function sandboxOf() {
@@ -379,9 +386,9 @@ suite.test('the one css rule the workbench needs from main.css came across with 
 
 suite.test('the legacy engine and the old page are archived under legacy/, out of app/', function () {
   ARCHIVED.forEach(function (rel) {
-    assert(!isFile(path.join(REPO, rel)), rel + ' is still inside app/; batch 180 moved it to legacy/');
-    const archived = 'legacy/' + rel.slice('app/'.length);
-    assert(isFile(path.join(REPO, archived)), archived + ' is missing; the archive under legacy/ has to hold the old engine');
+    assert(!isFile(path.join(REPO, rel)), rel + ' is still inside app/; it was archived under legacy/');
+    const archived = archivedPath(rel);
+    assert(isFile(path.join(REPO, archived)), archived + ' is missing; the archive under legacy/ has to hold every file app/ gave up');
   });
   assert(isFile(path.join(REPO, ARCHIVED_PAGE)), ARCHIVED_PAGE + ' is missing; the archive under legacy/ has to hold the old page, whose name app/index.html now belongs to the workbench');
   assert(isFile(path.join(REPO, 'legacy', 'README.md')), 'legacy/README.md is missing; the archive has to say what it is and how to open it');
