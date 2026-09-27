@@ -41,7 +41,8 @@ function tableMaps(content) {
   };
 }
 
-async function extract(rom, table, terminator) {
+async function extract(rom, table, terminator, options) {
+  K.search.setExtractionOptions(Object.assign({ readableOnly: true }, options || {}));
   K.search.setRomFromLoad({ data: rom, name: 'synthetic.gba', size: rom.length }, 'GBA');
   K.search.setSystemProfile(terminator ? Object.assign({}, GBA, { terminator: terminator }) : GBA);
   K.search.setTableData(table);
@@ -86,7 +87,10 @@ suite.test('with no table in the rom the scan keeps its runs', async function (t
   const noiseAt = 0x30000;
   const rom = withNoise(fixture.rom, noiseAt, 0x4000);
   rom.fill(0x00, 0x1000, 0x1000 + 24 * 4);
-  const st = await extract(rom, tableMaps(fixture.project.table.content));
+  /* The runs are what the scan found, readable or not: this case is about the fallback,
+     so it asks for everything. What the readable filter does to the same list is the
+     subject of the readable filter suite. */
+  const st = await extract(rom, tableMaps(fixture.project.table.content), null, { readableOnly: false });
   const texts = st.texts || [];
   assert(texts.length > fixture.records.length, 'the runs are all there: ' + st.status);
   const inNoise = texts.filter(function (x) { return Number(x.startByte) >= noiseAt && Number(x.startByte) < noiseAt + 0x4000; });

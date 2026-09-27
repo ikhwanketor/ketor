@@ -144,7 +144,7 @@
     var advancedCount =
       (showStrictMode ? 1 : 0) +
       (showPaddingByte ? 1 : 0) +
-      (showDecompression ? 2 : 0);
+      (showDecompression ? 2 : 0) + 1;   /* the readable filter is always offered */
 
     var onExtract = uC(function () { K.search.extractTexts(); }, []);
 
@@ -234,6 +234,22 @@
         }, advancedOpen ? 'Hide Advanced' : 'Show Advanced'),
 
         advancedOpen ? e('div', null,
+          /* What the list keeps. On by default, because a scan of a whole cartridge finds
+             its graphics and its fonts as text as well (measured on Aria of Sorrow: 244,921
+             printable runs where the game has a few thousand messages). A project that
+             misses a text - a table in a script the test cannot judge, a label made of
+             symbols - turns it off here and gets every run back. */
+          e(Check, {
+            label: 'Readable texts only',
+            checked: opts.readableOnly !== false,
+            onChange: function (v) { setOpt({ readableOnly: v }); }
+          }),
+          e('div', {
+            style: {
+              padding: '0 0 6px 22px', fontSize: 10, lineHeight: 1.45,
+              color: 'var(--kt-sidebar-fg)', opacity: 0.7
+            }
+          }, 'Keeps texts that read like words. Uncheck to index every printable run, graphics and fonts included. Extract again to apply.'),
           showStrictMode ? e(Check, {
             label: 'Strict extractor',
             checked: opts.strictExtractorMode === true,

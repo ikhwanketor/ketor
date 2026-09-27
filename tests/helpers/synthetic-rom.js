@@ -15,10 +15,16 @@ const CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,!?';
 const HEADER = [0x01, 0x00];
 const TRAILER = [0x05, 0x09, 0x0A];
 
+/* The tail of a message has to read like words. The extraction list keeps only texts a
+   person could read, and a random draw of letters produces consonant piles ("HGTRD") that
+   no language written in this alphabet has, which would make the fixture noise rather than
+   a message. Syllables are how the real roms look to the same test. */
+const SYLLABLES = ['BA', 'DE', 'FI', 'GO', 'KU', 'LA', 'ME', 'NI', 'PO', 'RU', 'SA', 'TE', 'VI', 'WA', 'ZO', 'GA', 'HE', 'JO'];
+
 function sentence(index, length) {
   let out = 'MESSAGE ' + String(index + 100).padStart(3, '0') + ' SAYS ';
   while (out.length < length - 1) {
-    out += CHARS[(index * 7 + out.length * 3) % CHARS.length];
+    out += SYLLABLES[(index * 7 + out.length * 3) % SYLLABLES.length] + (out.length % 5 === 0 ? ' ' : '');
   }
   return out.slice(0, length - 1) + '.';
 }

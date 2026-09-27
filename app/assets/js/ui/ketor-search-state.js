@@ -92,7 +92,10 @@
       enableDteMteCompression: true,
       enableTextDecompression: false,
       includeCompressedReadOnly: false,
-      strictExtractorMode: false
+      strictExtractorMode: false,
+      /* Show only texts a person could read. See readableScore below; a caller that wants
+         everything (a symbol table, a Japanese table the Latin test cannot judge) sets false. */
+      readableOnly: true
     },
     texts: [],
     isExtracting: false,
@@ -850,6 +853,55 @@
     return readsLikeText(entry) ? entry : null;
   }
 
+  /* Can a person read this?
+     The extractor has judged its own finds with a language score since the NES work
+     (retroQualityFilter / retroLanguageScore in core.js): bracket token ratio, letter ratio,
+     common words, digraph hits, and a penalty for runs of one character. That judgement only
+     ran for the retro pipelines, so a GBA or NDS rom handed its graphics and font tables to
+     the list as text. This is the same idea, applied to the list itself so it works for every
+     console: a text is worth showing when it is mostly letters, holds words, has vowels in
+     them, and is not a run of one character or a pile of unnamed codes. It is language blind
+     on purpose - it asks for letters and words, not for English - so a translation project in
+     any Latin script passes, and a caller that wants everything (a Japanese table, a symbol
+     table) can ask for it with extractionOptions.readableOnly === false. */
+  function humanReadable(en) {
+    var s = String((en && (en.originalText !== undefined ? en.originalText : en.text)) || '');
+    if (!s) return false;
+    /* Codes the table named are structure, not content: [SPACE], [END], <0000>. */
+    var body = s.replace(/\[[^\]]*\]/g, ' ').replace(/<[^>]*>/g, ' ').replace(/\{[^}]*\}/g, ' ')
+      .replace(/[\r\n\t]/g, ' ');
+    var letters = (body.match(/[A-Za-z]/g) || []).length;
+    var digits = (body.match(/[0-9]/g) || []).length;
+    var spaces = (body.match(/ /g) || []).length;
+    /* Punctuation is how a sentence breathes ("Oh...Mmm......" is a real line), so only
+       characters outside the printable set count against a text: accented bytes and the
+       control bytes a table could not name. */
+    var odd = (body.match(/[^A-Za-z0-9 .,!?'"():;%&*+\-\/]/g) || []).length;
+    var vowels = (body.match(/[AEIOUaeiou]/g) || []).length;
+    if (letters < 3) return false;
+    /* Glyph soup: the bytes were never letters to begin with. */
+    if (letters / Math.max(1, letters + digits + odd) < 0.55) return false;
+    /* Consonant soup: "2lCFYhR" has no vowel because it is not a word. */
+    if (vowels === 0) return false;
+    /* A run of five consonants cannot be said out loud; every language written in the
+       Latin alphabet keeps them shorter than that ("psRFra@F0a0" is data). */
+    if (/[B-DF-HJ-NP-TV-Zb-df-hj-np-tv-z]{5,}/.test(body)) return false;
+    /* Without a space the whole text has to be one word a person could say, which is
+       also how a menu label or a shout ("Congratulations!") stays in the list. */
+    if (spaces === 0) {
+      if (vowels / letters < 0.2) return false;
+      var lower = (body.match(/[a-z]/g) || []).length;
+      if (letters >= 10 && lower / letters < 0.5) return false;
+    }
+    return true;
+  }
+
+  /* Is the readable filter on? On by default; a caller can ask for everything. */
+  function readableOnlyOn() {
+    var opts = _state.extractionOptions || {};
+    return opts.readableOnly !== false;
+  }
+
   /* Does this read like a message? The same test the tables are judged with: long
      enough, and enough letters to be words rather than bytes. */
   function readsLikeText(en) {
@@ -950,6 +1002,11 @@
       if (Number.isFinite(s) && byStart[s] === en) startsInOrder.push(s);
     });
     startsInOrder.sort(function (a, b) { return a - b; });
+
+    /* The readable filter, applied once at the end so every path above is covered. */
+    var readableFilter = readableOnlyOn()
+      ? function (en) { return humanReadable(en); }
+      : function () { return true; };
 
     var keep = [];
     var taken = Object.create(null);
@@ -1082,20 +1139,33 @@
           if (made) tableKeep.push(made);
         }
       }
-      var readable = tableSamples.filter(readsLikeText).length;
+      /* A table whose own samples are not readable is a graphics or font table wearing a
+       pointer shape: with the readable filter on it is judged by the same test the list
+       uses, which is what keeps tile fragments out. */
+      var sampleTest = readableOnlyOn() ? humanReadable : readsLikeText;
+      var readable = tableSamples.filter(sampleTest).length;
       if (tableSamples.length === 0 || readable / tableSamples.length < 0.6) { droppedUnreadable++; return; }
       tableKeep.forEach(function (en) {
+        if (!readableFilter(en)) return;
         var at = Number(en.startByte);
         if (!taken[at]) { taken[at] = true; keep.push(en); }
       });
     });
-    _recordsNote = keep.length + ' record(s) from ' + considered + ' table(s) of ' + found.length +
+    if (readableOnlyOn()) {
+      var beforeFilter = 0;
+      entries.forEach(function (en) { if (!readableFilter(en)) beforeFilter++; });
+      if (beforeFilter > 0) _recordsNote = 'readable only, ' + beforeFilter + ' unreadable run(s) left out; ';
+    }
+    _recordsNote += keep.length + ' record(s) from ' + considered + ' table(s) of ' + found.length +
       (droppedUnreadable > 0 ? ', ' + droppedUnreadable + ' dropped as unreadable' : '');
     /* Fewer records than a table needs to be a table means the evidence is too thin
        to cut the scanned list down; the user gets what the scan found. */
     if (keep.length < 8) {
       _recordsNote = 'only ' + _recordsNote + ', too few to cut the list with';
-      return entries;
+      /* With no table to cut the list with the scan's runs are all there is - and the
+         readable filter still applies to them, because a run of tile data is not text on
+         any console. A caller who wants the raw scan asks for it with readableOnly false. */
+      return entries.filter(readableFilter);
     }
     keep.sort(function (a, b) { return Number(a.startByte) - Number(b.startByte); });
     return keep;
