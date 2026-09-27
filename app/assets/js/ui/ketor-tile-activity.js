@@ -234,6 +234,31 @@
     return Number.isFinite(o) ? o : 0;
   }
 
+  /* A window of the ROM at a base the caller names, with the patches applied. These are
+     the bytes an edit has to compare against and write to: the loaded file plus what the
+     hex patch layer already holds; a copy of the file alone would lose a painted pixel.
+     regionWindow() is this for the base the editor is looking at; an export or an import
+     names a base of its own, which is why it is a function and not a second branch. */
+  function windowBytesAt(start, size) {
+    var C = K.core;
+    var src = romBytes();
+    if (!src || !C || typeof C.tileSize !== 'function') return null;
+    var from = Math.max(0, Math.floor(Number(start) || 0));
+    var end = Math.min(src.length, from + Math.max(0, Math.floor(Number(size) || 0)));
+    if (!(end > from)) return null;
+    var out = src.slice(from, end);
+    var patches = patchesMap();
+    var keyParts = [];
+    Object.keys(patches).forEach(function (k) {
+      var off = parseInt(k, 10);
+      if (off >= from && off < end) {
+        out[off - from] = patches[k] & 0xFF;
+        keyParts.push(k + '=' + (patches[k] & 0xFF));
+      }
+    });
+    return { start: from, bytes: out, key: from + ':' + out.length + ':' + keyParts.join(',') };
+  }
+
   /* The visible tiles with the current patches applied. Without this the canvas
      would redraw the untouched ROM and a painted pixel would vanish. */
   function regionWindow() {
@@ -251,25 +276,31 @@
         key: 'compressed:' + gs.offset + ':' + slice.length + ':' + (gs.version || 0)
       };
     }
-    var src = romBytes();
-    if (!src || !C || typeof C.tileSize !== 'function') return null;
-    var start = windowStart();
     /* Room for as many tiles as the sheet shows at the step the depth and the stride
        ask for, which is the format's own tile size until either of them changes. */
-    var size = tilePitch() * _state.tiles;
-    var end = Math.min(src.length, start + size);
-    if (!(end > start)) return null;
-    var out = src.slice(start, end);
-    var patches = patchesMap();
-    var keyParts = [];
-    Object.keys(patches).forEach(function (k) {
-      var off = parseInt(k, 10);
-      if (off >= start && off < end) {
-        out[off - start] = patches[k] & 0xFF;
-        keyParts.push(k + '=' + (patches[k] & 0xFF));
-      }
-    });
-    return { start: start, bytes: out, key: start + ':' + out.length + ':' + keyParts.join(',') };
+    return windowBytesAt(windowStart(), tilePitch() * _state.tiles);
+  }
+
+  /* The bytes an export reads and an import writes, at a base the caller names. While a
+     compressed graphic is open the editor edits its decompressed copy, so a base that
+     names that stream is served from the copy: an import there lands in the copy and goes
+     to the ROM through writeBackCompressed, exactly where a painted pixel goes. */
+  function imageWindowAt(at, size) {
+    var C = K.core;
+    var gs = _state.graphicSource;
+    if (gs && gs.data && Number(at) === Number(gs.offset)) {
+      var from = gs.dataOffset || 0;
+      if (!(gs.data.length > from)) return null;
+      var visible = Math.min(gs.data.length - from, Math.max(0, Math.floor(Number(size) || 0)));
+      var slice = gs.data.slice(from, from + visible);
+      return {
+        start: gs.offset,
+        bytes: slice,
+        compressed: { offset: gs.offset, label: gs.label, size: gs.size, dataOffset: gs.dataOffset || 0 },
+        key: 'compressed:' + gs.offset + ':' + slice.length + ':' + (gs.version || 0)
+      };
+    }
+    return windowBytesAt(at, size);
   }
 
   /* Where tile n starts inside the window: the step the depth and the stride ask for,
@@ -291,10 +322,11 @@
     return windowStart() + tileWindowOffset(tileIndex, C);
   }
 
-  /* Writes one pixel through the Hex Editor patch layer. */
-  function setPixel(tileIndex, x, y, colour) {
+  /* Writes one pixel of a tile in one window through the Hex Editor patch layer. The
+     window is an argument because an import writes tiles the editor may not have on
+     screen; a painted pixel hands in regionWindow(), so both take the same path. */
+  function setPixelInWindow(win, tileIndex, x, y, colour) {
     var C = K.core;
-    var win = regionWindow();
     if (!win || !C || typeof C.encodeTile !== 'function') return false;
     var fmt = _state.format;
     var size = C.tileSize(fmt);
@@ -316,6 +348,11 @@
       for (var i = 0; i < encoded.length; i++) {
         if (gs.data[from + rel + i] === encoded[i]) continue;
         gs.data[from + rel + i] = encoded[i];
+        /* The window is the snapshot the pixels were decoded from; an import paints a
+           whole tile through it, so it has to see the byte that was just written.
+           Otherwise the second pixel of a 4bpp byte would be encoded against the tile as
+           it was before the first one and undo it. */
+        win.bytes[rel + i] = encoded[i];
         changed++;
       }
       if (!changed) return false;
@@ -331,12 +368,23 @@
     var written = 0;
     for (var i = 0; i < encoded.length; i++) {
       if (encoded[i] === (win.bytes[rel + i] & 0xFF)) continue;
-      if (K.hex && K.hex.setByte && K.hex.setByte(base + i, encoded[i])) written++;
+      if (K.hex && K.hex.setByte && K.hex.setByte(base + i, encoded[i])) {
+        written++;
+        /* The window is a snapshot, and an import paints pixel after pixel into one of
+           them: keep it in step with the byte just written so the second pixel of a 4bpp
+           byte is encoded against what the ROM now holds instead of overwriting it. */
+        win.bytes[rel + i] = encoded[i];
+      }
     }
     if (written && x >= 0) {
       _set({ status: 'Pixel (' + x + ',' + y + ') colour ' + value + ' written: ' + written + ' byte(s) at 0x' + hex6(base) + '.' });
     }
     return written > 0;
+  }
+
+  /* A painted pixel is the window the editor is looking at. */
+  function setPixel(tileIndex, x, y, colour) {
+    return setPixelInWindow(regionWindow(), tileIndex, x, y, colour);
   }
 
   /* Which pixels of a tile one byte covers, so the Hex Editor cursor can be
@@ -532,12 +580,24 @@
      to free space and every pointer that named the old address is redirected. */
   var _writeTimer = null;
 
+  /* How far the patch layer will write: the loaded file plus whatever was appended to it.
+     A move that plans to land past this is a move whose every byte would be refused, so
+     the plan has to be checked against it before anything is applied. */
+  function patchableLength(bytes) {
+    if (K.hex && typeof K.hex.imageLength === 'function') {
+      var length = Number(K.hex.imageLength());
+      if (Number.isFinite(length) && length > 0) return length;
+    }
+    return bytes ? bytes.length : 0;
+  }
+
   function scheduleCompressedWrite() {
     if (_writeTimer) global.clearTimeout(_writeTimer);
     _writeTimer = global.setTimeout(function () { _writeTimer = null; writeBackCompressed(); }, 450);
   }
 
-  function writeBackCompressed() {
+  function writeBackCompressed(options) {
+    var opts = options || {};
     var C = K.core;
     var gs = _state.graphicSource;
     var bytes = romBytes();
@@ -557,10 +617,24 @@
       });
       return { inPlace: true, wrote: wrote, compressedSize: enc.compressedSize };
     }
-    var plan = C.planRelocation(bytes, enc.bytes, { system: consoleProfile().id, oldOffset: gs.offset, align: 4 });
+    var plan = C.planRelocation(bytes, enc.bytes, {
+      system: consoleProfile().id, oldOffset: gs.offset, align: 4,
+      /* A move has to land where the patch layer can write it, and that is inside the
+         image it holds. An import that made a graphic grow asks for the free space inside
+         the file with opts.preferInside. */
+      preferInside: opts.preferInside === true
+    });
     if (!plan.ok) {
       _set({ status: 'The new stream is ' + enc.compressedSize + ' bytes and no longer fits at 0x' + hex6(gs.offset) + '. It could not be moved: ' + plan.reason + '. The edit stays in the editor; nothing was written.' });
       return plan;
+    }
+    /* An append lands past the last byte the patch layer will accept, so every write of
+       it would be refused one by one while the status claimed a move. Refusing here
+       leaves the file exactly as it was, which is what "nothing was written" means. */
+    var limit = patchableLength(bytes);
+    if (plan.newOffset + plan.bytes > limit) {
+      _set({ status: 'The new stream is ' + enc.compressedSize + ' bytes and no longer fits at 0x' + hex6(gs.offset) + '. It would have to be appended past the end of the file (0x' + hex6(plan.newOffset) + '), where the patch layer cannot write. The edit stays in the editor; nothing was written.' });
+      return { ok: false, reason: 'no room inside the file', newOffset: plan.newOffset, bytes: plan.bytes };
     }
     var written = C.applyPlan(plan, function (offset, value) { return K.hex.setByte(offset, value); });
     _set({
@@ -902,12 +976,7 @@
     if (!text) { _set({ status: 'No palette loaded.' }); return; }
     var base = (String(_state.paletteName || 'palette')).replace(/\.[^.]+$/, '');
     var name = base + (Number.isFinite(Number(_state.paletteOffset)) ? '_0x' + hex6(_state.paletteOffset) : '') + '.pal';
-    var blob = new Blob([text], { type: 'text/plain' });
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement('a');
-    a.href = url; a.download = name;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    downloadBlob([text], 'text/plain', name);
     _set({ status: 'Exported ' + name + '.' });
   }
 
@@ -922,6 +991,213 @@
       reader.onload = function () { parsePaletteText(String(reader.result), file.name); };
       reader.onerror = function () { _set({ status: 'Could not read ' + file.name + '.' }); };
       reader.readAsText(file);
+    };
+    input.click();
+  }
+
+  /* ---------- PNG: the sheet out, a picture in ---------- */
+
+  /* The one download in this activity: a Blob, an anchor and a click. The palette export
+     has always worked this way, and the PNG export reuses it so both files leave the same
+     way and a test has one thing to watch. */
+  function downloadBlob(parts, type, name) {
+    var blob = new Blob(parts, { type: type });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  /* The colours an image is painted with and read back into: the palette the editor is
+     showing, or the sixteen the palette offset names. No palette means no import - see
+     importTilesPng - because every colour would otherwise land on index 0. */
+  function imagePalette() {
+    if (_state.palette && _state.palette.length) return _state.palette;
+    /* No offset means no palette at all: Number(null) is 0, and reading sixteen colours
+       out of the first bytes of the ROM is not a palette anyone asked for. */
+    if (_state.paletteOffset === null || _state.paletteOffset === undefined) return null;
+    var off = Number(_state.paletteOffset);
+    return Number.isFinite(off) ? readPaletteAt(off) : null;
+  }
+
+  /* The first count tiles of a window, packed one after another so tilesToRgba reads tile
+     t at t * its size. The sheet may step by a stride of its own, and an export that
+     ignored it would write a different picture from the one on screen. */
+  function packedTiles(win, format, count, step) {
+    var C = K.core;
+    var size = C.tileSize(format);
+    var out = new Uint8Array(count * size);
+    for (var t = 0; t < count; t++) {
+      var from = t * step;
+      out.set(win.bytes.subarray(from, Math.min(win.bytes.length, from + size)), t * size);
+    }
+    return out;
+  }
+
+  /* Export: the tiles of the sheet become a PNG file. tilesToRgba paints the indices with
+     the palette and encodePng writes the chunks - no canvas anywhere - and the bytes go to
+     a download named after the base and the format, so two sheets of one ROM do not
+     overwrite each other. The bytes come back to the caller too, which is what lets a test
+     compare the file with the sheet it came from.
+
+     at names the base: the region the editor has open by default, another offset when a
+     caller asks for one. A compressed graphic exports from its decompressed copy, which is
+     the picture the editor is showing, not the packed stream. */
+  function exportTilesPng(options) {
+    var opts = options || {};
+    var C = K.core;
+    var format = (opts.format === undefined || opts.format === null) ? _state.format : String(opts.format);
+    var at = (opts.at === undefined || opts.at === null) ? windowStart() : Number(opts.at);
+    if (!C || typeof C.tilesToRgba !== 'function' || typeof C.encodePng !== 'function') {
+      _set({ status: 'Image export needs core/tile-image.js and core/png-writer.js.' });
+      return null;
+    }
+    if (!Number.isFinite(at) || at < 0) { _set({ status: 'Export refused: no sheet base.' }); return null; }
+    var size = C.tileSize(format);
+    var step = tilePitch();
+    var count = Math.max(0, Math.floor(Number(_state.tiles) || 0));
+    if (opts.count !== undefined && opts.count !== null) {
+      count = Math.floor(Number(opts.count));
+      if (!isFinite(count) || count < 0) count = 0;
+    }
+    var win = imageWindowAt(at, count * step);
+    var fits = (win && win.bytes.length >= size) ? Math.floor((win.bytes.length - size) / step) + 1 : 0;
+    if (count > fits) count = fits;
+    if (!win || count < 1) { _set({ status: 'Export refused: no whole tile fits at 0x' + hex6(at) + '.' }); return null; }
+
+    var image = C.tilesToRgba(packedTiles(win, format, count, step), { at: 0, format: format, count: count, palette: imagePalette() });
+    if (!image || !image.height) { _set({ status: 'Export refused: ' + format + ' is not a tile format this project knows.' }); return null; }
+    var png = C.encodePng(image.pixels, image.width, image.height);
+    var name = 'tiles_0x' + hex6(at) + '_' + format + '_' + count + 't.png';
+    downloadBlob([png], 'image/png', name);
+    _set({
+      status: 'Exported ' + name + ': ' + count + ' tile(s) from 0x' + hex6(at) + ' as ' + format
+        + ', ' + image.width + 'x' + image.height + '.'
+    });
+    return { bytes: png, name: name, width: image.width, height: image.height, count: count, at: at, format: format };
+  }
+
+  /* The inflate a PNG needs. A browser has none built in: the preview page loads pako from
+     a CDN for exactly this (and core/save-state.js looks in the same place), while a host
+     that has zlib - Node, or an explicit opts.inflate a caller hands in - is used as it
+     is. Nothing is guessed: with none of the three an import cannot read a pixel, and it
+     says so instead of writing a picture nobody asked for. */
+  function inflateFor(provided) {
+    if (typeof provided === 'function') return provided;
+    if (global.pako && typeof global.pako.inflate === 'function') {
+      return function (bytes) { return global.pako.inflate(bytes); };
+    }
+    if (typeof require === 'function') {
+      try {
+        var zlib = require('zlib');
+        return function (bytes) { return zlib.inflateSync(Buffer.from(bytes)); };
+      } catch (error) { /* no zlib here: the caller has to bring an inflate */ }
+    }
+    return null;
+  }
+
+  /* Write a compressed graphic back now instead of waiting for the debounce, so an import
+     can say what happened - written, moved, or refused - before it returns. */
+  function writeBackNow(options) {
+    if (_writeTimer) { global.clearTimeout(_writeTimer); _writeTimer = null; }
+    return writeBackCompressed(options);
+  }
+
+  /* Import: a PNG file becomes tiles at a base. The picture is read with the project's own
+     reader - pngChunks and decodeScreenshot, the two the save state tab already runs -
+     turned into tile bytes by rgbaToTiles, and every pixel then goes into the ROM through
+     setPixel and writeBackCompressed. That is the one path a byte takes: an imported tile
+     is a hex patch like a painted one and takes part in Undo, Clear and Export, and a
+     compressed graphic is edited in its decompressed copy and written back the way a
+     painted pixel is.
+
+     Nothing is written when the file is not a PNG, when no inflate is available, when no
+     palette is loaded (every colour would land on index 0), when the tiles do not fit the
+     ROM, or when the write back refuses a stream that grew past its budget and could not
+     be moved. In every one of those cases the status says why. */
+  function importTilesPng(bytes, options) {
+    var opts = options || {};
+    var C = K.core;
+    var at = (opts.at === undefined || opts.at === null) ? windowStart() : Number(opts.at);
+    var format = (opts.format === undefined || opts.format === null) ? _state.format : String(opts.format);
+    if (!bytes || !bytes.length) { _set({ status: 'Import refused: no file bytes.' }); return null; }
+    if (!C || !C.saveState || typeof C.saveState.pngChunks !== 'function' || typeof C.saveState.decodeScreenshot !== 'function' || typeof C.rgbaToTiles !== 'function' || typeof C.tileSize !== 'function') {
+      _set({ status: 'Image import needs core/save-state.js and core/tile-image.js.' });
+      return null;
+    }
+    var chunks = C.saveState.pngChunks(bytes);
+    if (!chunks) { _set({ status: 'That file is not a PNG (no signature), so nothing was written.' }); return null; }
+    var inflate = inflateFor(opts.inflate);
+    if (!inflate) { _set({ status: 'Import PNG needs pako: this page has no inflate, so nothing was written.' }); return null; }
+    var shot = C.saveState.decodeScreenshot(bytes, chunks, inflate);
+    if (!shot) { _set({ status: 'The PNG could not be read (it is not 8 bit RGB/RGBA, or its stream is damaged), so nothing was written.' }); return null; }
+    var palette = imagePalette();
+    if (!palette) { _set({ status: 'Import needs a palette: load one first so the PNG colours can be matched to it. Nothing was written.' }); return null; }
+    if (!Number.isFinite(at) || at < 0) { _set({ status: 'Import refused: no sheet base.' }); return null; }
+    var pngTiles = Math.floor(shot.width / 8) * Math.floor(shot.height / 8);
+    if (!pngTiles) { _set({ status: 'The PNG holds no whole 8x8 tile, so nothing was written.' }); return null; }
+
+    var count = Math.min(pngTiles, Math.max(1, Math.floor(Number(_state.tiles) || 1)));
+    if (opts.count !== undefined && opts.count !== null) {
+      count = Math.floor(Number(opts.count));
+      if (!isFinite(count) || count < 0) count = 0;
+    }
+    if (count > pngTiles) count = pngTiles;
+    if (count < 1) { _set({ status: 'Import refused: no tile to write.' }); return null; }
+
+    var tiles = C.rgbaToTiles(shot.pixels, { width: shot.width, height: shot.height, format: format, palette: palette });
+    if (!tiles || !tiles.count) { _set({ status: 'Import refused: ' + format + ' is not a tile format this project knows.' }); return null; }
+    var size = C.tileSize(format);
+    var step = tilePitch();
+    var win = imageWindowAt(at, (count - 1) * step + size);
+    if (!win) { _set({ status: 'Import refused: 0x' + hex6(at) + ' is outside the ROM. Nothing was written.' }); return null; }
+    var fits = win.bytes.length >= size ? Math.floor((win.bytes.length - size) / step) + 1 : 0;
+    if (count > fits) { _set({ status: 'Import refused: only ' + fits + ' tile(s) fit in the ROM at 0x' + hex6(at) + '. Nothing was written.' }); return null; }
+
+    var pixels = 0, changed = 0;
+    for (var t = 0; t < count; t++) {
+      var grid = C.decodeTile(tiles.bytes, t * size, format);
+      if (!grid) break;
+      for (var y = 0; y < 8; y++) {
+        for (var x = 0; x < 8; x++) {
+          pixels++;
+          if (setPixelInWindow(win, t, x, y, grid[y][x])) changed++;
+        }
+      }
+    }
+    var writeBack = null;
+    if (win.compressed) {
+      if (!changed) {
+        _set({ status: 'Imported ' + count + ' tile(s) at 0x' + hex6(at) + ': the decompressed copy already holds them, so there is nothing to write back.' });
+      } else {
+        _set({ status: 'Imported ' + count + ' tile(s) at 0x' + hex6(at) + ': ' + changed + ' pixel(s) changed in the decompressed copy; writing it back...' });
+        /* The import may have made the graphic grow, so the move goes into free space
+           inside the file: an appended block is past the last byte the patch layer takes. */
+        writeBack = writeBackNow({ preferInside: true });
+      }
+    } else {
+      _set({
+        status: 'Imported ' + count + ' tile(s) at 0x' + hex6(at) + ' as ' + format + ': ' + changed + ' of '
+          + pixels + ' pixel(s) changed, written as hex patches.'
+      });
+    }
+    return { at: at, format: format, count: count, pixels: pixels, changed: changed, writeBack: writeBack, bytes: tiles.bytes };
+  }
+
+  /* The picker behind the Import PNG button: the file is read as an ArrayBuffer and handed
+     to the importer, which stays a plain function a test can call without a FileReader. */
+  function importTilesPngDialog() {
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.png,image/png';
+    input.onchange = function () {
+      var file = input.files && input.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function () { importTilesPng(new Uint8Array(reader.result), {}); };
+      reader.onerror = function () { _set({ status: 'Could not read ' + file.name + '.' }); };
+      reader.readAsArrayBuffer(file);
     };
     input.click();
   }
@@ -2013,6 +2289,19 @@
           title: 'Paste the copied region into the selected tile (Ctrl+V while the canvas has the focus)',
           onClick: pasteTile
         }, 'Paste'),
+        /* The sheet as a file: out as a PNG (palette colours, no canvas) and back in from
+           one. Both work on the region the editor has open, and the import writes every
+           pixel through setPixel, so an imported tile is a hex patch like a painted one. */
+        e('button', {
+          type: 'button', className: TB + ' secondary', disabled: !win,
+          title: 'Write the tiles of the sheet to a PNG file: the palette colours, no canvas involved',
+          onClick: function () { exportTilesPng({}); }
+        }, 'Export PNG'),
+        e('button', {
+          type: 'button', className: TB + ' secondary', disabled: !win,
+          title: 'Read a PNG file into the tiles at the sheet base. The zlib stream needs pako; every pixel lands as a hex patch',
+          onClick: importTilesPngDialog
+        }, 'Import PNG'),
         e('button', {
           type: 'button', className: TB + (st.inspector === false ? ' secondary' : ''),
           title: 'Show or hide the inspector: palette, paste box and the state of a compressed graphic',
@@ -2711,6 +3000,7 @@
     parseOffsetInput: parseOffsetInput, savedScreens: savedScreens, saveCurrentScreen: saveCurrentScreen,
     loadSavedScreen: loadSavedScreen, deleteSavedScreen: deleteSavedScreen,
     writeBackCompressed: writeBackCompressed, scheduleCompressedWrite: scheduleCompressedWrite,
+    exportTilesPng: exportTilesPng, importTilesPng: importTilesPng, importTilesPngDialog: importTilesPngDialog,
     openAt: function (offset, options) { return K.tileOpenAt(offset, options); },
     writeMapEntry: writeMapEntry, mapBucket: mapBucket, renderMap: renderMap, bankPalette: bankPalette,
     decodeMapTile: decodeMapTile, entryTile: entryTile, entryFlipH: entryFlipH, entryFlipV: entryFlipV,
