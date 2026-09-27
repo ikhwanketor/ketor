@@ -591,8 +591,8 @@ const ALLOWLIST = {
     "ketor-tile-activity.js|textarea|placeholder=your name, or two lines|-|-": "Write text on this screen: textarea (placeholder=your name, or two lines) — no tooltip yet; batch 184",
     "ketor-tile-activity.js|input|placeholder=start cell (empty = map cursor)|-|-": "Write text on this screen: input (placeholder=start cell (empty = map cursor)) — no tooltip yet; batch 184",
     "ketor-tile-activity.js|button|Write|kt-btn small|-": "Write text on this screen: \"Write\" button — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|input|value=st.fontBase|-|-#2": "Write text on this screen: input (value=st.fontBase) — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|input|value='0x' + (Number(st.fontFirstCode) || 0).toString(16).toUpperCase()|-|-#2": "Write text on this screen: input (value='0x' + (Number(st.fontFirstCode) || 0).toString(16).toUpperCase()) — no tooltip yet; batch 184",
+    "ketor-tile-activity.js|input|value=st.fontBase|-|-": "Write text on this screen: input (value=st.fontBase) — no tooltip yet; batch 184",
+    "ketor-tile-activity.js|input|value='0x' + (Number(st.fontFirstCode) || 0).toString(16).toUpperCase()|-|-": "Write text on this screen: input (value='0x' + (Number(st.fontFirstCode) || 0).toString(16).toUpperCase()) — no tooltip yet; batch 184",
     "ketor-tile-activity.js|input|placeholder=palette offset|-|-": "Palette: input (placeholder=palette offset) — no tooltip yet; batch 184",
     "ketor-tile-activity.js|button|Load|kt-btn small|-": "Palette: \"Load\" button — no tooltip yet; batch 184",
     "ketor-tile-activity.js|button|Export .pal|kt-btn small secondary|-": "Palette: \"Export .pal\" button — no tooltip yet; batch 184",
@@ -609,12 +609,6 @@ const ALLOWLIST = {
     "ketor-tile-activity.js|select|value=st.tiles|kt-select|-": "select (value=st.tiles) — no tooltip yet; batch 184",
     "ketor-tile-activity.js|input|placeholder=hex offset|-|-": "input (placeholder=hex offset) — no tooltip yet; batch 184",
     "ketor-tile-activity.js|button|Go|kt-btn small|-#3": "\"Go\" button — no tooltip yet; batch 184",
-  },
-
-  /* ---- font: 2 gaps; batch 185 adds the tooltips and deletes every entry below ---- */
-  font: {
-    "ketor-tile-activity.js|input|value=st.fontBase|-|-#1": "input (value=st.fontBase) — no tooltip yet; batch 185",
-    "ketor-tile-activity.js|input|value='0x' + (Number(st.fontFirstCode) || 0).toString(16).toUpperCase()|-|-#1": "input (value='0x' + (Number(st.fontFirstCode) || 0).toString(16).toUpperCase()) — no tooltip yet; batch 185",
   },
 
   /* ---- tables: 25 gaps; batch 186 adds the tooltips and deletes every entry below ---- */
@@ -707,48 +701,8 @@ const ALLOWLIST = {
     "ketor-translate-tab.js|select|value=freeMode ? 'free' : 'custom'|kt-select|-": "select (value=freeMode ? 'free' : 'custom') — no tooltip yet; batch 189",
   },
 
-  /* ---- groups: 6 gaps; batch 190 adds the tooltips and deletes every entry below ---- */
-  groups: {
-    "ketor-groups-panel.js|input|value=editVal|-|-": "input (value=editVal) — no tooltip yet; batch 190",
-    "ketor-search-tab.js|button|key=g.id|-|-": "\"key=g.id\" button — no tooltip yet; batch 190",
-    "ketor-search-tab.js|button|+ New Group...|-|-": "\"+ New Group...\" button — no tooltip yet; batch 190",
-    "ketor-search-tab.js|input|placeholder=Group name (e.g. \"Menu\", \"Battle Lines\")|kt-input|-": "input (placeholder=Group name (e.g. \"Menu\", \"Battle Lines\")) — no tooltip yet; batch 190",
-    "ketor-search-tab.js|button|Cancel|kt-btn secondary|-": "\"Cancel\" button — no tooltip yet; batch 190",
-    "ketor-search-tab.js|button|Create & Assign|kt-btn|-": "\"Create & Assign\" button — no tooltip yet; batch 190",
-  },
-
-  /* ---- chrome: 7 gaps; batch 191 adds the tooltips and deletes every entry below ---- */
-  chrome: {
-    "ketor-editor.js|button|key=a.id|kt-btn|-": "\"key=a.id\" button — no tooltip yet; batch 191",
-    "ketor-kebab-menu.js|button|kt-kebab-chevron|kt-kebab-section-header|-": "\"kt-kebab-chevron\" button — no tooltip yet; batch 191",
-    "ketor-kebab-menu.js|button|key=item.id|kt-dropdown-item|-": "\"key=item.id\" button — no tooltip yet; batch 191",
-    "ketor-menubar.js|button|kt-dropdown-check|kt-dropdown-item|-": "\"kt-dropdown-check\" button — no tooltip yet; batch 191",
-    "ketor-menubar.js|button|key=menu.id|'kt-menubar-item' + (openMenu === menu.id ? ' active' : '')|-": "\"key=menu.id\" button — no tooltip yet; batch 191",
-    "ketor-sidebar.js|button|chevron|'kt-sidebar-section-header' + (collapsed ? ' collapsed' : '')|-": "\"chevron\" button — no tooltip yet; batch 191",
-    "ketor-workbench.js|button|close|icon-btn|-": "\"close\" button — no tooltip yet; batch 191",
-  },
-
-  /* ---- dialog: 2 gaps; batch 192 adds the tooltips and deletes every entry below ---- */
-  dialog: {
-    "ketor-workbench.js|input|checked=props.currentTheme === th.id|-|-": "input (checked=props.currentTheme === th.id) — no tooltip yet; batch 192",
-    "ketor-workbench.js|button|Done|kt-btn secondary|-": "\"Done\" button — no tooltip yet; batch 192",
-  },
-
-  /* ---- patch: 2 gaps; batch 193 adds the tooltips and deletes every entry below ---- */
-  patch: {
-    "ketor-patch-activity.js|button|Export ROM|kt-btn small|-": "\"Export ROM\" button — no tooltip yet; batch 193",
-    "ketor-patch-activity.js|button|Export IPS|kt-btn small secondary|-": "\"Export IPS\" button — no tooltip yet; batch 193",
-  },
-
-  /* ---- about: 1 gap; batch 194 adds the tooltips and deletes every entry below ---- */
-  about: {
-    "ketor-about.js|button|Close|kt-btn secondary|-": "\"Close\" button — no tooltip yet; batch 194",
-  },
-
-  /* ---- panel: 1 gap; batch 195 adds the tooltips and deletes every entry below ---- */
-  panel: {
-    "ketor-panel.js|button|key=tab.id|'kt-panel-tab' + (activeTab === tab.id ? ' active' : '')|-": "\"key=tab.id\" button — no tooltip yet; batch 195",
-  },
+  /* ---- font, groups, chrome, dialog, patch, about and panel: closed by batch 184; the
+     tooltips are in place and their entries were deleted, so the list can only shrink ---- */
 };
 
 /* Every entry of every area, keyed by the audit signature, with the area and the reason

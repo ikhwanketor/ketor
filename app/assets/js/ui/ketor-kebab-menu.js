@@ -86,6 +86,7 @@
       e('button', {
         type: 'button',
         className: 'kt-kebab-section-header',
+        title: 'Show or hide the commands of this section; the menu stays open while you browse',
         onClick: handleToggle,
         'aria-expanded': expanded
       },
@@ -102,6 +103,7 @@
                 key: item.id,
                 type: 'button',
                 className: 'kt-dropdown-item',
+                title: 'Run this command and close the menu; greyed items have no handler registered',
                 disabled: !enabled,
                 onClick: function (ev) {
                   ev.stopPropagation();

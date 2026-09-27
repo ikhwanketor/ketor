@@ -308,6 +308,7 @@
             return e('button', {
               key: g.id,
               type: 'button',
+              title: 'Add every marked row to this group and close the menu; the group panel updates at once',
               onClick: function () { onSelect(g.id); },
               style: {
                 display: 'flex',
@@ -353,6 +354,7 @@
       }),
       e('button', {
         type: 'button',
+        title: 'Create a new group and assign the marked rows to it in one step',
         onClick: onCreate,
         style: {
           display: 'flex',
@@ -415,6 +417,7 @@
             ref: inputRef,
             type: 'text',
             className: 'kt-input',
+            title: 'Name the group here; Enter creates it, Escape closes the dialog',
             placeholder: 'Group name (e.g. "Menu", "Battle Lines")',
             value: name,
             onChange: function (ev) { setName(ev.target.value); },
@@ -429,11 +432,13 @@
           e('button', {
             type: 'button',
             className: 'kt-btn secondary',
+            title: 'Close without creating anything; the marked rows stay unassigned',
             onClick: onClose
           }, 'Cancel'),
           e('button', {
             type: 'button',
             className: 'kt-btn',
+            title: 'Create the group and add the marked rows to it, then close the dialog',
             onClick: submit,
             disabled: !String(name || '').trim()
           }, 'Create & Assign')

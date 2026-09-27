@@ -98,6 +98,7 @@
           e('button', {
             type: 'button',
             className: 'kt-btn secondary',
+            title: 'Close this window and go back to the workbench, leaving the project untouched',
             onClick: onClose
           }, 'Close')
         )

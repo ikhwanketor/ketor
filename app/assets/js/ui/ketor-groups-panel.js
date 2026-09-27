@@ -144,6 +144,7 @@
           ? e('input', {
               ref: editRef,
               type: 'text',
+              title: 'Rename this group: Enter or clicking away saves the new name, Escape keeps the old one',
               value: editVal,
               onChange: function (ev) { setEditVal(ev.target.value); },
               onBlur: commitRename,

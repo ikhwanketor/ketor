@@ -126,6 +126,7 @@
     return e('button', {
       type: 'button',
       className: 'kt-dropdown-item',
+      title: 'Run this command and close the dropdown; the shortcut shown beside it works anywhere',
       disabled: !isEnabled,
       onClick: function (ev) {
         ev.stopPropagation();
@@ -239,6 +240,7 @@
           key: menu.id,
           type: 'button',
           className: 'kt-menubar-item' + (openMenu === menu.id ? ' active' : ''),
+          title: 'Open this menu; once one is open, moving across the bar switches menus',
           onClick: function (ev) { handleTopClick(menu, ev); },
           onMouseEnter: function (ev) { handleTopHover(menu, ev); },
           role: 'menuitem',

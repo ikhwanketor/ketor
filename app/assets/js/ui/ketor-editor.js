@@ -99,9 +99,9 @@
     var onAction = props.onAction || function () { };
 
     var actions = [
-      { id: 'load-rom', label: 'Load ROM' },
-      { id: 'open-project', label: 'Open Project' },
-      { id: 'recent-files', label: 'Recent Files' }
+      { id: 'load-rom', label: 'Load ROM', title: 'Pick a ROM file from disk and open it in the workbench' },
+      { id: 'open-project', label: 'Open Project', title: 'Restore a saved Ketor project: the ROM, table, translations and groups in one file' },
+      { id: 'recent-files', label: 'Recent Files', title: 'Reopen a ROM you worked on lately; the recent list is not wired up yet' }
     ];
 
     var hints = [
@@ -122,6 +122,7 @@
             key: a.id,
             type: 'button',
             className: 'kt-btn',
+            title: a.title,
             onClick: function () { onAction(a.id); }
           }, a.label);
         })

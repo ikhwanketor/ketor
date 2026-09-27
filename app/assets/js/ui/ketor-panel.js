@@ -36,9 +36,9 @@
   var useCallback = React.useCallback;
 
   var PANEL_TABS = [
-    { id: 'session', label: 'Session' },
-    { id: 'log', label: 'Log' },
-    { id: 'problems', label: 'Problems' }
+    { id: 'session', label: 'Session', title: 'Session: tasks, workflow progress and the project the workbench has open' },
+    { id: 'log', label: 'Log', title: 'Log: every message the workbench wrote, with its level and source' },
+    { id: 'problems', label: 'Problems', title: 'Problems: errors and warnings reported while loading, extracting or patching' }
   ];
 
   var SOURCE_WIDTH = 12;
@@ -574,6 +574,7 @@
             key: tab.id,
             type: 'button',
             className: 'kt-panel-tab' + (activeTab === tab.id ? ' active' : ''),
+            title: tab.title,
             onClick: function () { handleTabClick(tab.id); }
           },
             tab.label,

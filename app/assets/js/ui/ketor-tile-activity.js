@@ -3022,12 +3022,14 @@
           e('span', { style: { opacity: 0.7 }, title: 'Tile number that holds the first code of the font' }, 'base'),
           e('input', {
             type: 'number', value: st.fontBase,
+            title: 'Tile that holds the first character of the sheet; change it to line the font up with the table',
             onChange: function (ev) { _set({ fontBase: Math.max(0, Number(ev.target.value) || 0) }); },
             style: { width: 58, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' }
           }),
           e('span', { style: { opacity: 0.7 }, title: 'The code the first tile of the sheet holds, 0x20 when a font starts at the space' }, 'first code'),
           e('input', {
             type: 'text', value: '0x' + (Number(st.fontFirstCode) || 0).toString(16).toUpperCase(),
+            title: 'Character code the first tile stands for; 0x20 when the font starts at the space',
             onChange: function (ev) { _set({ fontFirstCode: parseInt(String(ev.target.value).replace(/^0x/i, ''), 16) || 0 }); },
             style: { width: 52, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' }
           })

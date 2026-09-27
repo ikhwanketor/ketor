@@ -384,6 +384,7 @@
           e('button', {
             type: 'button',
             className: 'icon-btn',
+            title: 'Close the picker and keep the theme that is already applied',
             onClick: props.onClose
           }, Ketor.ui.icon('close', { size: 14 }))
         ),
@@ -394,6 +395,7 @@
                 e('input', {
                   type: 'radio',
                   name: 'kt-theme',
+                  title: 'Apply this theme to the whole workbench right away; the picker stays open',
                   checked: props.currentTheme === th.id,
                   onChange: function () { props.onChange(th.id); }
                 }),
@@ -407,6 +409,7 @@
           e('button', {
             type: 'button',
             className: 'kt-btn secondary',
+            title: 'Close the picker; the theme you clicked stays applied',
             onClick: props.onClose
           }, 'Done')
         )

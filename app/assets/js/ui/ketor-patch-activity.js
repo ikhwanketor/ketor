@@ -148,9 +148,14 @@
         st.appended ? e('span', { style: { opacity: 0.7 } }, 'grown by ' + short(st.appended)) : null,
         patch ? e('span', { style: { opacity: 0.7 } }, 'IPS would be ' + short(patch.bytes.length)) : null,
         e('span', { style: { flex: 1 } }),
-        e('button', { type: 'button', className: 'kt-btn small', disabled: !st.patchCount && !st.appended, onClick: function () { if (K.hex.exportPatchedRom) K.hex.exportPatchedRom(); } }, 'Export ROM'),
+        e('button', {
+          type: 'button', className: 'kt-btn small', disabled: !st.patchCount && !st.appended,
+          title: 'Write the whole image to a file, patches and appended bytes included; needs a change first',
+          onClick: function () { if (K.hex.exportPatchedRom) K.hex.exportPatchedRom(); }
+        }, 'Export ROM'),
         e('button', {
           type: 'button', className: 'kt-btn small secondary', disabled: !patch || !patch.bytes.length,
+          title: 'Write only the changed bytes as an IPS patch another tool can apply to the clean ROM',
           onClick: function () {
             var built = buildPatch();
             if (!built) return;

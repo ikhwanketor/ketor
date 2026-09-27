@@ -81,6 +81,7 @@
       e('button', {
         type: 'button',
         className: 'kt-sidebar-section-header' + (collapsed ? ' collapsed' : ''),
+        title: 'Collapse or expand this sidebar section; the state is kept while the activity stays open',
         onClick: onToggle,
         'aria-expanded': !collapsed
       },
