@@ -805,6 +805,17 @@
         system: profile.name || _state.romSystem || 'Unknown',
         pipelineId: profile.pipelineId,
         terminator: (Array.isArray(profile.terminator) && profile.terminator.length) ? profile.terminator : [0x00],
+        /* A small table is still a table. The intro of Kingdom Hearts names its
+           records from a run of eight four byte pointers spaced sixteen bytes apart,
+           and the default minimum of sixteen entries hid it - the intro line then
+           fell out of the list even though the game names it. */
+        minEntries: 8,
+        keepUnconfirmed: true,
+        /* The detector hands back the six strongest tables by default, which is the
+           right answer for "which table does this rom use" and the wrong one for
+           "where are this rom's records": a small table further down the list is still
+           a table. */
+        maxResults: 64,
         textOffsets: offsets
       });
     } catch (_) { return entries; }
@@ -826,7 +837,7 @@
          at least one mapped text sitting on it - is taken too: on Kingdom Hearts the
          intro's own table is like that, because its records do not all open with the
          same number of header bytes, and dropping it lost the intro line. */
-      var structural = Number(table.spansBad) === 0 && Number(table.count) >= 16 && Number(table.matchedTexts) >= 1;
+      var structural = Number(table.spansBad) === 0 && Number(table.count) >= 6 && Number(table.matchedTexts) >= 2;
       if (table.confirmed !== true && !structural) return;
       /* A record can hold a header before its first character, and the width of that
          header is not the same for every record: on Kingdom Hearts the intro starts
@@ -837,6 +848,7 @@
          the next record starts, or what was found is a run that runs over the record
          and cannot be its text. */
       var targets = table.entries.map(Number).filter(Number.isFinite).sort(function (a, b) { return a - b; });
+      var tableKeep = [];
       for (var ti = 0; ti < targets.length; ti++) {
         var base = targets[ti];
         var nextTarget = (ti + 1 < targets.length) ? targets[ti + 1] : base + 0x400;
@@ -848,11 +860,22 @@
           if (base + d + length > nextTarget) continue;
           if (!best || length > (Number(best.byteLength) || 0)) best = hit;
         }
-        if (best) {
-          var at = Number(best.startByte);
-          if (!taken[at]) { taken[at] = true; keep.push(best); }
-        }
+        if (best) tableKeep.push(best);
       }
+      /* A table is only as good as the records it names. A run of words that happens to
+         point into font or graphic data produces records like 'Hh@x' and 'I  "P', and
+         those are not messages; what separates the two is that most records of a real
+         table read like text. */
+      var readable = tableKeep.filter(function (en) {
+        var s = String((en && en.originalText) || '');
+        var letters = (s.match(/[A-Za-z]/g) || []).length;
+        return s.length >= 6 && letters >= Math.max(3, Math.floor(s.length * 0.4));
+      }).length;
+      if (tableKeep.length === 0 || readable / tableKeep.length < 0.6) return;
+      tableKeep.forEach(function (en) {
+        var at = Number(en.startByte);
+        if (!taken[at]) { taken[at] = true; keep.push(en); }
+      });
     });
     /* Fewer records than a table needs to be a table means the evidence is too thin
        to cut the scanned list down; the user gets what the scan found. */

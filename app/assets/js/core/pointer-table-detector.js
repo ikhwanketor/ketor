@@ -104,7 +104,14 @@
       var target = -1;
       if (mode === 'base') {
         /* With an address mask the masked word IS the rom offset: on the GBA both
-           0x08xxxxxx and the 0x09 mirror decode to the same byte. */
+           0x08xxxxxx and the 0x09 mirror decode to the same byte.
+           Note for a later batch: this reading only holds while the offset stays under
+           sixteen megabytes, and Kingdom Hearts is a 32 megabyte rom whose pointers
+           carry the base. The build subtracts the base and finds the table at 0x86AB44
+           that this path does not see. Reading both ways was tried here, and a
+           measurement on the real rom showed the extractor did not need it (the limit
+           that hid the table was maxResults), so it was taken back out rather than
+           shipped unproven. */
         target = rules.addressMask ? decoded : (decoded - rules.base);
       } else if (mode === 'raw') {
         target = v;
