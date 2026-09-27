@@ -144,4 +144,73 @@ suite.test('a pointer that carries the base is read past sixteen megabytes', asy
   assertEqual(Number(named[0].at), fixture.table.at, 'and it is the table the records were written into');
 });
 
+suite.test('the shape of the Kingdom Hearts table is read: sixteen byte stride, mixed headers', async function (t) {
+  /* This is the intro table of Kingdom Hearts: 0x86AB44 holds a four byte pointer and
+     twelve bytes of metadata per entry, sixteen bytes apart, and its records do not all
+     open the same way - one starts with the letter, the next with a two byte code. Both
+     of those are the reason the intro line was missing from the list once already, so
+     the shape is pinned here: the detector has to find the table, and the list has to be
+     its records. */
+  const rom = new Uint8Array(0x40000);
+  rom.fill(0x11, 0x1000, 0x34000);
+  const expected = [];
+  const heads = [];
+  /* Eight bigger, plainer tables elsewhere in the rom, so the detector reports more
+     than the six strongest - which is exactly what hid the intro's table on the real
+     cartridge: it is small, and its records do not agree on one header width, so it
+     sorts last and the default limit of six cut it off. */
+  for (let d = 0; d < 8; d++) {
+    const tableAt = 0x8000 + d * 0x100;
+    for (let e = 0; e < 24; e++) {
+      const head = 0x10000 + d * 0x800 + e * 0x20;
+      const text = 'DECOY ' + String.fromCharCode(0x41 + d) + ' LINE ' + String.fromCharCode(0x41 + e) + ' TEXT';
+      rom[head] = 0x01;
+      rom[head + 1] = 0x00;
+      for (let k = 0; k < text.length; k++) rom[head + 2 + k] = text.charCodeAt(k);
+      rom[head + 2 + text.length] = 0x00;
+      expected.push(head + 2);
+      const pointer = (0x08000000 + head) >>> 0;
+      const site = tableAt + e * 4;
+      rom[site] = pointer & 0xFF;
+      rom[site + 1] = (pointer >>> 8) & 0xFF;
+      rom[site + 2] = (pointer >>> 16) & 0xFF;
+      rom[site + 3] = (pointer >>> 24) & 0xFF;
+    }
+  }
+  for (let i = 0; i < 10; i++) {
+    const head = 0x2000 + i * 0x80;
+    const text = 'MESSAGE ' + String.fromCharCode(0x41 + i) + ' SAYS HELLO';
+    let at = head;
+    if (i % 2 === 1) { rom[head] = 0x07; rom[head + 1] = 0x00; at = head + 2; }
+    for (let k = 0; k < text.length; k++) rom[at + k] = text.charCodeAt(k);
+    rom[at + text.length] = 0x00;
+    expected.push(at);
+    heads.push(head);
+    /* the entry: the pointer, then twelve bytes of metadata that are not pointers */
+    const site = 0x1000 + i * 16;
+    const pointer = (0x08000000 + head) >>> 0;
+    rom[site] = pointer & 0xFF;
+    rom[site + 1] = (pointer >>> 8) & 0xFF;
+    rom[site + 2] = (pointer >>> 16) & 0xFF;
+    rom[site + 3] = (pointer >>> 24) & 0xFF;
+    rom[site + 4] = 0x01; rom[site + 5] = 0x00; rom[site + 6] = 0x2D; rom[site + 7] = 0x00;
+    rom[site + 8] = 0x01; rom[site + 9] = 0x00; rom[site + 10] = 0x00; rom[site + 11] = 0x00;
+    rom[site + 12] = 0x39; rom[site + 13] = 0x03; rom[site + 14] = 0x00; rom[site + 15] = 0x00;
+  }
+  const noiseAt = 0x3A000;
+  for (let i = 0; i < 0x2000; i++) rom[noiseAt + i] = 0x61 + (i % 26);
+  const table = {
+    singleByte: (function () { const m = {}; for (let i = 0; i < 26; i++) m[0x41 + i] = String.fromCharCode(0x41 + i); m[0x20] = '[SPACE]'; m[0x00] = '[END]'; return m; })(),
+    multiByte: {}, entryCount: 28, name: 'synthetic.tbl'
+  };
+  const st = await extract(rom, table);
+  const texts = st.texts || [];
+  const starts = texts.map(function (x) { return Number(x.startByte); });
+  expected.forEach(function (at) {
+    assert(starts.indexOf(at) >= 0,
+      'the record whose text starts at 0x' + at.toString(16) + ' is in the list: ' + st.status);
+  });
+  assertEqual(texts.length, expected.length, 'and the list is those records and nothing else: ' + st.status);
+});
+
 module.exports = { suite: suite };
