@@ -282,11 +282,15 @@ suite.test('a 4bpp sheet still reads sixteen colours and still refuses entry 200
   t.assertDeepEqual(diffOffsets(source, K.hex.getPatchedBytes()), [], 'and not one byte of the rom moved');
 
   /* The same words at the same offset: what the format changes is how many of them are the
-     palette. The 2bpp and 1bpp layouts keep their sixteen entry block too. */
+     palette. Batch 169 made the 2bpp and 1bpp layouts ask for the colours their own codec
+     format has - four and two - instead of the sixteen entry block this case used to pin for
+     them. That old pin was the bug (paletteColourCount answered 16 for every layout under 256
+     colours), it is the approved exception of this batch, and no other assertion of this
+     suite moved. */
   K.tile.setFormat('gb-2bpp');
-  t.assertEqual(K.tile.paletteColours(), 16, 'a 2bpp sheet reads the same sixteen entry block');
+  t.assertEqual(K.tile.paletteColours(), 4, 'a 2bpp sheet asks for its own four colours');
   K.tile.setFormat('gb-1bpp');
-  t.assertEqual(K.tile.paletteColours(), 16, 'and so does a 1bpp one');
+  t.assertEqual(K.tile.paletteColours(), 2, 'and a 1bpp sheet for its two');
   K.tile.setFormat('gba-8bpp');
   t.assertEqual(K.tile.paletteColours(), 256, 'the same sheet read as 8bpp asks for 256 entries');
   t.assertEqual(K.tile.readPaletteAt(PALETTE_AT).length, 256, 'and reads all 256 words');

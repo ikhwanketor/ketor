@@ -17,8 +17,10 @@
      byte it sits on. The two views always agree.
    - The region and the format are detected by score, but a candidate
      is only proposed; the user confirms or picks another one.
-   - A palette is read from the ROM as BGR555 (GBA) and a colour edit
-     is written back through the patch layer, never into a copy.
+   - A palette is read through the model its console declares
+     (core/console-profiles.js: bgr555, gbc-bgr555, gb-shades,
+     nes-2c02, md-9bit, ps1-555) and a colour edit is written back
+     through the patch layer, never into a copy.
    ============================================================ */
 
 (function (global) {
@@ -151,23 +153,201 @@
     return h ? h.romBytes : null;
   }
 
+  /* ---------- the palette model of a console ---------- */
+
+  /* core/console-profiles.js declares the palette every console has, and this is the file that
+     reads the declaration. The six formats it names are not one shape:
+
+       bgr555      GBA, NDS, SNES, PC Engine: a 16 bit word, low byte first, red bits 0-4,
+                   green 5-9, blue 10-14, bit 15 unused. What this editor always decoded, and
+                   what the map palette banks still decode.
+       gbc-bgr555  the same word, but one bank is four colours (eight bytes), not sixteen.
+       gb-shades   the four shades of the DMG screen. bytesPerColour 0 means nothing about
+                   them is in the file, so there is no colour to read and none to write.
+       nes-2c02    a ROM byte is a six bit index into the PPU's fixed 64 colour table: the
+                   colours live in the console and no colour edit can be written back.
+       md-9bit     0BBB0GGG0RRR: three bits a channel, expanded to eight.
+       ps1-555     the 555 word again, but bit 15 is the STP (semi transparency) flag rather
+                   than an unused bit, so a palette that sets it is legal.
+
+     paletteModel() answers with the model of the loaded ROM's console; readPaletteAt,
+     writePaletteColour, paletteScore, findPalette, the swatch strip and the sidebar label all
+     ask it instead of assuming BGR555, and a console whose profile is not loaded (or is
+     'unknown') keeps the BGR555 behaviour of the batches before this one. */
+
+  /* The 64 colours a NES PPU shows for the indices $00-$3F, from the 2C02G palette on the
+     NESdev wiki (PPU palettes, generated with Persune's palette generator v0.15.0). $0D
+     ("blacker than black", which the wiki says not to use), $0E, $0F, $1D-$1F, $2E, $2F, $3E
+     and $3F are black in that table. */
+  var NES_2C02 = [
+    0x626262, 0x012090, 0x240BA0, 0x470090, 0x600062, 0x6A0024, 0x601100, 0x472700,   // $00-$07
+    0x243C00, 0x014A00, 0x004F00, 0x004724, 0x003662, 0x000000, 0x000000, 0x000000,   // $08-$0F
+    0xABABAB, 0x1F56E1, 0x4D39FF, 0x7E23EF, 0xA31BB7, 0xB42264, 0xAC370E, 0x8C5500,   // $10-$17
+    0x5E7200, 0x2D8800, 0x079000, 0x008947, 0x00739D, 0x000000, 0x000000, 0x000000,   // $18-$1F
+    0xFFFFFF, 0x67ACFF, 0x958DFF, 0xC875FF, 0xF26AFF, 0xFF6FC5, 0xFF836A, 0xE6A01F,   // $20-$27
+    0xB8BF00, 0x85D801, 0x5BE335, 0x45DE88, 0x49CAE3, 0x4E4E4E, 0x000000, 0x000000,   // $28-$2F
+    0xFFFFFF, 0xBFE0FF, 0xD1D3FF, 0xE6C9FF, 0xF7C3FF, 0xFFC4EE, 0xFFCBC9, 0xF7D7A9,   // $30-$37
+    0xE6E397, 0xD1EE97, 0xBFF3A9, 0xB5F2C9, 0xB5EBEE, 0xB8B8B8, 0x000000, 0x000000    // $38-$3F
+  ];
+
+  /* The four shades of a DMG screen, palest first: tile colour 0 is the lightest pixel the LCD
+     shows and colour 3 the darkest. */
+  var DMG_SHADES = [0x9BBC0F, 0x8BAC0F, 0x306230, 0x0F380F];
+
+  function packedColour(v) {
+    return { r: (v >> 16) & 0xFF, g: (v >> 8) & 0xFF, b: v & 0xFF };
+  }
+  function clamp255(v) { return Math.max(0, Math.min(255, Math.round(Number(v) || 0))); }
+
+  /* Mega Drive: ---BBB-GGG-RRR-, a three bit channel expanded to eight the way such a channel
+     is: (v << 5) | (v << 2) | (v >> 1), so seven is 255. A real cartridge stores the word big
+     endian; this editor keeps the one low byte first order every other read here uses, and a
+     written entry goes back the same way, so a read and an edit of the same sheet agree. */
+  function expand3(v) { return (v << 5) | (v << 2) | (v >> 1); }
+  function fromMd9(lo, hi) {
+    var v = ((lo & 0xFF) | ((hi & 0xFF) << 8)) & 0xFFFF;
+    return { r: expand3((v >> 1) & 7), g: expand3((v >> 5) & 7), b: expand3((v >> 9) & 7) };
+  }
+  function toMd9(c) {
+    return ((((clamp255(c.r) >> 5) & 7) << 1) | (((clamp255(c.g) >> 5) & 7) << 5)
+      | (((clamp255(c.b) >> 5) & 7) << 9)) & 0xFFFF;
+  }
+
+  /* n entries of a fixed ramp, cycling when the sheet asks for more than the console has. */
+  function packedRamp(ramp, n) {
+    var out = [];
+    for (var i = 0; i < n; i++) out.push(packedColour(ramp[i % ramp.length]));
+    return out;
+  }
+
+  /* The model a profile's palette format names. A profile that carries no palette at all - the
+     fallback consoleProfile() hands back when core/console-profiles.js is not loaded - gets
+     bgr555, which is exactly what every read in this file did before the models existed. */
+  function paletteModelFor(profile) {
+    var p = profile || {};
+    var pal = p.palette || {};
+    var format = String(pal.format || 'bgr555');
+    var cols = Math.round(Number(pal.coloursPerBank));
+    var model = {
+      id: String(p.id == null ? 'unknown' : p.id),
+      format: format,
+      name: 'BGR555',
+      bytesPerColour: Number(pal.bytesPerColour) || 0,
+      coloursPerBank: cols > 0 ? cols : PALETTE_COLOURS,
+      bankBytes: Number(pal.bankBytes) || 0,
+      /* Bytes one entry takes in the file: two for a word, one for a NES index, none for a
+         Game Boy shade (there is nothing in the file to read). */
+      stride: 2,
+      /* Do the colours themselves live in the file? For a NES index and a Game Boy ramp the
+         answer is no, and then a colour edit has nothing to write. */
+      inRom: true,
+      /* Is one bank narrower than the sixteen colour block? A read with no count then stops at
+         the bank instead of running into the next one. */
+      bank: false,
+      /* The bit that disqualifies a word when a candidate palette is scored. 0 when a set bit
+         is legal (PS1's STP flag) or when there is no word to score. */
+      alphaBit: 0x8000,
+      /* The colours the canvas and the swatches fall back to while no palette is loaded, when
+         the console has a palette that is not in the file. */
+      ramp: null,
+      readEntry: null,
+      decode: fromBgr555,
+      encode: toBgr555,
+      label: '{n} colours read as BGR555 words. A colour edit is written to the ROM as a patch.',
+      note: 'Read from the ROM as BGR555 words.',
+      writeRefusal: 'No palette offset: this palette was not read from the ROM. Load a palette from the ROM first.',
+      searchRefusal: ''
+    };
+    if (format === 'gb-shades') {
+      model.name = 'Game Boy shades';
+      model.stride = 0;
+      model.inRom = false;
+      model.bank = true;
+      model.alphaBit = 0;
+      model.ramp = DMG_SHADES.slice();
+      model.decode = null;
+      model.encode = null;
+      model.label = '{n} shades from the DMG screen ramp, not data in the ROM: a colour edit has no byte to write.';
+      model.note = 'The four shades are the screen, not data in the file.';
+      model.writeRefusal = 'A Game Boy palette is the four shade ramp, not a colour in the ROM: nothing was written.';
+      model.searchRefusal = 'A Game Boy palette is the four shade ramp: there is no colour palette to find in the ROM.';
+    } else if (format === 'gbc-bgr555') {
+      model.name = 'GBC BGR555';
+      model.bank = true;
+      model.label = '{n} colours: one GBC bank holds ' + model.coloursPerBank + ' BGR555 words ('
+        + model.bankBytes + ' bytes). A colour edit is written to the ROM as a patch.';
+      model.note = 'Read from the ROM as one bank of ' + model.coloursPerBank + ' BGR555 words ('
+        + model.bankBytes + ' bytes).';
+    } else if (format === 'nes-2c02') {
+      model.name = 'NES 2C02';
+      model.stride = 1;
+      model.inRom = false;
+      model.bank = true;
+      model.alphaBit = 0;
+      model.decode = null;
+      model.encode = null;
+      model.readEntry = function (bytes, at) { return packedColour(NES_2C02[(bytes[at] & 0xFF) & 0x3F]); };
+      model.label = '{n} colours: each ROM byte is a six bit index into the fixed 2C02 table, so there is no colour to write back.';
+      model.note = 'Each entry is a six bit 2C02 index read from the ROM.';
+      model.writeRefusal = 'A NES palette is a 2C02 index: the colour is in the console, not in the ROM, so nothing was written.';
+      model.searchRefusal = 'A NES palette is a list of 2C02 indices, not colours: there is no BGR555 palette to find.';
+    } else if (format === 'md-9bit') {
+      model.name = 'Mega Drive 9 bit';
+      model.decode = fromMd9;
+      model.encode = toMd9;
+      model.label = '{n} colours as 0BBB0GGG0RRR: eight steps a channel. A colour edit is written to the ROM as a patch.';
+      model.note = 'Read from the ROM as 0BBB0GGG0RRR words.';
+    } else if (format === 'ps1-555') {
+      model.name = 'PS1 555';
+      model.alphaBit = 0;
+      model.label = '{n} colours as 555 words; bit 15 is the semi transparency (STP) flag, not a colour bit.';
+      model.note = 'Read as 555 words: bit 15 is the STP flag, not a colour bit.';
+    }
+    if (!model.readEntry && model.decode) {
+      model.readEntry = function (bytes, at) { return model.decode(bytes[at] & 0xFF, bytes[at + 1] & 0xFF); };
+    }
+    return model;
+  }
+
+  /* The model of the console the loaded ROM is. The key is built without asking the profile
+     table, because colourCss() asks for a fallback colour once per pixel of the sheet: the
+     model is rebuilt only when the console, its system name or the sheet's format changed. */
+  var _modelKey = null;
+  var _modelCache = null;
+  function paletteModel() {
+    var h = K.hex && K.hex.getState ? K.hex.getState() : null;
+    var ident = _state.romIdentity;
+    var key = (h ? h.romSystem : '') + '\u0000' + String(ident && ident.system) + '\u0000' + String(_state.format);
+    if (_modelCache && _modelKey === key) return _modelCache;
+    _modelCache = paletteModelFor(consoleProfile());
+    _modelKey = key;
+    return _modelCache;
+  }
+
+  /* What the sidebar says about the palette of the sheet: the model of the console and how
+     many entries this sheet uses. */
+  function paletteModelText() {
+    return paletteModel().label.replace('{n}', String(paletteColourCount()));
+  }
+
   /* ---------- colour ---------- */
 
-  /* How many entries the palette of the sheet on screen may hold: 256 when the format is an
-     8bpp one (the codec's table says which: its colour count is 256), sixteen for every
-     other format - including the 2bpp and 1bpp layouts, whose four or two colours are still
-     read out of a sixteen entry block, exactly as before. The depth box can ask for 8bpp on
-     its own, and an unknown format id stays at sixteen. */
+  /* How many entries the palette of the sheet on screen may hold: the colour count of the
+     format itself, which the codec's own table carries - two for a 1bpp layout, four for the
+     2bpp ones, sixteen for 4bpp and 256 for 8bpp - so a 2bpp sheet no longer asks for a
+     sixteen entry block it cannot use. The depth box can still ask for 8bpp on its own, and
+     an unknown format id keeps the sixteen entry block. */
   function paletteColourCount(format) {
     var C = K.core;
     var id = (format === undefined || format === null || format === '') ? _state.format : format;
-    var wide = false;
+    var count = PALETTE_COLOURS;
     if (C && typeof C.tileFormat === 'function') {
       var f = C.tileFormat(id);
-      wide = !!(f && Number(f.colors) >= PALETTE_COLOURS_MAX);
+      var colors = f ? Math.round(Number(f.colors)) : 0;
+      if (colors > 0) count = Math.min(PALETTE_COLOURS_MAX, colors);
     }
-    if (!wide && Number(_state.depth) === 8) wide = true;
-    return wide ? PALETTE_COLOURS_MAX : PALETTE_COLOURS;
+    if (Number(_state.depth) === 8) count = Math.max(count, PALETTE_COLOURS_MAX);
+    return count;
   }
 
   /* Plain ramp, used until a palette is read from the ROM: black, white, two greys. Above
@@ -201,6 +381,10 @@
     var p = _state.palette;
     var i = Number(index) || 0;
     if (p && p[i]) return p[i];
+    /* With no palette loaded a Game Boy still shows its own four shades (they are the screen,
+       not the file); every other console keeps the grey ramp this file always had. */
+    var ramp = paletteModel().ramp;
+    if (ramp && ramp.length) return packedColour(ramp[i % ramp.length]);
     return rampColour(i);
   }
   function colourCss(index) {
@@ -1067,31 +1251,42 @@
 
   /* ---------- palette ---------- */
 
-  /* Reads the palette at an offset as BGR555. The count defaults to what the sheet's format
-     holds - 256 words (512 bytes) for an 8bpp format, 16 words (32 bytes) for the rest - so
-     an 8bpp sheet gets the whole palette instead of its first sixteen entries. An explicit
-     count is honoured, clamped into the range a palette can be. */
+  /* Reads the palette at an offset through the console's model. The count defaults to what the
+     sheet's format holds - 2, 4, 16 or 256 entries - capped at one bank for a console whose
+     bank is narrower than the sixteen colour block (a GBC bank is four). A Game Boy has no
+     entry in the file at all, so its four shades come back whatever the offset is; a NES entry
+     is one index byte, every other format two bytes a colour. An explicit count is honoured,
+     clamped into the range a palette can be. */
   function readPaletteAt(offset, count) {
     var bytes = romBytes();
     var off = Number(offset);
-    var n = (count === undefined || count === null) ? paletteColourCount() : Math.round(Number(count));
+    var model = paletteModel();
+    var explicit = !(count === undefined || count === null);
+    var n = explicit ? Math.round(Number(count)) : paletteColourCount();
     if (!Number.isFinite(n) || n < 1) n = PALETTE_COLOURS;
+    if (!explicit && model.bank) n = Math.min(n, model.coloursPerBank);
     if (n > PALETTE_COLOURS_MAX) n = PALETTE_COLOURS_MAX;
-    if (!bytes || !Number.isFinite(off) || off < 0 || off + n * 2 > bytes.length) return null;
+    /* A Game Boy shade is not in the ROM: the ramp is the same at every offset. */
+    if (!model.stride) return packedRamp(model.ramp, n);
+    if (!bytes || !Number.isFinite(off) || off < 0 || off + n * model.stride > bytes.length) return null;
     var pal = [];
-    for (var i = 0; i < n; i++) pal.push(fromBgr555(bytes[off + i * 2], bytes[off + i * 2 + 1]));
+    for (var i = 0; i < n; i++) pal.push(model.readEntry(bytes, off + i * model.stride));
     return pal;
   }
 
   function loadPalette(offset, name) {
     var off = Number(offset);
+    var model = paletteModel();
     var pal = readPaletteAt(off);
     if (!pal) { _set({ status: 'Palette offset is outside the ROM.' }); return null; }
     _set({
       palette: pal,
-      paletteOffset: off,
+      /* Only a palette the file really holds has an offset an edit could write to. */
+      paletteOffset: model.inRom ? off : null,
       paletteName: name == null ? '' : String(name),
-      status: 'Palette: ' + pal.length + ' colours read from 0x' + hex6(off) + ' (BGR555).'
+      status: model.inRom
+        ? 'Palette: ' + pal.length + ' colours read from 0x' + hex6(off) + ' (' + model.name + ').'
+        : 'Palette: ' + pal.length + ' colours of the ' + model.name + ' model. ' + model.note
     });
     return pal;
   }
@@ -1109,6 +1304,10 @@
      reachable this way. That is what the offset field and the paste box are
      for. */
   function paletteScore(bytes, off, entries) {
+    var model = paletteModel();
+    /* A console whose colours are not in the file (a Game Boy ramp, NES indices) has no BGR555
+       block to score at all. */
+    if (!model.inRom) return null;
     /* How many words the candidate is scored as: sixteen by default, 256 when the sheet is
        8bpp. It is a parameter so the score of a 4bpp candidate is exactly the number it
        always was. */
@@ -1119,7 +1318,9 @@
     var minR = 32, maxR = -1, minG = 32, maxG = -1, minB = 32, maxB = -1;
     for (var i = 0; i < n; i++) {
       var v = (bytes[off + i * 2] & 0xFF) | ((bytes[off + i * 2 + 1] & 0xFF) << 8);
-      if (v & 0x8000) alpha++;
+      /* Bit 15 is unused on a GBA/SNES/GBC/MD word, so a palette that sets it often is not a
+         palette; on a PS1 it is the STP flag and a legal palette may set it (model.alphaBit). */
+      if (model.alphaBit && (v & model.alphaBit)) alpha++;
       if (!distinct[v]) { distinct[v] = true; count++; }
       var r5 = v & 31, g5 = (v >> 5) & 31, b5 = (v >> 10) & 31;
       sumR += r5; sumG += g5; sumB += b5;
@@ -1146,6 +1347,8 @@
   function findPalette() {
     var bytes = romBytes();
     if (!bytes) { _set({ status: 'Load a ROM first.' }); return null; }
+    var model = paletteModel();
+    if (!model.inRom) { _set({ status: model.searchRefusal }); return null; }
     var entries = paletteColourCount();
     var block = entries * 2;
     var centre = windowStart();
@@ -1181,29 +1384,40 @@
     return Number.isFinite(n) ? n : null;
   }
 
-  /* A palette edit is a ROM edit: it goes through the patch layer. While no offset was read
-     from the ROM the edit is refused and not one byte is written. */
+  /* A palette edit is a ROM edit: it goes through the patch layer. A console whose colours are
+     not in the file at all - the Game Boy ramp, a NES 2C02 index - has nothing to write, and
+     while no offset was read from the ROM the edit is refused, so not one byte is written. */
   function writePaletteColour(index, rgb) {
     var i = Number(index) || 0;
+    var model = paletteModel();
     var off = paletteRomOffset();
     var bytes = romBytes();
+    if (!model.inRom) { _set({ status: model.writeRefusal }); return false; }
     if (!bytes || off === null) {
-      _set({ status: 'No palette offset: this palette was not read from the ROM. Load a palette from the ROM first.' });
+      _set({ status: model.writeRefusal });
       return false;
     }
     /* The range follows the sheet: index 200 is a real entry of an 8bpp palette and an
        index a 4bpp sheet does not have. The two bytes of entry i sit at the palette offset
        plus i*2, so 200 writes the 401st and 402nd byte of a 512 byte palette. */
     if (i < 0 || i >= paletteColourCount()) return false;
-    var v = toBgr555(rgb);
+    var v = model.encode(rgb);
     var lo = v & 0xFF, hi = (v >> 8) & 0xFF;
     var wrote = 0;
     if ((bytes[off + i * 2] & 0xFF) !== lo && K.hex.setByte(off + i * 2, lo)) wrote++;
     if ((bytes[off + i * 2 + 1] & 0xFF) !== hi && K.hex.setByte(off + i * 2 + 1, hi)) wrote++;
     var pal = (paletteWidened(_state.palette, paletteColourCount()) || []).slice();
-    pal[i] = fromBgr555(lo, hi);
+    pal[i] = model.decode(lo, hi);
     _set({ palette: pal, status: 'Palette colour ' + i + ' = ' + colourHex(pal[i]) + ' written to 0x' + hex6(off + i * 2) + (wrote ? '' : ' (unchanged)') + '.' });
     return wrote > 0;
+  }
+
+  /* What the Find button promises: the palette width of the sheet on screen, and - for a
+     console whose colours are not in the file - why there is nothing to search for. */
+  function paletteFindTitle() {
+    var model = paletteModel();
+    if (!model.inRom) return model.searchRefusal;
+    return 'Search around the region for an uncompressed palette of this format (' + paletteColourCount() + ' colours).';
   }
 
   function paletteText() {
@@ -2205,7 +2419,7 @@
      leaves the index to the tooltip. */
   function swatchButton(props, i, cell) {
     var size = Number(cell) > 0 ? Number(cell) : 22;
-    var c = props.palette && props.palette[i] ? props.palette[i] : rampColour(i);
+    var c = props.palette && props.palette[i] ? props.palette[i] : paletteColour(i);
     var active = Number(props.colour) === i;
     return e('button', {
       key: 'sw' + i,
@@ -3182,7 +3396,7 @@
       ) : null,
 
       e('div', { style: head }, 'Palette'),
-      e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'BGR555: 16 colours, 256 when the sheet is 8bpp. An edit is written to the ROM as a patch.'),
+      e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, paletteModelText()),
       e('div', { style: rowStyle },
         e('input', {
           style: inputStyle, value: palSt[0], spellCheck: false, placeholder: 'palette offset',
@@ -3192,7 +3406,7 @@
         e('button', { type: 'button', className: 'kt-btn small', onClick: commitPalette, disabled: !hex || !hex.romBytes }, 'Load')
       ),
       e('div', { style: { display: 'flex', gap: 4 } },
-        e('button', { type: 'button', className: 'kt-btn small secondary', style: { flex: '1 1 auto' }, disabled: !hex || !hex.romBytes, onClick: findPalette, title: 'Search around the region for an uncompressed palette of this format (16 colours, or 256 for 8bpp)' }, 'Find'),
+        e('button', { type: 'button', className: 'kt-btn small secondary', style: { flex: '1 1 auto' }, onClick: findPalette, title: paletteFindTitle(), disabled: !hex || !hex.romBytes || !paletteModel().inRom }, 'Find'),
         e('button', { type: 'button', className: 'kt-btn small secondary', disabled: !st.palette, onClick: exportPalette }, 'Export .pal'),
         e('button', { type: 'button', className: 'kt-btn small secondary', onClick: importPaletteDialog }, 'Import')
       ),
@@ -3446,6 +3660,9 @@
     /* The width of the palette the sheet on screen may hold, so a caller does not have to
        know that an 8bpp format carries 256 entries and a 4bpp one sixteen. */
     paletteColours: paletteColourCount,
+    /* The per console model of the loaded ROM (gb-shades, gbc-bgr555, nes-2c02, md-9bit,
+       ps1-555 or bgr555), so a caller can ask what the sheet's palette really is. */
+    paletteModel: paletteModel,
     PALETTE_COLOURS: PALETTE_COLOURS,
     PALETTE_COLOURS_MAX: PALETTE_COLOURS_MAX
   };
