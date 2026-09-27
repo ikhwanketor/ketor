@@ -999,7 +999,23 @@
                 height: virtualHeight,
                 minWidth: 300 + perRow * (CELL + (t.viewMode === 'hex' ? 0 : ASCII_CELL))
               }
-            }, rows)
+            },
+              /* This tall block is only the range the scrollbar can move over. The painted rows
+                 sit in a band of their own: while the range and the rows are on the same scale
+                 (a small rom) the band rests at the top, exactly as before, but once the range is
+                 capped the band has to be put where the scrollbar is looking - otherwise the
+                 viewport shows an untouched part of the block, which is the black screen a large
+                 rom showed as soon as it was scrolled. The band follows the same view.scrollTop
+                 the row mapping is computed from, so the two cannot drift apart. */
+              e('div', {
+                style: {
+                  position: 'absolute',
+                  left: 0,
+                  right: 0,
+                  top: proportional ? view.scrollTop : 0
+                }
+              }, rows)
+            )
           ),
 
           e('div', {
