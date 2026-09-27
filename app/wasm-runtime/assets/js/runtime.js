@@ -70,16 +70,6 @@
       return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
     }
 
-    function callRuntimeMethod(target, methodName, ...args) {
-      if (!target || typeof target[methodName] !== 'function') return false;
-      try {
-        target[methodName](...args);
-        return true;
-      } catch (_) {
-        return false;
-      }
-    }
-
     function clearFastForwardPulse() {
       if (runtimeState.ffPulseTimer) {
         try { clearInterval(runtimeState.ffPulseTimer); } catch (_) { }
@@ -868,16 +858,6 @@
       return false;
     }
 
-    async function waitForRuntimeFrameSignal(timeoutMs = 2200) {
-      const deadline = Date.now() + Math.max(300, Number(timeoutMs) || 2200);
-      while (Date.now() < deadline) {
-        const frame = await captureRuntimeFrameWithFallback(240, 160);
-        if (frameHasSignal(frame)) return true;
-        await sleep(90);
-      }
-      return false;
-    }
-
     function applyRuntimeAudioState(muted) {
       runtimeState.audioMuted = !!muted;
       const targetVolume = runtimeState.audioMuted ? 0 : (Number(runtimeState.coreProfile?.volume) || 0.30);
@@ -1105,39 +1085,6 @@
           panel.style.transition = 'opacity 0s linear';
           panel.style.zIndex = open ? '99' : '1';
         } catch (_) { }
-      }
-    }
-
-    function hardenMenuClickOnly() {
-      try {
-        if (emuStage) emuStage.classList.add('pt-menu-locked');
-        document.body.classList.add('pt-menu-locked-global');
-        document.body.classList.remove('pt-menu-open-global');
-      } catch (_) { }
-      enforceSaveLoadOnlyMenu();
-      forceHideMenuPanels(false);
-      const { button, panels } = collectLikelyMenuNodes();
-      if (!button || !panels.length) return;
-      menuClickOnlyState.button = button;
-      menuClickOnlyState.panels = panels;
-      applyMenuPanelState(false);
-      if (!button.dataset.ptMenuBound) {
-        button.dataset.ptMenuBound = '1';
-        button.addEventListener('click', (ev) => {
-          ev.preventDefault();
-          ev.stopPropagation();
-          applyMenuPanelState(!menuClickOnlyState.open);
-        }, true);
-      }
-      if (!menuClickOnlyState.docHandler) {
-        menuClickOnlyState.docHandler = (ev) => {
-          if (!menuClickOnlyState.open) return;
-          const target = ev?.target;
-          const inButton = menuClickOnlyState.button && menuClickOnlyState.button.contains(target);
-          const inPanel = menuClickOnlyState.panels.some((p) => p.contains(target));
-          if (!inButton && !inPanel) applyMenuPanelState(false);
-        };
-        document.addEventListener('click', menuClickOnlyState.docHandler, true);
       }
     }
 

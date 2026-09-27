@@ -17,9 +17,6 @@
   var R = global.React;
   if (!R) return;
   var e = R.createElement;
-  var uS = R.useState;
-  var uE = R.useEffect;
-  var uR = R.useRef;
   var MONO = 'var(--kt-font-mono)';
 
   function hex6(n) {

@@ -4,7 +4,6 @@
    All icons are stroke-based, 1.5px, round caps/joins.
    16x16 viewBox with 2px padding. Minimalist, no AI slop.
    Use: Ketor.ui.icon('globe', { size: 20 }) for React
-        Ketor.ui.iconHtml('globe', 20) for string
    ============================================================ */
 
 /* ============================================================
@@ -91,13 +90,6 @@
     return ICON_VIEWBOX[name] || '0 0 16 16';
   }
 
-  function iconHtml(name, size) {
-    var inner = getInner(name);
-    if (!inner) return '';
-    var s = size || 16;
-    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="' + getViewBox(name) + '" width="' + s + '" height="' + s + '" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + inner + '</svg>';
-  }
-
   function icon(name, props) {
     var inner = getInner(name);
     if (!inner || !global.React) return null;
@@ -120,13 +112,6 @@
     });
   }
 
-  function iconExists(name) { return !!getInner(name); }
-  function listIcons() { return Object.keys(ICONS).concat(Object.keys(ICON_PATH_OVERRIDES)); }
-
   Ketor.ui.icon = icon;
-  Ketor.ui.iconHtml = iconHtml;
-  Ketor.ui.iconExists = iconExists;
-  Ketor.ui.listIcons = listIcons;
-  Ketor.ui.ICONS = ICONS;
 
 })(window);

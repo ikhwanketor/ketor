@@ -209,7 +209,6 @@
     var termSet = Object.create(null);
     term.forEach(function (c) { termSet[c & 0xFF] = true; });
     var termRange = opts.terminatorRange;
-    var inTermRange = (b) => termRange && b >= termRange[0] && b <= termRange[1];
     var minEntries = Number(opts.minEntries) || 16;
     var texts = (opts.textOffsets || []).filter(function (o) { return Number.isFinite(o) && o >= 0 && o < bytes.length; });
     var textSet = Object.create(null);

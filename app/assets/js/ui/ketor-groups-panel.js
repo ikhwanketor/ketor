@@ -30,7 +30,6 @@
   var R = global.React;
   if (!R) return;
   var e = R.createElement;
-  var uC = R.useCallback;
   var uS = R.useState;
   var uM = R.useMemo;
   var uR = R.useRef;

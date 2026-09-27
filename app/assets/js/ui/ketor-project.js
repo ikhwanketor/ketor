@@ -24,7 +24,6 @@
   var R = global.React;
   if (!R) return;
   var e = R.createElement;
-  var uS = R.useState;
   var uC = R.useCallback;
 
   var RECENT_KEY = 'ketor.recent.files';

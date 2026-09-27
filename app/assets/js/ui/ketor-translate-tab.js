@@ -391,23 +391,6 @@
      it: the page breaks of the record, the line breaks of the page, the same number of
      characters per line as the original page had, and the speaker and button tokens shown
      as the chips they are. */
-  function renderTokens(line, keyPrefix) {
-    var parts = String(line).split(/([[^\]]{1,24}])/g);
-    return parts.map(function (part, i) {
-      if (!part) return null;
-      var isToken = /^[[^\]]{1,24}]$/.test(part);
-      return e('span', {
-        key: keyPrefix + '-' + i,
-        style: isToken
-          ? {
-              color: '#f0c674', background: 'rgba(240,198,116,0.12)',
-              borderRadius: 3, padding: '0 3px', margin: '0 1px', fontSize: '0.92em'
-            }
-          : null
-      }, part);
-    });
-  }
-
   function PreviewRow(props) {
     var row = props.row;
     var active = props.active;

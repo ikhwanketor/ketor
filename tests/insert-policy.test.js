@@ -40,11 +40,6 @@ async function build(fixture, translated, buildOptions) {
   return { state: state, out: state.modifiedRom, log: state.buildLog || [], env: env };
 }
 
-function logLine(log, pattern) {
-  for (const line of log) if (pattern.test(String(line))) return String(line);
-  return '';
-}
-
 function sameBytes(a, b) {
   if (!a || a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;

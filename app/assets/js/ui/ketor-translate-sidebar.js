@@ -46,14 +46,6 @@
     }, props.label);
   }
 
-  function formatBytes(n) {
-    n = Number(n) || 0;
-    if (n < 1024) return n + ' B';
-    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
-    if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
-    return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
-  }
-
   /* Pointers & Insert Range (batch 94).
      A declaration, the way Atlas declares a cartridge: which table the engine reads
      to find a record, and what may happen to a record that outgrows the room it has.

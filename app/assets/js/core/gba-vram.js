@@ -109,29 +109,6 @@
     return pairs;
   }
 
-  /* Kept for the consoles where no DMA register is involved, and named for what it
-     is: proximity, which needs a score to thin it out. */
-  function findVramPairsByProximity(bytes, options) {
-    var opts = options || {};
-    var system = opts.system || 'gba';
-    var window = Math.max(8, Number(opts.window) || 0x100);
-    var pairs = [];
-    if (!K.core.toRomOffset) return pairs;
-    for (var at = 0; at + 4 <= bytes.length; at += 4) {
-      var dest = readU32(bytes, at);
-      var kind = vramKind(dest);
-      if (!kind) continue;
-      for (var off = Math.max(0, at - window); off + 4 <= Math.min(bytes.length, at + window); off += 4) {
-        if (off === at) continue;
-        var source = K.core.toRomOffset(system, readU32(bytes, off), opts);
-        if (source === null || source < 0 || source >= bytes.length) continue;
-        var head = K.core.compressionHeaderAt ? K.core.compressionHeaderAt(bytes, source, { minSize: 0x40 }) : null;
-        pairs.push({ source: source, sourceAt: off, head: head, dest: dest, destAt: at, kind: kind, distance: Math.abs(off - at) });
-      }
-    }
-    return pairs;
-  }
-
   /* Screens: a pair whose VRAM destination sits on a screen block boundary and
      whose data decompresses to a whole number of cells. The character side is a
      pair that lands on a character block boundary. Together they are a screen;
