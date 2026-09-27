@@ -55,7 +55,6 @@
     // decompressed bytes instead of the ROM
     graphicSource: null,
     romIdentity: null,
-    inspector: true,
     fontBase: 0,
     // a font does not have to start at code 0: the one in this ROM starts at 0x20,
     // so its first tile is the space and A is the 34th tile of the sheet
@@ -279,6 +278,50 @@
     /* Room for as many tiles as the sheet shows at the step the depth and the stride
        ask for, which is the format's own tile size until either of them changes. */
     return windowBytesAt(windowStart(), tilePitch() * _state.tiles);
+  }
+
+  /* One compact line that says what the tab is looking at: the window base, the format,
+     the depth and the step a tile takes, how many tiles are on the sheet, how many of the
+     hex patches fall inside that window, which tile and pixel are picked, how far the
+     image reaches and which graphic is open. Every part is read from the store and the hex
+     layer when it is called, so a caller can print it with K.tile.statusLine() and the
+     status strip of the tab renders the very same string instead of a second summary. An
+     anchor that is not there shows a dash, never NaN: hex6 already answers '------' for a
+     number it does not have, and the image length is asked for before it is printed. */
+  function statusLine(hint) {
+    var h = hint || {};
+    var start = windowStart();
+    var pitch = tilePitch();
+    var depth = Number(_state.depth) || 4;
+    var count = Math.max(0, Math.round(Number(_state.tiles) || 0));
+    var from = Math.max(0, Math.floor(Number(start) || 0));
+    var to = from + pitch * count;
+    /* The patches that land on the sheet on screen, the same range windowBytesAt() applies:
+       a patch outside the window belongs to another part of the ROM and is not counted. */
+    var patches = patchesMap();
+    var inside = 0;
+    Object.keys(patches).forEach(function (k) {
+      var off = parseInt(k, 10);
+      if (Number.isFinite(off) && off >= from && off < to) inside++;
+    });
+    var selected = Number(h.selected);
+    var sel = h.sel;
+    var len = (K.hex && typeof K.hex.imageLength === 'function') ? Number(K.hex.imageLength()) : NaN;
+    var gs = _state.graphicSource;
+    var parts = [
+      '0x' + hex6(start),
+      String(_state.format == null ? '?' : _state.format),
+      depth + 'bpp/' + pitch,
+      'tiles ' + count,
+      'patch ' + inside,
+      'tile ' + (Number.isFinite(selected) && selected >= 0 ? String(selected) : '-')
+    ];
+    if (sel && Number.isFinite(Number(sel.x)) && Number.isFinite(Number(sel.y))) {
+      parts.push('sel ' + (Number.isFinite(Number(sel.tile)) ? Number(sel.tile) : '?') + '@' + Number(sel.x) + ',' + Number(sel.y));
+    }
+    parts.push(Number.isFinite(len) ? 'image 0x' + hex6(len) + ' (' + len + ' byte(s))' : 'image -');
+    parts.push(gs && gs.label ? 'graphic ' + String(gs.label) + ' 0x' + hex6(gs.offset) : 'graphic ROM');
+    return parts.join(' | ');
   }
 
   /* The bytes an export reads and an import writes, at a base the caller names. While a
@@ -918,12 +961,28 @@
     return top[0];
   }
 
-  /* A palette edit is a ROM edit: it goes through the patch layer. */
+  /* The ROM offset a palette edit may write to, or null while the palette did not come from
+     the ROM. Number(null) is 0, so asking Number.isFinite() about an unset offset answers
+     "a palette at 0x000000" and a colour edit would land in the first bytes of the file:
+     the offset is tested before it is converted. A palette imported from text has no offset
+     at all; only loadPalette() reading one out of the file gives it back. */
+  function paletteRomOffset() {
+    var off = _state.paletteOffset;
+    if (off === null || off === undefined || off === '') return null;
+    var n = Number(off);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  /* A palette edit is a ROM edit: it goes through the patch layer. While no offset was read
+     from the ROM the edit is refused and not one byte is written. */
   function writePaletteColour(index, rgb) {
     var i = Number(index) || 0;
-    var off = Number(_state.paletteOffset);
+    var off = paletteRomOffset();
     var bytes = romBytes();
-    if (!bytes || !Number.isFinite(off)) { _set({ status: 'Load a palette from the ROM first.' }); return false; }
+    if (!bytes || off === null) {
+      _set({ status: 'No palette offset: this palette was not read from the ROM. Load a palette from the ROM first.' });
+      return false;
+    }
     if (i < 0 || i >= PALETTE_COLOURS) return false;
     var v = toBgr555(rgb);
     var lo = v & 0xFF, hi = (v >> 8) & 0xFF;
@@ -981,6 +1040,10 @@
     while (colours.length < PALETTE_COLOURS) colours.push({ r: 0, g: 0, b: 0 });
     _set({
       palette: colours.slice(0, PALETTE_COLOURS),
+      /* The text is not the ROM. Keeping the offset of the palette that was loaded before
+         would let the colour picker write its two bytes into that old address, so an import
+         drops it: the palette is 'imported' until loadPalette() reads a real one again. */
+      paletteOffset: null,
       paletteName: name ? String(name) : 'imported',
       status: 'Palette loaded from text (' + Math.min(colours.length, PALETTE_COLOURS) + ' colours).'
     });
@@ -991,7 +1054,9 @@
     var text = paletteText();
     if (!text) { _set({ status: 'No palette loaded.' }); return; }
     var base = (String(_state.paletteName || 'palette')).replace(/\.[^.]+$/, '');
-    var name = base + (Number.isFinite(Number(_state.paletteOffset)) ? '_0x' + hex6(_state.paletteOffset) : '') + '.pal';
+    // only an offset that really came from the ROM belongs in the file name
+    var at = paletteRomOffset();
+    var name = base + (at === null ? '' : '_0x' + hex6(at)) + '.pal';
     downloadBlob([text], 'text/plain', name);
     _set({ status: 'Exported ' + name + '.' });
   }
@@ -1260,8 +1325,8 @@
     var bytes = parseHexString(text);
     if (!bytes || !bytes.length) { _set({ status: 'No hex bytes found in the text.' }); return 0; }
     if (target === 'palette') { return parsePaletteText(text) ? bytes.length : 0; }
-    var off = target === 'palette-rom' ? Number(_state.paletteOffset) : windowStart();
-    if (!Number.isFinite(off)) { _set({ status: 'Set a palette offset first.' }); return 0; }
+    var off = target === 'palette-rom' ? paletteRomOffset() : windowStart();
+    if (off === null || !Number.isFinite(Number(off))) { _set({ status: 'Set a palette offset first.' }); return 0; }
     var limit = Number(byteLimit) > 0 ? Number(byteLimit) : bytes.length;
     var wrote = 0, n = Math.min(bytes.length, limit);
     for (var i = 0; i < n; i++) if (K.hex.setByte(off + i, bytes[i])) wrote++;
@@ -1398,9 +1463,12 @@
      palette block is laid out. */
   function bankPalette(bank) {
     var b = Number(bank) || 0;
-    var base = Number(_state.paletteOffset);
-    if (!_state.palette || !Number.isFinite(base)) return null;
+    if (!_state.palette) return null;
+    /* Bank 0 is the palette that is loaded, whatever it was loaded from. A later bank is
+       read from the ROM 32 bytes further on, and an imported palette has no such offset. */
     if (b === 0) return _state.palette;
+    var base = paletteRomOffset();
+    if (base === null) return null;
     var words = patchedWordsAt(base + b * 32, PALETTE_COLOURS * 2);
     var out = [];
     for (var i = 0; i < PALETTE_COLOURS; i++) out.push(fromBgr555(words[i * 2], words[i * 2 + 1]));
@@ -2318,11 +2386,6 @@
           title: 'Read a PNG file into the tiles at the sheet base. The zlib stream needs pako; every pixel lands as a hex patch',
           onClick: importTilesPngDialog
         }, 'Import PNG'),
-        e('button', {
-          type: 'button', className: TB + (st.inspector === false ? ' secondary' : ''),
-          title: 'Show or hide the inspector: palette, paste box and the state of a compressed graphic',
-          onClick: function () { _set({ inspector: st.inspector === false }); }
-        }, 'Inspector'),
         e('span', { style: { opacity: 0.25 } }, '|'),
         e('button', { type: 'button', className: TB + (st.view === 'tiles' ? '' : ' secondary'), onClick: function () { _set({ view: 'tiles' }); } }, 'Tiles'),
         e('button', { type: 'button', className: TB + (st.view === 'map' ? '' : ' secondary'), onClick: function () { _set({ view: 'map' }); } }, 'Map'),
@@ -2351,7 +2414,9 @@
         e('span', { style: { fontFamily: MONO, opacity: 0.85 } }, st.region === null ? 'no region' : '0x' + hex6(st.region)),
         e('span', { style: { opacity: 0.6 } }, st.format),
         e('span', { style: { opacity: 0.6 } }, selected < 0 ? 'no tile' : 'tile ' + selected),
-        e('span', { style: { opacity: 0.6 } }, st.palette ? 'palette 0x' + hex6(st.paletteOffset) : 'no palette')
+        e('span', { style: { opacity: 0.6 } }, st.palette
+          ? (st.paletteOffset === null || st.paletteOffset === undefined ? 'palette imported' : 'palette 0x' + hex6(st.paletteOffset))
+          : 'no palette')
       ),
 
       e('div', { style: { flex: '1 1 auto', minHeight: 0, display: 'flex', alignItems: 'stretch' } },
@@ -2372,8 +2437,10 @@
           width: Math.max(200, width - 16),
           onClick: onDown, onMove: onMove, onUp: onUp, onContext: onContext
         }) : e('div', { style: { opacity: 0.7 } }, 'No region selected. Detect tiles or type a region offset in the sidebar.')
-      ),
-      st.inspector === false ? null : e(TileInspector, null)
+      )
+      /* The inspector is not drawn here: it is the right hand panel of this activity,
+         registered at the end of the file and rendered by the workbench beside the work.
+         Drawing it in the tab as well would show the palette and the paste box twice. */
       ),
       e('div', { style: { flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '5px 10px', borderTop: '1px solid var(--kt-widget-border-default)', background: 'var(--kt-statusbar-bg)', color: 'var(--kt-statusbar-fg)', fontSize: 11 } },
         e('span', null, 'Colour'),
@@ -2391,6 +2458,14 @@
         }),
         e('button', { type: 'button', className: 'kt-btn small', disabled: selected < 0, onClick: function () { K.hex.gotoOffset(tileAbsoluteOffset(selected, K.core)); } }, 'Goto Hex'),
         e('span', { style: { flex: 1 } }),
+        /* The one line summary of the window, the format and the step, the tiles, the
+           patches inside it, the picked tile and pixel, the image length and the open
+           graphic. It is the string K.tile.statusLine() hands out, not a second summary. */
+        e('span', {
+          style: { fontFamily: MONO, opacity: 0.85 },
+          title: 'Window base, format, depth and stride, tiles, patches inside the window, picked tile, image length and graphic source'
+        }, statusLine({ selected: selected, sel: sel })),
+        e('span', { style: { opacity: 0.35 } }, '|'),
         e('span', { style: { opacity: 0.75 } }, st.status)
       )
     );
@@ -2637,7 +2712,7 @@
           return e('button', {
             key: 'pal' + p.offset,
             type: 'button',
-            className: 'kt-btn small' + (Number(st.paletteOffset) === p.offset ? '' : ' secondary'),
+            className: 'kt-btn small' + (st.paletteOffset === p.offset ? '' : ' secondary'),
             style: { fontFamily: MONO, justifyContent: 'flex-start' },
             title: 'Load these 16 colours',
             onClick: function () { loadPalette(p.offset, ''); }
@@ -2722,8 +2797,8 @@
       if (target === 'palette') { parsePaletteText(text); return; }
       var bytes = parseHexString(text);
       if (!bytes || !bytes.length) { _set({ status: 'No hex bytes found in the text.' }); return; }
-      var offset = target === 'palette-rom' ? Number(st.paletteOffset) : windowStart();
-      if (!Number.isFinite(offset)) { _set({ status: 'Set a palette offset first.' }); return; }
+      var offset = target === 'palette-rom' ? paletteRomOffset() : windowStart();
+      if (offset === null || !Number.isFinite(Number(offset))) { _set({ status: 'Set a palette offset first.' }); return; }
       var limit = target === 'tile' ? K.core.tileSize(st.format) : bytes.length;
       var wrote = 0, n = Math.min(bytes.length, limit);
       for (var i = 0; i < n; i++) if (K.hex.setByte(offset + i, bytes[i])) wrote++;
@@ -2747,10 +2822,11 @@
     var head = { fontWeight: 600, marginTop: 2 };
 
     return e('div', {
+      /* The right panel host (.kt-right-panel-body) brings the column, its border and its
+         background: the inspector fills it and scrolls its own content. */
       style: {
-        flex: '0 0 auto', width: 268, overflowY: 'auto', padding: '8px 10px',
-        display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12,
-        borderLeft: '1px solid var(--kt-widget-border-default)', background: 'var(--kt-sidebar-bg)'
+        flex: '1 1 auto', minWidth: 0, overflowY: 'auto', padding: '8px 10px',
+        display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12
       }
     },
       st.graphicSource ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3, padding: '4px 6px', border: '1px solid var(--kt-widget-border-default)', borderRadius: 3 } },
@@ -2988,13 +3064,19 @@
 
   K.ui.registerTabProvider('tile', TileTab);
   K.ui.registerSidebarProvider('tile', TileSidebar);
+  /* The inspector is this activity's right hand panel. The workbench asks for a provider
+     per activity and renders it in its own column beside the work (ketor-workbench.js,
+     RightPanelWrapper: the panel is open by default, drags by its handle and collapses to
+     a strip), so the tab does not draw the inspector inline any more - one component, one
+     place, and the palette and paste box cannot show up twice. */
+  K.ui.registerRightPanelProvider('tile', TileInspector, { title: 'Tile inspector' });
   K.tile = {
     getState: getState, subscribe: subscribe, useTile: useTile,
     detect: detect, setPixel: setPixel, setRegion: function (o) { _set({ region: Number(o) }); },
     setFormat: function (f) { var format = String(f); _set(Object.assign({ format: format }, formatPatch(format))); }, colourAt: colourCss,
     setColour: function (v) { _set({ colour: Number(v) }); }, readTile: readTile,
     copyRegion: copyRegion, pasteRegion: pasteRegion,
-    regionWindow: regionWindow, tileAbsoluteOffset: tileAbsoluteOffset,
+    regionWindow: regionWindow, tileAbsoluteOffset: tileAbsoluteOffset, statusLine: statusLine,
     loadPalette: loadPalette, readPaletteAt: readPaletteAt, findPalette: findPalette, paletteScore: paletteScore,
     writePaletteColour: writePaletteColour,
     parsePaletteText: parsePaletteText, paletteText: paletteText,
