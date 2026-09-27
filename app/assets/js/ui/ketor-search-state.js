@@ -988,6 +988,52 @@
       _recordsNote = 'the table detector failed: ' + String((err && err.message) || err);
       return entries;
     }
+    /* A banked console can lay its table out with a bank step the console name does not fix,
+       and then the first model proves nothing. Measured in batch 152: Metal Gear's longest run
+       of pointers into text starts is 9 entries under an 8 KB step against a coincidence
+       baseline of 2, while the 16 KB model the NES rules carry finds no table at all. So when
+       no table was proved by text, the other bank steps are tried with a lower entry floor -
+       the readable gate is what has to hold the junk back - and their tables are merged. */
+    var provedByText = (found || []).some(function (t) { return Number(t.matchedTexts) >= 2 || t.confirmed === true; });
+    if (!provedByText && K.core && typeof K.core.pointerRulesIdsFor === 'function') {
+      var altIds = K.core.pointerRulesIdsFor(consoleRulesId || profile.name || _state.romSystem);
+      var mergedAt = Object.create(null);
+      (found || []).forEach(function (t) { mergedAt[Number(t.at)] = true; });
+      altIds.forEach(function (altId) {
+        if (altId === consoleRulesId) return;
+        try {
+          var alt = detect(_state.romBytes, {
+            console: altId,
+            system: profile.name || _state.romSystem || 'Unknown',
+            pipelineId: profile.pipelineId,
+            terminator: terminators,
+            minEntries: 4,
+            keepUnconfirmed: true,
+            maxResults: 64,
+            textOffsets: offsets
+          });
+          /* A table only counts as evidence when its run is longer than the number of
+             two byte values that would land on a real address by chance. That baseline is
+             the rom size over 65536 - about 2 in a 128 KB cartridge, 8 in a 512 KB one - and
+             it is what separates Metal Gear's nine entry run (a real table) from the five
+             entry runs of Dragon Warrior IV (measured in batch 152: without this line that
+             rom handed 130 "records" of glyph soup to the list). */
+          var minRun = Math.max(4, Math.ceil(2 * (_state.romBytes ? _state.romBytes.length : 0) / 65536));
+          (alt || []).forEach(function (t) {
+            if (mergedAt[Number(t.at)]) return;
+            /* Above chance is not enough on a large cartridge: a 512 KB image is long
+               enough to hold runs of sixteen coincidences, and Dragon Warrior IV's
+               alternative models produced exactly that. An alternative table is taken when
+               the detector proved it by text, or when its run stands at three times the
+               coincidence baseline. */
+            if (t.confirmed !== true && Number(t.count) < 3 * minRun) return;
+            if (Number(t.count) < minRun) return;
+            mergedAt[Number(t.at)] = true;
+            found = (found || []).concat([t]);
+          });
+        } catch (_) { }
+      });
+    }
     if (!Array.isArray(found) || !found.length) {
       _recordsNote = 'the detector found no table in this rom';
       return entries;

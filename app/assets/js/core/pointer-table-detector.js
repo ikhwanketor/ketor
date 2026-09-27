@@ -50,6 +50,13 @@
     snesHi:  { name: 'SNES HiROM', size: 2, little: true, align: 2, base: 0x8000, banked: true, bankStep: 0x10000, window: 0x8000 },
     nes:     { name: 'NES',     size: 2, little: true,  align: 2, base: 0x8000, banked: true, bankStep: 0x4000, window: 0x8000, flagMask: 0x7FFF },
     nes32:   { name: 'NES 32K', size: 2, little: true, align: 2, base: 0xC000, banked: true, bankStep: 0x4000, window: 0x4000 },
+    /* An 8 KB bank step. Measured in batch 152 on Metal Gear (USA).nes: the longest run of
+       pointers that land on the start of a text run is 9 entries under base 0x8000 with an
+       8 KB step, 3 entries under the 16 KB model the plain NES rules carry, and the
+       coincidence baseline for a 2 byte value in that rom is about 2. Dragon Warrior IV
+       shows 5 entries on both 16 KB and 8 KB. So the bank step is not something the console
+       name settles, and the list tries the other steps when the first model proves nothing. */
+    nes8:    { name: 'NES 8K',  size: 2, little: true, align: 2, base: 0x8000, banked: true, bankStep: 0x2000, window: 0x2000 },
     gb:      { name: 'GB',      size: 2, little: true,  align: 2, base: 0x4000, banked: true, bankStep: 0x4000, window: 0x4000, threeByte: true },
     gbc:     { name: 'GBC',     size: 2, little: true,  align: 2, base: 0x4000, banked: true, bankStep: 0x4000, window: 0x4000, threeByte: true },
     pce:     { name: 'PCE',     size: 2, little: true,  align: 2, base: 0x2000, banked: true, bankStep: 0x2000, window: 0x2000 },
@@ -482,6 +489,23 @@
     };
     matches.sort(function (a, b) { return score(b) - score(a); });
     return matches[0];
+  };
+  /* The rule sets worth trying for a console name, richest first. A banked console's bank
+     step is not something the name settles (see the note on the nes8 entry), so the caller
+     that wants the rom's records, not the rom's console, asks for all of them. */
+  K.core.pointerRulesIdsFor = function (systemName) {
+    var primary = K.core.pointerRulesIdFor(systemName);
+    var ids = primary ? [primary] : [];
+    var wanted = String(systemName || '').toLowerCase().replace(/^profile_/, '').trim();
+    Object.keys(CONSOLE_RULES).forEach(function (key) {
+      if (ids.indexOf(key) >= 0) return;
+      var rule = CONSOLE_RULES[key];
+      if (!rule.banked) return;
+      var name = String(rule.name || '').toLowerCase();
+      if (name !== wanted && name.split(/[\/\s(]/)[0] !== wanted.split(/[\/\s(]/)[0]) return;
+      ids.push(key);
+    });
+    return ids;
   };
   K.core.detectPointerTables = detect;
   K.core.readPointerTable = function (bytes, table, index) {
