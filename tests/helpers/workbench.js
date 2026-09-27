@@ -128,6 +128,10 @@ function loadWorkbench(options) {
      itself are loaded the way the preview page loads them. */
   load(path.join(CORE, 'gba-registers.js'));
   load(path.join(CORE, 'arm-disasm.js'));
+  /* The image export: tiles to pixels and pixels to a PNG. Both are pure and
+     reach for no canvas, so a suite can drive them here as they are. */
+  load(path.join(CORE, 'tile-image.js'));
+  load(path.join(CORE, 'png-writer.js'));
   /* The debugger tab adds no global keyboard listener of its own. A suite that counts what
      the modules register asks for it to be left out of one run, so "new listener" can be
      told from the ones every run installs. */
