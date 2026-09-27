@@ -301,12 +301,12 @@
      the smaller of the two is the only safe answer: a block that is assumed
      too large makes the build overwrite the string that follows. */
   /* ---- Line budget (Batch 66) ---------------------------
-     Kotak dialog di layar memuat sebanyak yang dibutuhkan baris aslinya. Baris
-     yang lebih lebar dari baris terlebar di halaman aslinya membuat mesin
-     membungkusnya, halaman itu butuh baris lebih banyak daripada kotak yang
-     disediakan, dan baris-baris berikutnya saling menumpuk: halaman terlihat
-     sesak dan jarak antar paragraf aslinya hilang. Anggarannya diambil dari
-     halaman itu sendiri, bukan angka tebakan. */
+     The dialog box on screen holds as much as the original lines need. A line
+     wider than the widest line of the original page makes the engine wrap it,
+     so the page needs more lines than the box provides, and the lines after it
+     pile up on one another: the page looks cramped and the spacing between the
+     original paragraphs is gone. The budget is taken from the page itself, not
+     from a guessed number. */
   var LINE_TOKEN_SPLIT = /\[LINE\]|\[NEWLINE\]|\[NL\]/gi;
   function linesOf(text, isTokenForm) {
     var s = String(text == null ? '' : text).replace(/\r\n?/g, '\n');
