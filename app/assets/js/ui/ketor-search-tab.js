@@ -92,6 +92,7 @@
       e('input', {
         type: 'text',
         className: 'kt-input',
+        title: 'Narrows the list to rows whose original text, translation or offset contains this; it works with the filters beside it',
         placeholder: 'Search original, translation, or offset...',
         value: filter.search || '',
         onChange: function (ev) { onChange({ search: ev.target.value }); },
@@ -100,6 +101,7 @@
       e('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap' } },
         e('select', {
           className: 'kt-select',
+          title: 'Shows only one kind of text, such as dialogue, menu or system; pick All types to drop the filter',
           value: filter.type || 'all',
           onChange: function (ev) { onChange({ type: ev.target.value }); },
           style: { fontSize: 11, flex: '1 1 90px', minWidth: 80 }
@@ -113,6 +115,7 @@
         ),
         e('select', {
           className: 'kt-select',
+          title: 'Shows only rows already put in a group, or only the ones still unassigned, so leftover texts are easy to spot',
           value: filter.assigned || 'all',
           onChange: function (ev) { onChange({ assigned: ev.target.value }); },
           style: { fontSize: 11, flex: '1 1 90px', minWidth: 80 }
@@ -154,6 +157,7 @@
          filter.minLength > 0 || filter.maxLength > 0)
           ? e('button', {
               type: 'button',
+              title: 'Resets the search box and every filter at once, bringing the whole extracted list back',
               onClick: function () {
                 setFilter({ search: '', type: 'all', assigned: 'all', minLength: 0, maxLength: 0 });
               },
@@ -215,6 +219,7 @@
       e('td', { style: Object.assign(tdStyle('center'), { width: 28 }) },
         e('input', {
           type: 'checkbox',
+          title: 'Marks this row for the group actions below; marking only selects it, nothing is assigned until you use Add to Group',
           checked: checked === true,
           onChange: function () { onToggle(t.startByte); },
           style: { cursor: 'pointer' }
@@ -685,29 +690,35 @@
           e('div', { style: { display: 'flex', gap: 4, alignItems: 'center' } },
             e('button', {
               type: 'button', className: 'kt-btn small',
+              title: 'Marks every row shown on the current page; rows on the other pages keep their marks as they are',
               onClick: onSelectAll, disabled: slice.length === 0
             }, 'Select page'),
             e('button', {
               type: 'button', className: 'kt-btn small',
+              title: 'Unmarks every marked row in the whole list, not only the rows of the current page',
               onClick: onDeselectAll, disabled: markedCount === 0
             }, 'Clear marks')
           ),
           totalPages > 1 ? e('div', { style: { display: 'flex', gap: 4, alignItems: 'center' } },
             e('button', {
               type: 'button', className: 'kt-btn small',
+              title: 'Jumps straight to the first page of the list, skipping every page in between',
               onClick: function () { setPage(1); }, disabled: safePage <= 1
             }, '<<'),
             e('button', {
               type: 'button', className: 'kt-btn small',
+              title: 'Steps back one page; it is disabled while the first page is showing',
               onClick: function () { setPage(safePage - 1); }, disabled: safePage <= 1
             }, '<'),
             e(PageInput, { current: safePage, total: totalPages, onGo: setPage }),
             e('button', {
               type: 'button', className: 'kt-btn small',
+              title: 'Steps forward one page; it is disabled while the last page is showing',
               onClick: function () { setPage(safePage + 1); }, disabled: safePage >= totalPages
             }, '>'),
             e('button', {
               type: 'button', className: 'kt-btn small',
+              title: 'Jumps straight to the last page of the list, skipping every page in between',
               onClick: function () { setPage(totalPages); }, disabled: safePage >= totalPages
             }, '>>')
           ) : null,
@@ -716,6 +727,7 @@
               type: 'button',
               'data-kt-assign-trigger': '1',
               className: 'kt-btn',
+              title: 'Opens the menu that puts every marked row into a group, or starts a new group for them; disabled while nothing is marked',
               onClick: function () { setAssignMenuOpen(!assignMenuOpen); },
               disabled: markedCount === 0
             }, 'Add to Group (' + markedCount + ')'),

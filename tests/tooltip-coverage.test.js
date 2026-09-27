@@ -640,36 +640,10 @@ const ALLOWLIST = {
     "ketor-table-tab.js|button|Applied for ROM|-|-": "\"Applied for ROM\" button — no tooltip yet; batch 186",
   },
 
-  /* ---- textSearch: 23 gaps; batch 187 adds the tooltips and deletes every entry below ---- */
-  textSearch: {
-    "ketor-search-sidebar.js|button|chevron-down|kt-help-toggle|-": "\"chevron-down\" button — no tooltip yet; batch 187",
-    "ketor-search-sidebar.js|input|value=opts.minLength || 3|-|-": "Extraction: input (value=opts.minLength || 3) — no tooltip yet; batch 187",
-    "ketor-search-sidebar.js|input|value=opts.maxLength || 1024|-|-": "Extraction: input (value=opts.maxLength || 1024) — no tooltip yet; batch 187",
-    "ketor-search-sidebar.js|Check|label=ASCII fallback|-|-": "Extraction: checkbox row \"ASCII fallback\" — no tooltip yet; batch 187",
-    "ketor-search-sidebar.js|Check|label=DTE/MTE compression|-|-": "Extraction: checkbox row \"DTE/MTE compression\" — no tooltip yet; batch 187",
-    "ketor-search-sidebar.js|button|Extracting...|kt-btn|-": "Extraction: \"Extracting...\" button — no tooltip yet; batch 187",
-    "ketor-search-sidebar.js|button|Hide Advanced|kt-btn small|-": "Advanced: \"Hide Advanced\" button — no tooltip yet; batch 187",
-    "ketor-search-sidebar.js|Check|label=Strict extractor|-|-": "Advanced: checkbox row \"Strict extractor\" — no tooltip yet; batch 187",
-    "ketor-search-sidebar.js|Check|label=DWE padding byte|-|-": "Advanced: checkbox row \"DWE padding byte\" — no tooltip yet; batch 187",
-    "ketor-search-sidebar.js|Check|label=Text decompression|-|-": "Advanced: checkbox row \"Text decompression\" — no tooltip yet; batch 187",
-    "ketor-search-sidebar.js|Check|label=Include compressed (read-only)|-|-": "Advanced: checkbox row \"Include compressed (read-only)\" — no tooltip yet; batch 187",
-    "ketor-search-tab.js|input|placeholder=Search original, translation, or offset...|kt-input|-": "input (placeholder=Search original, translation, or offset...) — no tooltip yet; batch 187",
-    "ketor-search-tab.js|select|value=filter.type || 'all'|kt-select|-": "select (value=filter.type || 'all') — no tooltip yet; batch 187",
-    "ketor-search-tab.js|select|value=filter.assigned || 'all'|kt-select|-": "select (value=filter.assigned || 'all') — no tooltip yet; batch 187",
-    "ketor-search-tab.js|button|Clear filters|-|-": "\"Clear filters\" button — no tooltip yet; batch 187",
-    "ketor-search-tab.js|input|checked=checked === true|-|-": "input (checked=checked === true) — no tooltip yet; batch 187",
-    "ketor-search-tab.js|button|Select page|kt-btn small|-": "\"Select page\" button — no tooltip yet; batch 187",
-    "ketor-search-tab.js|button|Clear marks|kt-btn small|-": "\"Clear marks\" button — no tooltip yet; batch 187",
-    "ketor-search-tab.js|button|<<|kt-btn small|-": "\"<<\" button — no tooltip yet; batch 187",
-    "ketor-search-tab.js|button|<|kt-btn small|-": "\"<\" button — no tooltip yet; batch 187",
-    "ketor-search-tab.js|button|>|kt-btn small|-": "\">\" button — no tooltip yet; batch 187",
-    "ketor-search-tab.js|button|>>|kt-btn small|-": "\">>\" button — no tooltip yet; batch 187",
-    "ketor-search-tab.js|button|Add to Group (|kt-btn|-": "\"Add to Group (\" button — no tooltip yet; batch 187",
-  },
-
   /* ---- font, groups, chrome, dialog, patch, about and panel: closed by batch 184; hex:
-     closed by batch 185; translate: closed by batch 186. The tooltips are in place and
-     their entries were deleted, so the list can only shrink ---- */
+     closed by batch 185; translate: closed by batch 186; textSearch: closed by batch 187.
+     The tooltips are in place and their entries were deleted, so the list can only
+     shrink ---- */
 };
 
 /* Every entry of every area, keyed by the audit signature, with the area and the reason

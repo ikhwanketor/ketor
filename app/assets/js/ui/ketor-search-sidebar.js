@@ -100,6 +100,7 @@
       e('button', {
         type: 'button',
         className: 'kt-help-toggle',
+        title: 'Shows or hides the workflow help for the loaded console; it opens by itself again after a different console is loaded',
         'aria-expanded': open,
         onClick: function () { setOpen(!open); },
         style: {
@@ -172,6 +173,7 @@
             type: 'number',
             min: 1,
             max: 512,
+            title: 'Shortest run the extractor keeps; raise it to skip tiny fragments, lower it to catch short menu labels',
             value: opts.minLength || 3,
             onChange: function (ev) {
               setOpt({ minLength: Math.max(1, parseInt(ev.target.value, 10) || 3) });
@@ -184,6 +186,7 @@
             type: 'number',
             min: 8,
             max: 8192,
+            title: 'Longest run kept as one text; raise it when a long script line is cut off, lower it to split oversized blocks',
             value: opts.maxLength || 1024,
             onChange: function (ev) {
               setOpt({ maxLength: Math.max(8, parseInt(ev.target.value, 10) || 1024) });
@@ -193,11 +196,13 @@
         ),
         e(Check, {
           label: 'ASCII fallback',
+          title: 'Also reads plain ASCII runs the loaded .tbl does not map; turn it off to index only characters the table knows',
           checked: opts.asciiFallback !== false,
           onChange: function (v) { setOpt({ asciiFallback: v }); }
         }),
         showCompression ? e(Check, {
           label: 'DTE/MTE compression',
+          title: 'Decodes dictionary-based DTE/MTE packing while scanning; leave it on for games that squeeze text into a byte dictionary',
           checked: opts.enableDteMteCompression !== false,
           onChange: function (v) { setOpt({ enableDteMteCompression: v }); }
         }) : null,
@@ -205,6 +210,7 @@
         e('button', {
           type: 'button',
           className: 'kt-btn',
+          title: 'Starts the extraction with the options above; it stays disabled until a ROM and a .tbl table are both loaded',
           style: { width: '100%', marginTop: 8 },
           onClick: onExtract,
           disabled: !canExtract
@@ -234,6 +240,7 @@
         e('button', {
           type: 'button',
           className: 'kt-btn small',
+          title: 'Opens or closes the extractor options that only some consoles need: strict mode, padding byte and decompression',
           style: { width: '100%', marginBottom: advancedOpen ? 8 : 0 },
           onClick: function () { setAdvancedOpen(!advancedOpen); }
         }, advancedOpen ? 'Hide Advanced' : 'Show Advanced'),
@@ -255,21 +262,25 @@
           }),
           showStrictMode ? e(Check, {
             label: 'Strict extractor',
+            title: 'Keeps only runs that match the table exactly and skips doubtful ones; slower, and it can miss loosely encoded texts',
             checked: opts.strictExtractorMode === true,
             onChange: function (v) { setOpt({ strictExtractorMode: v }); }
           }) : null,
           showPaddingByte ? e(Check, {
             label: 'DWE padding byte',
+            title: 'Counts the DWE filler byte as part of the terminator; turn it on for scripts that pad the end of a line',
             checked: opts.usePaddingByte === true,
             onChange: function (v) { setOpt({ usePaddingByte: v }); }
           }) : null,
           showDecompression ? e(Check, {
             label: 'Text decompression',
+            title: 'Unpacks compressed text blocks before scanning so their messages are found too; it makes the extraction slower',
             checked: opts.enableTextDecompression === true,
             onChange: function (v) { setOpt({ enableTextDecompression: v }); }
           }) : null,
           showDecompression ? e(Check, {
             label: 'Include compressed (read-only)',
+            title: 'Also lists texts found inside compressed blocks; they can be translated but never written back into the ROM',
             checked: opts.includeCompressedReadOnly === true,
             onChange: function (v) { setOpt({ includeCompressedReadOnly: v }); }
           }) : null
