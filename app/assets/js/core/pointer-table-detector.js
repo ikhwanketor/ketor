@@ -256,7 +256,16 @@
         Object.keys(deltas).forEach(function (d) { if (deltas[d] > dominant) { dominant = deltas[d]; dominantDelta = Number(d); } });
         var consensus = matched > 0 ? dominant / matched : 0;
         var confirmed = bad === 0 && matched >= 4 && consensus >= 0.8;
-        if (texts.length >= 8 && !confirmed) return;
+        /* The consensus gate is how a table is proved against the texts the user mapped,
+           and it is the right gate for declaring one. It is not the right gate for
+           hiding one: a table whose records do not all open with the same number of
+           header bytes has its matches spread over two deltas and never reaches the
+           consensus, yet every span it describes closes like a record. A caller that
+           wants to judge the structure itself - the extractor does - asks for these
+           with keepUnconfirmed. (This option was dropped from the file while batch 132
+           was being verified and the extractor was already sending it; batch 133 puts it
+           back with the gate below that fails without it.) */
+        if (texts.length >= 8 && !confirmed && opts.keepUnconfirmed !== true) return;
         results.push({
           console: rules.name, at: lo, stride: stride, entrySize: rules.size,
           fromIndex: run.from, toIndex: run.to, entries: entries.slice(),

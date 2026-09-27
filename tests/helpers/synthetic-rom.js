@@ -80,10 +80,15 @@ function buildSyntheticRom(options) {
       buildable: true,
       source: 'synthetic'
     });
-    rom[tableAt + i * 4] = head & 0xFF;
-    rom[tableAt + i * 4 + 1] = (head >> 8) & 0xFF;
-    rom[tableAt + i * 4 + 2] = (head >> 16) & 0xFF;
-    rom[tableAt + i * 4 + 3] = ((head >> 24) | 0x08) & 0xFF;
+    /* The pointer holds the address the console sees, base and all: 0x08000000 + the
+       file offset. Writing the base into the top byte instead of adding it is the same
+       thing only while the offset stays under sixteen megabytes, and a fixture that
+       wants to test a 32 megabyte cartridge has to write the real address. */
+    const pointer = (base + head) >>> 0;
+    rom[tableAt + i * 4] = pointer & 0xFF;
+    rom[tableAt + i * 4 + 1] = (pointer >>> 8) & 0xFF;
+    rom[tableAt + i * 4 + 2] = (pointer >>> 16) & 0xFF;
+    rom[tableAt + i * 4 + 3] = (pointer >>> 24) & 0xFF;
   }
 
   const project = {

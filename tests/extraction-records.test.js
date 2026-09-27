@@ -93,4 +93,55 @@ suite.test('with no table in the rom the scan keeps its runs', async function (t
   assert(inNoise.length > 0, 'including the ones from the noise field');
 });
 
+suite.test('a table whose records do not all open the same way is still read', async function (t) {
+  /* The intro table of Kingdom Hearts names its records from a run of pointers and its
+     records do not all open with the same number of header bytes: the first starts with
+     the letter itself, the record after it with a two byte code. The distance from a
+     pointer to its first character is therefore not one value across the table, the
+     detector's text consensus never reaches its threshold, and the table comes back
+     unconfirmed. It is still the table the game uses. */
+  const fixture = buildSyntheticRom({ records: 12, textLength: 36 });
+  const rom = fixture.rom.slice();
+  const expected = [];
+  fixture.records.forEach(function (r, i) {
+    if (i % 2 === 0) { expected.push(r.textStart); return; }
+    for (let k = r.byteLength - 1; k >= 0; k--) rom[r.textStart + 2 + k] = rom[r.textStart + k];
+    rom[r.textStart] = 0x00;
+    rom[r.textStart + 1] = 0x00;
+    expected.push(r.textStart + 2);
+  });
+  const noiseAt = 0x30000;
+  for (let i = 0; i < 0x2000; i++) rom[noiseAt + i] = 0x61 + (i % 26);
+  const st = await extract(rom, tableMaps(fixture.project.table.content));
+  const texts = st.texts || [];
+  const starts = texts.map(function (x) { return Number(x.startByte); });
+  expected.forEach(function (at) {
+    assert(starts.indexOf(at) >= 0,
+      'the record whose text starts at 0x' + at.toString(16) + ' is in the list: ' + st.status);
+  });
+  assertEqual(texts.length, fixture.records.length, 'and nothing else is: ' + st.status);
+});
+
+suite.test('a pointer that carries the base is read past sixteen megabytes', async function (t) {
+  /* A four byte GBA pointer holds the address the console sees. The detector used to
+     take the masked word for a file offset, which is the same thing only while the
+     offset stays under sixteen megabytes; on a 32 megabyte cartridge every record past
+     that mark landed outside the file and its site was thrown away. Kingdom Hearts is
+     such a rom and the build finds its message table only because it subtracts the
+     base. */
+  const fixture = buildSyntheticRom({ records: 16, textLength: 40, romSize: 0x2000000, regionAt: 0x1100000 });
+  const tables = K.core.detectPointerTables(fixture.rom, {
+    system: 'GBA', pipelineId: 'pipeline_gba', terminator: [0x00],
+    minEntries: 6, maxResults: 64, keepUnconfirmed: true, textOffsets: []
+  });
+  const heads = fixture.records.map(function (r) { return r.head; });
+  const named = tables.filter(function (tb) {
+    const entries = (tb.entries || []).map(Number);
+    return heads.every(function (h) { return entries.indexOf(h) >= 0; });
+  });
+  assert(named.length >= 1, 'the table above 16 MB is found; the detector returned ' + tables.length +
+    ' table(s) and none names those records');
+  assertEqual(Number(named[0].at), fixture.table.at, 'and it is the table the records were written into');
+});
+
 module.exports = { suite: suite };
