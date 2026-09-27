@@ -162,7 +162,7 @@ function hasRect(drawn, x, y, w, h) {
    - the sheet canvas: this harness has no canvas, so the ref React would fill is pointed at
      a recording object and the drawing effect is run by hand, which is the code path a
      browser runs on mount.
-   - the sheet arithmetic: core/canvas-math.js turns a click into a tile and the preview page
+   - the sheet arithmetic: core/canvas-math.js turns a click into a tile and the workbench page
      loads it before the activity, so a mouse event here means the same thing it means there. */
 function loadedEnv() {
   const drawn = { rects: [], dashes: [], used: false };

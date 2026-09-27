@@ -6,7 +6,7 @@
    users live in different tabs and the component lives in a
    file of its own instead of inside one tab's state module.
    It is loaded before every module that calls K.ui.KtBox
-   (workbench-preview.html, tests/helpers/workbench.js).
+   (index.html, tests/helpers/workbench.js).
    A closed box drops its body from the tree: a collapsed
    KtBox renders no children at all, and the test harness
    renders such a box with an empty state, which is why the

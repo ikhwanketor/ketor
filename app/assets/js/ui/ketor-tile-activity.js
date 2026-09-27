@@ -38,8 +38,8 @@
      ketor-search-tab.js and ketor-table-tab.js): the .kt-ui-box frame, an uppercase title and
      a chevron that opens and closes the body.
      The markup is written here rather than taken from K.ui.KtBox because this module is
-     loaded before ketor-table-state.js (workbench-preview.html: this file on line 261, that
-     one on 264), so K.ui.KtBox does not exist yet while this module runs; the class names,
+     loaded before ketor-table-state.js (index.html: this file on line 246, that
+     one on 249), so K.ui.KtBox does not exist yet while this module runs; the class names,
      the sizes and the colours are the ones KtBox uses.
      A closed box keeps its body in the tree, hidden with display:none. KtBox drops a closed
      body from the tree instead, and the test harness renders a collapsed KtBox with an empty
@@ -1674,7 +1674,7 @@
     return { bytes: png, name: name, width: image.width, height: image.height, count: count, at: at, format: format };
   }
 
-  /* The inflate a PNG needs. A browser has none built in: the preview page loads pako from
+  /* The inflate a PNG needs. A browser has none built in: the workbench page loads pako from
      a CDN for exactly this (and core/save-state.js looks in the same place), while a host
      that has zlib - Node, or an explicit opts.inflate a caller hands in - is used as it
      is. Nothing is guessed: with none of the three an import cannot read a pixel, and it

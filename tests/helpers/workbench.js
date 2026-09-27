@@ -139,7 +139,7 @@ function loadWorkbench(options) {
   load(path.join(CORE, 'font-map.js'));
   /* The debugger tab reads the display registers out of the rom and the instructions
      out of the same bytes, so the register scanner, the disassembler and the tab
-     itself are loaded the way the preview page loads them. */
+     itself are loaded the way the workbench page loads them. */
   load(path.join(CORE, 'gba-registers.js'));
   load(path.join(CORE, 'arm-disasm.js'));
   /* The image export: tiles to pixels and pixels to a PNG. Both are pure and
@@ -151,7 +151,7 @@ function loadWorkbench(options) {
      told from the ones every run installs. */
   if (opts.loadDebugger !== false) load(path.join(UI, 'ketor-debugger-tab.js'));
   /* The tile editor writes a pixel back into the rom through the hex patch layer,
-     so the suite about that write loads the module the preview page loads. */
+     so the suite about that write loads the module the workbench page loads. */
   if (opts.loadTile !== false) load(path.join(UI, 'ketor-tile-activity.js'));
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

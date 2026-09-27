@@ -55,7 +55,7 @@ function attributes(text, pattern) {
    holds; everything else the page loads has to be here. */
 function isLocal(ref) { return !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(ref.trim()); }
 
-/* The cache buster (?v=141) belongs to the request, not to the name. */
+/* The cache buster (?v=142) belongs to the request, not to the name. */
 function bareRef(ref) { return ref.trim().replace(/[?#].*$/, ''); }
 
 /* "/assets/x" is how the page is served from app/, "./x" and "x" sit beside the page. */
@@ -121,7 +121,7 @@ function orphans(pages, files, pattern) {
 /* ------------------------------------------------------------
    The load order of the shared box
    ------------------------------------------------------------
-   KtBox used to be defined in ketor-table-state.js, a file the preview page loads after
+   KtBox used to be defined in ketor-table-state.js, a file the workbench page loads after
    two modules that talk about the component, and the component now lives in
    ui/ketor-ui-box.js, which has to be loaded before every module that uses it. What
    counts as a use is KtBox in code, not in a comment: ketor-tile-activity.js and
@@ -166,7 +166,7 @@ suite.test('every page under app/ is an entry point, the nested ones included', 
      list in the same commit; the point of naming them is that the recursive walk is
      checked, not just the two pages at the top. The old PocketTranslate page left app/
      for legacy/ in batch 180, so its name left this list with it. */
-  ['app/workbench-preview.html', 'app/wasm-runtime/index.html'].forEach(function (known) {
+  ['app/index.html', 'app/wasm-runtime/index.html'].forEach(function (known) {
     assert(pages.indexOf(known) >= 0, 'the walk over app/ did not find the page ' + known + '; it found ' + JSON.stringify(pages));
   });
 });
@@ -206,13 +206,13 @@ suite.test('every stylesheet under app/assets/css is linked by some page', funct
   assertEqual(dead.length, 0, 'nothing links ' + dead.join(', ') + '; link it from a page or delete it');
 });
 
-/* The preview page is the only page that loads the UI modules, so a scan that finds no
+/* The workbench page is the only page that loads the UI modules, so a scan that finds no
    user there would leave the order guard checking nothing at all. */
-suite.test('a module that uses KtBox is loaded by the preview page', function () {
-  const users = scriptsInOrder(path.join(APP, 'workbench-preview.html'), SCRIPT_SRC)
+suite.test('a module that uses KtBox is loaded by the workbench page', function () {
+  const users = scriptsInOrder(path.join(APP, 'index.html'), SCRIPT_SRC)
     .filter(function (s) { return s.abs !== BOX_SCRIPT && usesKtBox(s.abs); })
     .map(function (s) { return s.ref; });
-  assert(users.length > 0, 'no script loaded by app/workbench-preview.html uses KtBox in code, so the load order guard has nothing to check');
+  assert(users.length > 0, 'no script loaded by app/index.html uses KtBox in code, so the load order guard has nothing to check');
 });
 
 suite.test('every page loads the shared box before the modules that use KtBox', function () {
@@ -254,18 +254,24 @@ suite.test('the test harness loads the shared box before the modules that use Kt
    keys were ever read. Batch 180 moved the code the workbench really used into
    app/assets/js/core/ and archived the old engine under legacy/, so these tests hold the
    line: the shared names are published, the build worker still carries its four helpers as
-   source, and neither the page nor app/ has anything left of the old file. */
+   source, and neither the page nor app/ has anything left of the old file. Batch 181
+   renamed the page to app/index.html: "preview" was the name of a second application
+   that left app/ for legacy/, and this page is the application now. */
 const CORE_ROOT = path.join(SCRIPT_ROOT, 'core');
-const WORKBENCH = path.join(APP, 'workbench-preview.html');
-const WORKBENCH_BUILD = '141';
+/* The one application page: app/index.html, the name Pages serves from app/. */
+const WORKBENCH = path.join(APP, 'index.html');
+const WORKBENCH_BUILD = '142';
 const WORKBENCH_CORE_FILES = ['text-codec.js', 'rom-builder.js', 'worker-text-extract.js', 'worker-build.js', 'worker-table.js'];
 /* What the ui reads out of window.Ketor.core, one name per module. */
 const CORE_NAMES = ['escapeRegex', 'createTokenizer', 'smartTextParse', 'getSmartByteLength',
   'rebuildRom', 'createTextExtractorWorker', 'createBuildWorker', 'createTableWorker'];
 /* The helpers createBuildWorker stringifies into the worker it builds. */
 const WORKER_HELPERS = ['escapeRegex', 'createTokenizer', 'smartTextParse', 'rebuildRom'];
-/* What batch 180 moved out of app/. The path under legacy/ mirrors the path it had. */
-const ARCHIVED = ['app/index.html', 'app/assets/js/core.js', 'app/assets/js/app-ui.js', 'app/assets/css/main.css'];
+/* What batch 180 moved out of app/. The path under legacy/ mirrors the path it had, and
+   the old page keeps its name under legacy/ only: batch 181 gave app/index.html to the
+   workbench, so that page is checked by its home in the archive instead. */
+const ARCHIVED = ['app/assets/js/core.js', 'app/assets/js/app-ui.js', 'app/assets/css/main.css'];
+const ARCHIVED_PAGE = 'legacy/index.html';
 
 /* A window just bare enough to run the core modules: they touch nothing else at load. */
 function sandboxOf() {
@@ -305,18 +311,62 @@ suite.test('the build worker source still carries the four helpers it stringifie
 
 suite.test('the workbench page loads core.js no more and keeps no Ketor.legacy bridge', function () {
   const text = fs.readFileSync(WORKBENCH, 'utf8');
-  assert(text.indexOf('core.js') < 0, 'app/workbench-preview.html still mentions core.js; the old engine lives in legacy/ now');
-  assert(text.indexOf('Ketor.legacy') < 0, 'app/workbench-preview.html still installs the Ketor.legacy bridge; the ui reads window.Ketor.core instead');
-  assert(text.indexOf('(build ' + WORKBENCH_BUILD + ')') >= 0, 'app/workbench-preview.html is not at build ' + WORKBENCH_BUILD);
+  assert(text.indexOf('core.js') < 0, 'app/index.html still mentions core.js; the old engine lives in legacy/ now');
+  assert(text.indexOf('Ketor.legacy') < 0, 'app/index.html still installs the Ketor.legacy bridge; the ui reads window.Ketor.core instead');
+  assert(text.indexOf('(build ' + WORKBENCH_BUILD + ')') >= 0, 'app/index.html is not at build ' + WORKBENCH_BUILD);
   assert(text.indexOf('__KT_BUILD__ = "' + WORKBENCH_BUILD + '"') >= 0, 'window.__KT_BUILD__ is not ' + WORKBENCH_BUILD);
   const refs = attributes(text, SCRIPT_SRC).map(bareRef);
   let previous = -1;
   WORKBENCH_CORE_FILES.forEach(function (file) {
     const ref = './assets/js/core/' + file;
     const at = refs.indexOf(ref);
-    assert(at >= 0, 'app/workbench-preview.html does not load ' + ref);
-    assert(at > previous, 'app/workbench-preview.html loads ' + ref + ' before the module it is built on; the page has to load them in order: ' + WORKBENCH_CORE_FILES.join(', '));
+    assert(at >= 0, 'app/index.html does not load ' + ref);
+    assert(at > previous, 'app/index.html loads ' + ref + ' before the module it is built on; the page has to load them in order: ' + WORKBENCH_CORE_FILES.join(', '));
     previous = at;
+  });
+});
+
+/* ------------------------------------------------------------
+   The rename: app/workbench-preview.html is app/index.html
+   ------------------------------------------------------------
+   Batch 181 made the workbench the one application page under the name Pages serves from
+   app/. The old name said "preview" while a second application lived beside it; that
+   application is archived under legacy/ now, and only the workbench and the wasm runtime
+   page it drives stay under app/. These tests lock the name, the build token and the five
+   core modules, and they keep the recursive scan over app/ honest about the new page. */
+suite.test('the workbench page is app/index.html and the preview name is gone', function () {
+  assert(isFile(WORKBENCH), 'app/index.html is missing; batch 181 renamed the workbench page to it');
+  assert(!isFile(path.join(APP, 'workbench-preview.html')), 'app/workbench-preview.html still exists; the workbench page is app/index.html');
+  const pages = htmlFiles().map(repoPath);
+  assert(pages.indexOf('app/index.html') >= 0, 'the walk over app/ did not find app/index.html; it found ' + JSON.stringify(pages));
+  assert(pages.indexOf('app/workbench-preview.html') < 0, 'the walk over app/ still finds app/workbench-preview.html; it found ' + JSON.stringify(pages));
+});
+
+suite.test('app/index.html loads the five core modules and carries build ' + WORKBENCH_BUILD, function () {
+  const text = fs.readFileSync(WORKBENCH, 'utf8');
+  const scripts = attributes(text, SCRIPT_SRC).map(bareRef);
+  WORKBENCH_CORE_FILES.forEach(function (file) {
+    assert(scripts.indexOf('./assets/js/core/' + file) >= 0, 'app/index.html does not load ./assets/js/core/' + file);
+  });
+  assert(text.indexOf('(build ' + WORKBENCH_BUILD + ')') >= 0, 'app/index.html is not at build ' + WORKBENCH_BUILD);
+  assert(text.indexOf('__KT_BUILD__ = "' + WORKBENCH_BUILD + '"') >= 0, 'app/index.html does not set window.__KT_BUILD__ to ' + WORKBENCH_BUILD);
+  /* Every cache buster on the page is the build token, so a page bumped in one place and
+     left behind in another fails here instead of serving a stale stylesheet. */
+  const stale = attributes(text, SCRIPT_SRC).concat(attributes(text, LINK_HREF))
+    .map(function (ref) { return ref.trim(); })
+    .filter(function (ref) { return /\?v=\d+/.test(ref) && ref.indexOf('?v=' + WORKBENCH_BUILD) < 0; });
+  assertEqual(stale.length, 0, 'app/index.html still asks for ' + stale.join(', ') + ' at a build other than ' + WORKBENCH_BUILD);
+});
+
+suite.test('the recursive scan over app/ covers app/index.html and the nested runtime page', function () {
+  const pages = htmlFiles();
+  const known = pages.map(repoPath);
+  assert(known.indexOf('app/index.html') >= 0 && known.indexOf('app/wasm-runtime/index.html') >= 0,
+    'the recursive walk over app/ does not cover both entry points; it found ' + JSON.stringify(known));
+  pages.forEach(function (htmlAbs) {
+    const report = readPage(htmlAbs);
+    assertEqual(report.missingScripts.length, 0, report.missingScripts.join('; '));
+    assertEqual(report.missingLinks.length, 0, report.missingLinks.join('; '));
   });
 });
 
@@ -331,8 +381,9 @@ suite.test('the legacy engine and the old page are archived under legacy/, out o
   ARCHIVED.forEach(function (rel) {
     assert(!isFile(path.join(REPO, rel)), rel + ' is still inside app/; batch 180 moved it to legacy/');
     const archived = 'legacy/' + rel.slice('app/'.length);
-    assert(isFile(path.join(REPO, archived)), archived + ' is missing; the archive under legacy/ has to hold the old engine and its page');
+    assert(isFile(path.join(REPO, archived)), archived + ' is missing; the archive under legacy/ has to hold the old engine');
   });
+  assert(isFile(path.join(REPO, ARCHIVED_PAGE)), ARCHIVED_PAGE + ' is missing; the archive under legacy/ has to hold the old page, whose name app/index.html now belongs to the workbench');
   assert(isFile(path.join(REPO, 'legacy', 'README.md')), 'legacy/README.md is missing; the archive has to say what it is and how to open it');
 });
 

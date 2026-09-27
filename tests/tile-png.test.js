@@ -16,10 +16,10 @@
    file has no run left inside it the block is appended past the end, which the patch layer
    grows the image for; the tail case at the end checks the whole file and the tail for it. The
    relocation lives in core/pointer-map.js and the bus it names comes from
-   core/console-profiles.js; the preview page loads both, the harness had no reason to, so this
+   core/console-profiles.js; the workbench page loads both, the harness had no reason to, so this
    suite loads them the way the page does.
 
-   Inflate is the one thing a browser does not have. The preview page loads pako from a CDN;
+   Inflate is the one thing a browser does not have. The workbench page loads pako from a CDN;
    this suite hands in zlib's inflateSync in the same place the page hands in pako, and one
    gate proves the honest refusal: with no inflate at all the import says so and writes
    nothing. */
@@ -64,7 +64,7 @@ function writePointer(rom, at, value) {
 
 /* The two files the compressed write back needs and the harness does not load, because no
    earlier suite reached them: the pointer map that plans the move and the console profiles
-   that name the bus. The preview page loads both before the tile activity. */
+   that name the bus. The workbench page loads both before the tile activity. */
 function loadCore(env, file) {
   const full = path.join(env.REPO, 'app', 'assets', 'js', 'core', file);
   vm.runInNewContext(fs.readFileSync(full, 'utf8'), env.win, { filename: full });
@@ -85,7 +85,7 @@ function openSheet(options) {
   return { env: env, fixture: fixture, K: env.K };
 }
 
-/* The preview page loads pako in the head; a test hands in zlib's inflate, which is the
+/* The workbench page loads pako in the head; a test hands in zlib's inflate, which is the
    same contract: bytes in, inflated bytes out. */
 function withInflate(env) {
   env.win.pako = { inflate: zlib.inflateSync };

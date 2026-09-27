@@ -45,7 +45,7 @@ function openRom() {
 
 /* The two files the relocation case needs and the workbench does not load, because no
    earlier suite reached them: the pointer map that plans the move and the console
-   profiles that name the bus. The preview page loads both before the tile activity. */
+   profiles that name the bus. The workbench page loads both before the tile activity. */
 function loadCore(env, file) {
   const full = path.join(env.REPO, 'app', 'assets', 'js', 'core', file);
   vm.runInNewContext(fs.readFileSync(full, 'utf8'), env.win, { filename: full });
