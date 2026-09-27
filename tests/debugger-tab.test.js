@@ -6,9 +6,12 @@
    The tab reads those constants out of the loaded file and shows the register, its
    value and the flags it decodes to. No emulator, no CPU, no key handler.
 
-   These gates pin what the panel says with a ROM loaded and without one, so a tab
-   that quietly reads the wrong buffer, or one that claims registers before a file is
-   there, shows up. */
+   Batch 158 added the memory panel, which is the Hex Editor's reader in a second
+   window: 16 bytes to a row, a row address of the form 0x000100, the patched bytes in
+   the Hex Editor's changed-byte colour and the hex cursor drawn where it falls. The
+   gates below pin that reader - the row's 16 values against the file byte for byte, the
+   patch marker, the clamp on a negative offset, half typed offset text, the save-state
+   block list, and the promise that the panel added no keyboard listener to the window. */
 
 'use strict';
 const { loadWorkbench } = require('./helpers/workbench');
@@ -30,12 +33,21 @@ const BG0CNT_AT = 0x20000;
 const DISPCNT_VALUE = 0x1F00;
 const BG0CNT_VALUE = 0x1E04;
 
+/* A GBA state exactly the size core/save-state.js splits: IWRAM, EWRAM, VRAM, palette,
+   OAM and IO, one after the other. The palette is given sixteen distinct colours so the
+   reader takes the block sizes at their word instead of searching the whole file. */
+const GBA_STATE_SIZE = 0x8000 + 0x40000 + 0x18000 + 0x400 + 0x400 + 0x400;
+const PALETTE_AT = 0x8000 + 0x40000 + 0x18000;
+
 function writeWord(rom, at, value) {
   rom[at] = value & 0xFF;
   rom[at + 1] = (value >>> 8) & 0xFF;
   rom[at + 2] = (value >>> 16) & 0xFF;
   rom[at + 3] = (value >>> 24) & 0xFF;
 }
+
+/* Two uppercase hex digits, the shape the memory panel prints a byte in. */
+function hex2(v) { return (v & 0xFF).toString(16).toUpperCase().padStart(2, '0'); }
 
 function romWithDisplaySetup() {
   const fixture = buildSyntheticRom({ records: 8 });
@@ -46,6 +58,33 @@ function romWithDisplaySetup() {
   return fixture;
 }
 
+/* A rom whose first screen of memory is not one repeated byte: 0x10..0x1F at 0x100, so a
+   row that reads the wrong offset, or mixes up the byte order, cannot pass by accident.
+   0x200 stays the 0xAA the fixture fills with, which is a different byte to paste over. */
+function romWithBytePattern() {
+  const fixture = buildSyntheticRom({ records: 8 });
+  for (let i = 0; i < 16; i++) fixture.rom[0x100 + i] = 0x10 + i;
+  return fixture;
+}
+
+function gbaState() {
+  const state = new Uint8Array(GBA_STATE_SIZE);
+  for (let i = 0; i < 16; i++) {
+    const word = (i * 0x0421 + 0x001F) & 0x7FFF;
+    state[PALETTE_AT + i * 2] = word & 0xFF;
+    state[PALETTE_AT + i * 2 + 1] = (word >> 8) & 0xFF;
+  }
+  state[0x10] = 0x5A;
+  state[0x11] = 0xA5;
+  return state;
+}
+
+function loadRom(fixture) {
+  const env = loadWorkbench();
+  env.K.hex.setRomFromLoad({ data: fixture.rom, name: 'synthetic.gba', size: fixture.rom.length }, 'GBA');
+  return env;
+}
+
 function render(env) {
   const provider = env.K.ui.tabProviders.debugger;
   return provider({
@@ -53,6 +92,84 @@ function render(env) {
     payload: { activity: 'debugger' },
     workbench: {}
   });
+}
+
+/* Depth first search for the first node a predicate accepts. */
+function findNode(node, test) {
+  if (!node || typeof node !== 'object') return null;
+  if (Array.isArray(node)) {
+    for (let i = 0; i < node.length; i++) {
+      const hit = findNode(node[i], test);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (test(node)) return node;
+  return findNode(node.props && node.props.children, test);
+}
+
+/* The strings a node itself shows, its children only: a tooltip is not row text. */
+function childStrings(node, out) {
+  const list = out || [];
+  if (node === null || node === undefined || node === false || node === true) return list;
+  if (typeof node === 'string' || typeof node === 'number') { list.push(String(node)); return list; }
+  if (Array.isArray(node)) {
+    node.forEach(function (item) { childStrings(item, list); });
+    return list;
+  }
+  if (node.props) childStrings(node.props.children, list);
+  return list;
+}
+
+function inputByTitle(env, prefix) {
+  return findNode(render(env), function (n) {
+    return n.type === 'input' && n.props && typeof n.props.title === 'string' && n.props.title.indexOf(prefix) === 0;
+  });
+}
+
+/* The one element in the tab that takes the keyboard. */
+function gridNode(env) {
+  return findNode(render(env), function (n) {
+    return n.props && n.props.tabIndex === 0 && typeof n.props.onKeyDown === 'function';
+  });
+}
+
+function press(handler, key, target, modifier) {
+  const ev = { key: key, target: target, prevented: 0 };
+  ev.preventDefault = function () { ev.prevented++; };
+  if (modifier === 'meta') ev.metaKey = true; else if (modifier !== 'none') ev.ctrlKey = true;
+  handler(ev);
+  return ev;
+}
+
+function element(tag, editable) { return { tagName: tag, isContentEditable: !!editable }; }
+
+function diffOffsets(before, after) {
+  const out = [];
+  const n = Math.max(before.length, after.length);
+  for (let i = 0; i < n; i++) if ((before[i] & 0xFF) !== (after[i] & 0xFF)) out.push(i);
+  return out;
+}
+
+/* The workbench with the window watched from before the first module is loaded, so the
+   listeners a module installs can be named. The debugger module is left out of one run,
+   which is what makes "new listener" mean something. */
+function watchedLoad(loadDebugger) {
+  const calls = [];
+  const env = loadWorkbench({
+    loadDebugger: loadDebugger,
+    beforeLoad: function (win) {
+      const addWindow = win.addEventListener;
+      win.addEventListener = function (type) { calls.push('window:' + type); return addWindow.apply(win, arguments); };
+      const addDocument = win.document.addEventListener;
+      win.document.addEventListener = function (type) { calls.push('document:' + type); return addDocument.apply(win.document, arguments); };
+    }
+  });
+  return { env: env, calls: calls };
+}
+
+function keyboardCalls(calls) {
+  return calls.filter(function (c) { return /:(key|keydown|keypress|keyup)$/.test(c); });
 }
 
 suite.test('the activity is a debugger tab with a provider, not a placeholder', function (t) {
@@ -95,6 +212,265 @@ suite.test('a rom with no setup block reports no background instead of a registe
   t.assert(text.indexOf('DISPCNT') >= 0, 'the register table is still the five known registers');
   t.assert(text.indexOf('not in this ROM') >= 0, 'and every one of them is marked as not found');
   t.assert(text.indexOf('No background control constant') >= 0, 'and no background is claimed');
+});
+
+suite.test('the memory panel shows 16 bytes a row from the row the hex cursor sits on', function (t) {
+  const fixture = romWithBytePattern();
+  const env = loadRom(fixture);
+  const K = env.K;
+  K.hex.gotoOffset(0x100);
+
+  const expected = [];
+  for (let i = 0; i < 16; i++) expected.push(hex2(fixture.rom[0x100 + i]));
+  /* The format the panel prints a row in: 0x plus six uppercase hex digits, two spaces,
+     then the 16 byte values as two uppercase hex digits each, one space apart. */
+  const line = '0x000100  ' + expected.join(' ');
+
+  t.assertEqual(K.debugger.hexAddress(0x100), '0x000100', 'an address is 0x plus six uppercase hex digits');
+  const view = K.debugger.memoryView();
+  t.assertEqual(view.start, 0x100, 'the window follows the hex cursor until the offset box says otherwise');
+  const row = view.rows[0];
+  t.assertEqual(row.address, '0x000100', 'the first row is the row the cursor sits on');
+  t.assertEqual(row.text, line, 'a row is "<address>  XX XX ...", 16 values');
+  t.assertEqual(row.cells.length, 16, 'one cell per byte of the row');
+  t.assertDeepEqual(row.cells.map(function (c) { return c.text; }), expected, 'the cells hold the 16 bytes of the file');
+
+  const tree = render(env);
+  const text = env.treeStrings(tree).join('\n');
+  t.assert(text.indexOf('0x000100') >= 0, 'the rendered tab should name the address 0x000100, got: ' + text.slice(0, 400));
+  t.assert(text.indexOf(line) >= 0, 'and carry the whole row, address and 16 bytes');
+  const renderedRow = findNode(tree, function (n) { return n.props && n.props.title === line; });
+  t.assert(renderedRow, 'the rendered grid should hold the row: ' + line);
+  const parts = childStrings(renderedRow);
+  t.assertEqual(parts.length, 17, 'a row renders its address and exactly 16 byte values');
+  t.assertEqual(parts[0], '0x000100', 'the address comes first');
+  t.assertDeepEqual(parts.slice(1), expected, 'and then the 16 byte values of that line, in file order');
+});
+
+suite.test('the memory byte and the offset clamp agree with the Hex Editor', function (t) {
+  const fixture = romWithBytePattern();
+  const env = loadRom(fixture);
+  const K = env.K;
+  K.hex.gotoOffset(0x100);
+  t.assertEqual(K.hex.currentByte(0x100), fixture.rom[0x100] & 0xFF,
+    'the byte the panel shows is the byte the Hex Editor reads');
+
+  K.hex.gotoOffset(-5);
+  const st = K.hex.getState();
+  t.assertEqual(st.cursorOffset, 0, 'a negative goto clamps to zero instead of throwing');
+  t.assertEqual(st.cursorOffset >= 0, true, 'and never goes negative');
+  const view = K.debugger.memoryView();
+  t.assertEqual(view.start, 0, 'so the memory window opens at the first byte');
+  const text = env.treeStrings(render(env)).join('\n');
+  t.assert(text.indexOf('0x000000') >= 0, 'the first row is named 0x000000, got: ' + text.slice(0, 300));
+  t.assertEqual(K.debugger.memoryRows(view.source, -4, 1)[0].address, '0x000000',
+    'a negative row start clamps in the row builder too');
+});
+
+suite.test('half typed offset text is kept, not committed, and never becomes NaN', function (t) {
+  const fixture = romWithBytePattern();
+  const env = loadRom(fixture);
+  const K = env.K;
+  K.hex.gotoOffset(0x200);
+
+  const box = inputByTitle(env, 'Byte offset the memory window starts at');
+  t.assert(box, 'the memory panel should offer an Offset box');
+  box.props.onChange({ target: { value: '0x200' } });
+  t.assertEqual(K.debugger.getMemory().offset, 0x200, 'a full value is committed');
+  ['0x', '', 'zz', '0xzz', '   '].forEach(function (typed) {
+    box.props.onChange({ target: { value: typed } });
+    t.assertEqual(K.debugger.getMemory().offsetText, typed, 'the box keeps exactly what was typed: ' + JSON.stringify(typed));
+    t.assertEqual(K.debugger.parseOffsetText(typed), null, JSON.stringify(typed) + ' is not a number yet');
+    const text = env.treeStrings(render(env)).join('\n');
+    t.assert(text.indexOf('NaN') < 0, JSON.stringify(typed) + ' must not put NaN on screen');
+  });
+  t.assertEqual(K.debugger.getMemory().offset, 0x200, 'text that does not parse leaves the committed offset alone');
+
+  box.props.onChange({ target: { value: '0x300' } });
+  t.assertEqual(K.debugger.getMemory().offset, 0x300, 'text that parses is committed');
+  const committed = env.treeStrings(render(env)).join('\n');
+  t.assert(committed.indexOf('0x000300') >= 0, 'and the window moves there');
+
+  /* Past the end of the file the offset stops at the last byte: the window never points
+     outside the buffer it reads. */
+  box.props.onChange({ target: { value: '0xFFFFFF00' } });
+  t.assertEqual(K.debugger.getMemory().offset, fixture.rom.length - 1, 'a huge offset is clamped to the last byte');
+
+  const rowsBox = inputByTitle(env, 'Rows of 16 bytes on screen');
+  t.assert(rowsBox, 'the panel should offer a Rows box');
+  rowsBox.props.onChange({ target: { value: 'zz' } });
+  t.assertEqual(K.debugger.getMemory().rows, 8, 'a row count that does not parse keeps the last one');
+  rowsBox.props.onChange({ target: { value: '0' } });
+  t.assertEqual(K.debugger.getMemory().rows, 8, 'zero rows is not a row count');
+  rowsBox.props.onChange({ target: { value: '999' } });
+  t.assertEqual(K.debugger.getMemory().rows, 64, 'a huge row count is clamped to the range the box promises');
+  rowsBox.props.onChange({ target: { value: '4' } });
+  t.assertEqual(K.debugger.getMemory().rows, 4, 'and a valid one is committed');
+  const after = env.treeStrings(render(env)).join('\n');
+  t.assert(after.indexOf('NaN') < 0, 'the rows box put no NaN on screen either');
+});
+
+suite.test('a patched byte is marked and keeps the value in the file for the tooltip', function (t) {
+  const fixture = romWithBytePattern();
+  const env = loadRom(fixture);
+  const K = env.K;
+  const rom = fixture.rom;
+  K.hex.gotoOffset(0x100);
+  const raw = rom[0x102] & 0xFF;
+  t.assertEqual(K.hex.setByte(0x102, 0x99), true, 'the hex patch layer should take the byte');
+
+  const view = K.debugger.memoryView();
+  const cell = view.rows[0].cells[2];
+  t.assertEqual(cell.offset, 0x102, 'the third cell is the patched byte');
+  t.assertEqual(cell.text, '99', 'the panel shows the patched value');
+  t.assertEqual(cell.patched, true, 'and marks the cell as patched');
+  t.assertEqual(cell.raw, raw, 'while the value in the file is kept');
+  t.assert(cell.title.indexOf('patched, was ' + hex2(raw)) >= 0, 'the tooltip says what it was, got: ' + cell.title);
+  t.assertEqual(view.rows[0].cells[1].patched, false, 'its neighbours are not marked');
+  t.assertEqual(rom[0x102] & 0xFF, raw, 'the loaded file is untouched');
+  t.assertEqual(K.hex.currentByte(0x102), 0x99, 'and the hex reader agrees with the cell');
+  const text = env.treeStrings(render(env)).join('\n');
+  t.assert(text.indexOf('1 patched byte(s) in view') >= 0, 'the panel counts the patches in view, got: ' + text.slice(0, 400));
+});
+
+suite.test('the memory grid keeps its keys: no global keyboard listener is added', function (t) {
+  const baseline = watchedLoad(false);
+  const loaded = watchedLoad(true);
+
+  t.assertEqual(typeof baseline.env.K.debugger, 'undefined', 'the baseline run should leave the debugger module out');
+  t.assert(loaded.env.K.debugger, 'the loaded run should have it');
+  t.assertDeepEqual(keyboardCalls(baseline.calls), [],
+    'no module should install a keyboard listener on the window, got: ' + JSON.stringify(baseline.calls));
+  t.assertDeepEqual(keyboardCalls(loaded.calls), keyboardCalls(baseline.calls),
+    'and the debugger tab must not add one either');
+  const stateCalls = loaded.calls.filter(function (c) { return c === 'window:ketor:save-state-loaded'; });
+  t.assertEqual(stateCalls.length, 1, 'the debugger module registers the save state event once');
+  t.assertDeepEqual(loaded.calls.filter(function (c) { return c !== 'window:ketor:save-state-loaded'; }), baseline.calls,
+    'and adds nothing else: the two runs agree on every other listener, got: ' + JSON.stringify(loaded.calls));
+});
+
+suite.test('Ctrl+C/V and the page keys live on the grid and step aside for a field', function (t) {
+  const fixture = romWithBytePattern();
+  const env = loadRom(fixture);
+  const K = env.K;
+  K.hex.gotoOffset(0x100);
+  /* A row that differs from the file it sits on: patch 0x100..0x10F to 0xE0..0xEF, so the
+     copied text can only come from the patch layer, and a paste that writes the file's own
+     0x10..0x1F bytes instead shows up in the diff. */
+  for (let i = 0; i < 16; i++) t.assertEqual(K.hex.setByte(0x100 + i, 0xE0 + i), true, 'patch byte ' + i + ' of the copied row');
+
+  const grid = gridNode(env);
+  t.assert(grid, 'the memory grid should be focusable (tabIndex 0)');
+  const handler = grid.props.onKeyDown;
+
+  ['INPUT', 'TEXTAREA', 'SELECT'].forEach(function (tag) {
+    const copy = press(handler, 'c', element(tag));
+    t.assertEqual(copy.prevented, 0, 'Ctrl+C in a ' + tag + ' belongs to the field');
+    const paste = press(handler, 'v', element(tag));
+    t.assertEqual(paste.prevented, 0, 'Ctrl+V in a ' + tag + ' belongs to the field');
+  });
+  const rich = press(handler, 'c', element('DIV', true));
+  t.assertEqual(rich.prevented, 0, 'and Ctrl+C in a contenteditable surface stays there');
+  t.assertEqual(K.debugger.getMemory().clipboardText, '', 'no field keystroke reached the grid clipboard');
+  t.assertEqual(K.hex.currentByte(0x200), 0xAA, 'and no field keystroke pasted a byte');
+
+  const copy = press(handler, 'c', element('DIV'));
+  t.assertEqual(copy.prevented, 1, 'Ctrl+C on the grid is the grid\'s');
+  const clip = K.debugger.getMemory().clipboardText;
+  t.assertEqual(clip, K.debugger.memoryText(), 'the copy holds the visible rows as hex text');
+  t.assertEqual(clip.split('\n')[0], 'E0 E1 E2 E3 E4 E5 E6 E7 E8 E9 EA EB EC ED EE EF',
+    'one row to a line, one space between two digit values, read through the patch layer');
+  t.assert(clip.indexOf('0x') < 0, 'the text pastes back byte for byte, so it carries no address');
+
+  K.debugger.typeMemoryOffset('0x200');
+  const beforePaste = K.hex.getPatchedBytes();
+  const paste = press(handler, 'v', element('DIV'));
+  t.assertEqual(paste.prevented, 1, 'Ctrl+V on the grid is the grid\'s');
+  const pasted = [];
+  for (let i = 0; i < 16; i++) pasted.push(0x200 + i);
+  t.assertDeepEqual(diffOffsets(beforePaste, K.hex.getPatchedBytes()), pasted,
+    'Ctrl+V wrote the copied row at the window and not one byte elsewhere');
+  const touched = [];
+  for (let i = 0; i < 16; i++) touched.push(0x100 + i);
+  for (let i = 0; i < 16; i++) touched.push(0x200 + i);
+  t.assertDeepEqual(diffOffsets(fixture.rom, K.hex.getPatchedBytes()), touched,
+    'the file now differs from the rom at the copied row and the pasted row only');
+  for (let i = 0; i < 16; i++) {
+    t.assertEqual(K.hex.currentByte(0x200 + i), 0xE0 + i, 'byte ' + i + ' of the pasted row should hold the copied value');
+  }
+
+  K.debugger.typeMemoryOffset('0x200');
+  t.assertEqual(press(handler, 'PageDown', element('DIV'), 'none').prevented, 1, 'PageDown belongs to the grid');
+  t.assertEqual(K.debugger.memoryView().start, 0x200 + 8 * 16, 'PageDown moves one page of the rows on screen');
+  t.assertEqual(press(handler, 'ArrowDown', element('DIV'), 'none').prevented, 1, 'ArrowDown too');
+  t.assertEqual(K.debugger.memoryView().start, 0x200 + 9 * 16, 'and moves a row at a time');
+  t.assertEqual(press(handler, 'Home', element('DIV'), 'none').prevented, 1, 'Home belongs to the grid');
+  t.assertEqual(K.debugger.memoryView().start, 0, 'and goes back to the first byte');
+  const inField = press(handler, 'ArrowDown', element('INPUT'), 'none');
+  t.assertEqual(inField.prevented, 0, 'an arrow key in a field stays in the field');
+  t.assertEqual(K.debugger.memoryView().start, 0, 'and does not move the memory window');
+});
+
+suite.test('a save state offers its RAM blocks and stays read only', function (t) {
+  const env = loadWorkbench();
+  const K = env.K;
+  const state = gbaState();
+
+  const info = K.debugger.setSaveState({ data: state, name: 'synthetic.state' });
+  t.assert(info, 'a GBA state should surrender its memory blocks');
+  t.assertEqual(info.size, GBA_STATE_SIZE, 'the reader reports the state it read');
+  t.assertDeepEqual(K.debugger.saveStateBlocks().map(function (b) { return b.id; }),
+    ['iwram', 'ewram', 'vram', 'palette', 'oam', 'io'],
+    'the six GBA blocks are offered, in the order the state writes them');
+
+  K.debugger.pickMemoryBlock('iwram');
+  const view = K.debugger.memoryView();
+  t.assertEqual(view.source.kind, 'state', 'the window reads the block, not the rom');
+  t.assertEqual(view.source.bytes.length, 0x8000, 'IWRAM is 32 KB');
+  t.assertEqual(view.rows[0].cells.length, 16, 'a row of a block is 16 bytes wide too');
+  t.assertEqual(view.rows[0].cells[0].text, '00', 'the block starts empty');
+  t.assertEqual(view.rows[1].cells[0].text, '5A', 'the byte put at 0x10 is the first cell of the second row');
+  t.assertEqual(view.rows[1].cells[1].text, 'A5', 'with its neighbour');
+
+  const tree = render(env);
+  const text = env.treeStrings(tree).join('\n');
+  t.assert(text.indexOf('IWRAM (32 KB)') >= 0, 'the picker names the block, got: ' + text.slice(0, 400));
+  t.assert(text.indexOf('synthetic.state') >= 0, 'and the panel names the state it came from');
+  t.assert(text.indexOf('not drawn on a state block') >= 0, 'the hex cursor belongs to the rom and is not drawn here');
+
+  K.debugger.pickMemoryBlock('ewram');
+  t.assertEqual(K.debugger.memoryView().source.bytes.length, 0x40000, 'EWRAM is 256 KB');
+
+  t.assertEqual(K.debugger.pasteMemoryText('00 01 02', 0), 0, 'a state block is not the loaded file');
+  t.assert(K.debugger.getMemory().status.indexOf('read only') >= 0,
+    'so the paste is refused with a reason, got: ' + K.debugger.getMemory().status);
+  t.assertEqual(state[0], 0, 'and no byte of the state moved');
+
+  K.debugger.pickMemoryBlock('rom');
+  t.assertEqual(K.debugger.memoryView(), null, 'with no rom loaded the rom source is empty');
+  t.assertEqual(K.debugger.clearSaveState() === undefined, true, 'the state can be dropped');
+  t.assertDeepEqual(K.debugger.saveStateBlocks(), [], 'and the block list goes with it');
+});
+
+suite.test('with no save state the picker is skipped, and one it cannot read is skipped too', function (t) {
+  const env = loadWorkbench();
+  const K = env.K;
+  t.assertDeepEqual(K.debugger.saveStateBlocks(), [], 'no state, no blocks');
+  t.assertEqual(K.debugger.setSaveState(null), null, 'handing in nothing is refused');
+
+  const fixture = romWithBytePattern();
+  K.hex.setRomFromLoad({ data: fixture.rom, name: 'synthetic.gba', size: fixture.rom.length }, 'GBA');
+  let text = env.treeStrings(render(env)).join('\n');
+  t.assert(text.indexOf('no save state loaded') >= 0, 'the panel says the ROM is all it has');
+  t.assert(text.indexOf('IWRAM') < 0, 'and no block is offered');
+
+  t.assertEqual(K.debugger.setSaveState(new Uint8Array(32), 'tiny.state'), null,
+    'a state too short to hold the blocks is refused');
+  t.assert(K.debugger.getMemory().status.indexOf('no GBA memory block') >= 0,
+    'with a reason, got: ' + K.debugger.getMemory().status);
+  t.assertDeepEqual(K.debugger.saveStateBlocks(), [], 'and nothing is offered');
+  text = env.treeStrings(render(env)).join('\n');
+  t.assert(text.indexOf('0x000000') >= 0, 'the ROM window still renders');
 });
 
 module.exports = { suite: suite };

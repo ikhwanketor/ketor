@@ -126,7 +126,10 @@ function loadWorkbench(options) {
   /* The debugger tab reads the display registers out of the rom, so the register
      scanner and the tab itself are loaded the way the preview page loads them. */
   load(path.join(CORE, 'gba-registers.js'));
-  load(path.join(UI, 'ketor-debugger-tab.js'));
+  /* The debugger tab adds no global keyboard listener of its own. A suite that counts what
+     the modules register asks for it to be left out of one run, so "new listener" can be
+     told from the ones every run installs. */
+  if (opts.loadDebugger !== false) load(path.join(UI, 'ketor-debugger-tab.js'));
   /* The tile editor writes a pixel back into the rom through the hex patch layer,
      so the suite about that write loads the module the preview page loads. */
   if (opts.loadTile !== false) load(path.join(UI, 'ketor-tile-activity.js'));
