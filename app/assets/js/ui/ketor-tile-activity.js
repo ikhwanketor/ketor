@@ -3434,19 +3434,13 @@
             }, '0x' + hex6(c.offset) + '  ' + c.score.toFixed(2));
           })
         ) : null,
-        st.palette ? e('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
-          e('span', { style: { opacity: 0.75 } }, 'Colour ' + st.colour),
-          e('input', {
-          type: 'color', value: colourHex(paletteColour(st.colour)),
-          title: 'Edit palette colour ' + st.colour + ' (written as a patch)',
-          onChange: function (ev) {
-            var m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(ev.target.value);
-            if (!m) return;
-            writePaletteColour(st.colour, { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) });
-          },
-            style: { width: 46, height: 22, padding: 0, background: 'transparent', border: '1px solid var(--kt-widget-border-default)' }
-          })
-        ) : null
+        /* The colour box itself is the one in the status bar, under the sheet, where it
+           stays in sight whatever the panel shows; this label only names the entry that
+           box edits, so the same edit is not offered twice. */
+        st.palette ? e('span', {
+          style: { opacity: 0.75 },
+          title: 'The colour box in the status bar edits this palette entry'
+        }, 'Colour ' + st.colour) : null
       ),
 
       e(Section, { title: 'Paste hex from an emulator' },
@@ -3515,14 +3509,8 @@
           return e('option', { key: id, value: id }, formats[id].label);
         }))
       ),
-      e('label', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-        'Zoom',
-        e('select', {
-          className: 'kt-select', value: st.zoom,
-          onChange: function (ev) { _set({ zoom: Number(ev.target.value) }); },
-          style: { fontSize: 11 }
-        }, [1, 2, 3, 4, 6, 8].map(function (z) { return e('option', { key: 'z' + z, value: z }, z + 'x'); }))
-      ),
+      /* The sheet scale has no box of its own here: the buttons of the toolbar step it from
+         1x to 8x, every step included, which a short list of options could not name. */
       e('label', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
         'Tiles shown',
         e('select', {
