@@ -976,19 +976,29 @@
            next address the table names, which is what a walk to the next entry did when it
            pulled the whole image into the list. 0x100 is the outer bound for a table that
            declares no end code at all. */
-        var spanEnd = Math.min(nextTarget, base + 0x100);
-        /* The record ends at its end code, but the search for that code starts where the
-           record's text starts: a Kingdom Hearts record opens with a header that holds a
-           00 byte (07 00), and stopping there ended the span before the text began, which
-           left the records empty. */
-        var firstTextStart = -1;
-        while (cursor + (firstTextStart < 0 ? 0 : 0) < startsInOrder.length && firstTextStart < 0) {
-          if (startsInOrder[cursor] >= base) firstTextStart = startsInOrder[cursor];
-          else cursor++;
-        }
-        if (firstTextStart >= 0 && firstTextStart < spanEnd) {
-          for (var ep = firstTextStart; ep < spanEnd; ep++) {
-            if (_state.romBytes && (_state.romBytes[ep] & 0xFF) === endByte) { spanEnd = ep + 1; break; }
+        /* A record's pages lie between the address the table names and the address it
+           names next, and the user's own saved project proved how much that matters: of
+           their 7 intro texts and 100 Soma dialogues, the extraction had 3 and 25, because
+           the span was cut at the first end code it met - which is the end of the *first
+           page*, not of the record (Castlevania marks a page with 05 09 or 05 04 03 00 07 01
+           and only closes the record with 05 09 0A). So a gap of a record's size is taken
+           whole; a table whose entries are far apart gets a tight bound instead, because
+           that span covers the image and pulled 245,538 texts in when it was tried. */
+        var gap = nextTarget - base;
+        var spanEnd;
+        if (gap > 0 && gap <= 0x400) {
+          spanEnd = nextTarget;
+        } else {
+          spanEnd = base + 0x100;
+          var firstTextStart = -1;
+          while (cursor < startsInOrder.length && firstTextStart < 0) {
+            if (startsInOrder[cursor] >= base) firstTextStart = startsInOrder[cursor];
+            else cursor++;
+          }
+          if (firstTextStart >= 0 && firstTextStart < spanEnd) {
+            for (var ep = firstTextStart; ep < spanEnd; ep++) {
+              if (_state.romBytes && (_state.romBytes[ep] & 0xFF) === endByte) { spanEnd = ep + 1; break; }
+            }
           }
         }
         /* Every text inside the record is kept. The user's Aria of Sorrow intro is one
