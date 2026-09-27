@@ -121,6 +121,9 @@ function loadWorkbench() {
      scanner and the tab itself are loaded the way the preview page loads them. */
   load(path.join(CORE, 'gba-registers.js'));
   load(path.join(UI, 'ketor-debugger-tab.js'));
+  /* The tile editor writes a pixel back into the rom through the hex patch layer,
+     so the suite about that write loads the module the preview page loads. */
+  load(path.join(UI, 'ketor-tile-activity.js'));
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
