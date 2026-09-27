@@ -1,61 +1,63 @@
-# legacy/ — arsip beku PocketTranslate
+# legacy/ — frozen archive of PocketTranslate
 
-Isi folder ini adalah aplikasi lama **PocketTranslate** (satu halaman `index.html` +
-`core.js` 4.729 baris + `app-ui.js`) beserta `main.css`-nya. Sejak batch 180
-aplikasi yang dipakai adalah workbench di `app/`, dan folder ini **tidak dimuat,
-tidak dirujuk, dan tidak diuji** oleh apa pun di `app/` maupun `tests/`.
+The contents of this folder are the old **PocketTranslate** application (a single
+`index.html` page + `core.js` at 4,729 lines + `app-ui.js`) together with its
+`main.css`. Since batch 180 the application in use is the workbench in `app/`, and
+this folder is **not loaded, not referenced, and not tested** by anything in `app/`
+or `tests/`.
 
-## Kenapa disimpan, bukan dihapus
+## Why it is kept, not deleted
 
-- `core.js` masih menyimpan `createRelativeSearchWorker` (di sini baris 4693-5066)
-  dan beberapa helper lain yang belum dipindahkan ke `app/assets/js/core/`.
-  `app-ui.js` memanggilnya lewat nama global, jadi keduanya utuh di sini sampai
-  pemindahan itu selesai.
-- Riwayat dan bentuk asli fungsi-fungsi yang sudah dipindah (text codec, `rebuildRom`,
-  tiga worker) bisa dibandingkan langsung dengan salinan barunya di `app/assets/js/core/`.
-- Kalau ada laporan bug dari versi lama, berkasnya masih bisa dibuka apa adanya.
+- `core.js` still holds `createRelativeSearchWorker` (here at lines 4693-5066)
+  and a few other helpers that have not been moved to `app/assets/js/core/`.
+  `app-ui.js` calls it through a global name, so both stay intact here until
+  that move is finished.
+- The history and original shape of the functions that have already been moved
+  (text codec, `rebuildRom`, the three workers) can be compared directly with their
+  new copies in `app/assets/js/core/`.
+- If a bug report comes in from the old version, its files can still be opened as they are.
 
-Folder ini beku: perbaikan dan fitur baru masuk ke `app/`, bukan ke sini.
+This folder is frozen: fixes and new features go into `app/`, not here.
 
-## Cara membukanya
+## How to open it
 
-Halaman ini membuat Worker lewat `URL.createObjectURL`, dan berkas diambil dengan
-`fetch`/`<script src>`; membuka `index.html` langsung dari `file://` akan gagal di
-banyak peramban. Jalankan server statis dari akar repo, lalu buka:
+This page creates Workers through `URL.createObjectURL`, and files are fetched with
+`fetch`/`<script src>`; opening `index.html` directly from `file://` will fail in
+many browsers. Run a static server from the repo root, then open:
 
 ```
 python -m http.server 8080
-# lalu: http://localhost:8080/legacy/index.html
+# then: http://localhost:8080/legacy/index.html
 ```
 
-Struktur `assets/` sengaja dipertahankan persis seperti aslinya supaya rujukan
-`./assets/css/main.css`, `./assets/js/core.js` dan `./assets/js/app-ui.js` di
-`index.html` tetap benar tanpa diubah.
+The `assets/` structure is deliberately kept exactly as it was so that the references
+`./assets/css/main.css`, `./assets/js/core.js` and `./assets/js/app-ui.js` in
+`index.html` stay correct without being changed.
 
-## Catatan provenans
+## Provenance note
 
-Asal-usul `createRelativeSearchWorker` (`legacy/assets/js/core.js:4693-5066`) tidak
-diketahui: tidak ada catatan batch, tidak ada berkas pendamping, dan tidak ada
-riwayat commit yang menjelaskan dari mana kode itu datang atau polanya diambil.
-Perlakukan sebagai kode tanpa provenans sampai ada yang bisa membuktikannya.
+The origin of `createRelativeSearchWorker` (`legacy/assets/js/core.js:4693-5066`) is
+unknown: there is no batch note, no companion file, and no commit history that
+explains where that code came from or where its pattern was taken from.
+Treat it as code with no provenance until someone can prove otherwise.
 
-## Folder `unused/`
+## The `unused/` folder
 
-`unused/` menampung berkas yang **tidak dipakai aplikasi sama sekali**: tidak dimuat
-halaman mana pun, tidak dipanggil modul lain, dan tidak diuji perilakunya. Berkas di
-sini disimpan sebagai rujukan saja (membandingkan bentuk lama, menelusuri asal-usul),
-bukan kode yang tinggal diaktifkan kembali tanpa alasan yang jelas.
+`unused/` holds files that are **not used by the application at all**: not loaded by
+any page, not called by any other module, and not tested for behaviour. Files here
+are kept as reference only (comparing old shapes, tracing origins), not as code that
+can be re-enabled without a clear reason.
 
-| Berkas | Asal | Alasan diarsipkan |
+| File | Origin | Reason archived |
 | --- | --- | --- |
-| `ketor-tasks-registry.js` | `app/assets/js/ui/ketor-tasks-registry.js` | Batch 182: satu-satunya penulis dan pembaca `Ketor.tasks.*` adalah berkas itu sendiri, sementara panel bawah sudah mengambil daftar tugas dari workbench context (`props.tasks` di `app/assets/js/ui/ketor-panel.js`). Tidak ada pemanggil nyata, jadi tag `<script>`-nya dicabut dari `app/index.html` dan berkasnya dipindahkan ke sini. |
+| `ketor-tasks-registry.js` | `app/assets/js/ui/ketor-tasks-registry.js` | Batch 182: the only writer and reader of `Ketor.tasks.*` was that file itself, while the bottom panel already takes the task list from the workbench context (`props.tasks` in `app/assets/js/ui/ketor-panel.js`). There is no real caller, so its `<script>` tag was pulled from `app/index.html` and the file was moved here. |
 
-## Peta cepat
+## Quick map
 
-| Berkas | Isi |
+| File | Contents |
 | --- | --- |
-| `index.html` | halaman lama; memuat `./assets/css/main.css`, `./assets/js/core.js`, `./assets/js/app-ui.js` |
-| `assets/js/core.js` | mesin lama: text codec, `rebuildRom`, semua worker, patch, CSV, AI translate |
-| `assets/js/app-ui.js` | komponen React lama (satu berkas besar) |
-| `assets/css/main.css` | tema lama; `.btn-danger` (baris 181-189) sudah disalin ke `app/assets/css/vscode-components.css` |
-| `unused/ketor-tasks-registry.js` | registri tugas `Ketor.tasks` yang tak dipakai; lihat bagian `unused/` di atas |
+| `index.html` | the old page; loads `./assets/css/main.css`, `./assets/js/core.js`, `./assets/js/app-ui.js` |
+| `assets/js/core.js` | the old engine: text codec, `rebuildRom`, all workers, patch, CSV, AI translate |
+| `assets/js/app-ui.js` | the old React components (one big file) |
+| `assets/css/main.css` | the old theme; `.btn-danger` (lines 181-189) has already been copied to `app/assets/css/vscode-components.css` |
+| `unused/ketor-tasks-registry.js` | the unused `Ketor.tasks` task registry; see the `unused/` section above |
