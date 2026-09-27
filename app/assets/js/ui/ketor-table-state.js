@@ -141,6 +141,8 @@
     wildcardEnabled: false,
     wildcardChar: '*',
     byteWidth: 8,
+    /* The width the results in hand were searched with; 0 means "ask the table". */
+    searchCharWidth: 0,
     endianness: 'little',
     charset: 'ASCII',
     advancedOpen: false,
@@ -202,6 +204,108 @@
     _set({ searchHistory: l });
   }
 
+  /* ------------------------------------------------------------
+     A table code is the bytes the game stores for one character.
+     One byte (41=A) is the character and nothing else. A two byte
+     code puts a padding zero beside the character, and the padding
+     is not always behind: 20 00 is a space, but 00 20 is a space
+     too, so the character byte is the byte that is not the padding,
+     whichever side it sits on. Two real bytes name no single
+     character, and that is said out loud instead of guessing one.
+     ------------------------------------------------------------ */
+  var PADDING_BYTE = 0x00;
+
+  function bytesOfCode(hex) {
+    var h = String(hex === undefined || hex === null ? '' : hex).replace(/\s+/g, '').toUpperCase();
+    if (!h || h.length % 2 !== 0 || !/^[0-9A-F]+$/.test(h)) return null;
+    var out = [];
+    for (var i = 0; i < h.length; i += 2) out.push(parseInt(h.substr(i, 2), 16));
+    return out;
+  }
+
+  /* The byte that is the character, or -1 when the code has two real bytes. */
+  function characterByteOf(hex) {
+    var bytes = bytesOfCode(hex);
+    if (!bytes) return NaN;
+    if (bytes.length === 1) return bytes[0];
+    var real = [];
+    for (var i = 0; i < bytes.length; i++) {
+      if (bytes[i] !== PADDING_BYTE) real.push(bytes[i]);
+    }
+    if (real.length === 0) return PADDING_BYTE;
+    if (real.length === 1) return real[0];
+    return -1;
+  }
+
+  /* The codes of the table in hand: the edit table first, since that is the one
+     the user brought in, then the generated preview. A search who reads a result
+     back has to read it in this width. */
+  function tableCodes() {
+    var codes = [];
+    (_state.editEntries || []).forEach(function (en) {
+      if (en && en.hex) codes.push(String(en.hex));
+    });
+    if (codes.length) return codes;
+    var entries = [];
+    try { entries = parseTbl(_state.previewTbl || '') || []; } catch (_) { entries = []; }
+    for (var i = 0; i < entries.length; i++) {
+      codes.push(String((entries[i] && entries[i].hex) || ''));
+    }
+    return codes;
+  }
+
+  /* How many bytes one character takes, as the table says it: a code of four hex
+     digits means two bytes a character. The setting is only the fallback. */
+  function tableCharWidth() {
+    var codes = tableCodes();
+    for (var i = 0; i < codes.length; i++) {
+      var code = codes[i].replace(/\s+/g, '');
+      if (code.length >= 4 && code.length % 2 === 0) return code.length / 2;
+    }
+    return _state.byteWidth === 16 ? 2 : 1;
+  }
+
+  /* The width the search that produced the results was run with. Everything that
+     reads a result back - the wildcard capture, the preview table, the guess -
+     uses this, so a sixteen bit result is read as sixteen bit all the way. */
+  function searchCharWidth() {
+    var w = Number(_state.searchCharWidth);
+    if (w === 1 || w === 2) return w;
+    return tableCharWidth();
+  }
+
+  /* Which byte of a two byte code holds the character: 0 when the padding is
+     behind it (4100=A), 1 when the padding is in front (0041=A), -1 when the
+     table does not say. */
+  function tableCharIndex() {
+    var codes = tableCodes();
+    for (var i = 0; i < codes.length; i++) {
+      var bytes = bytesOfCode(codes[i]);
+      if (!bytes || bytes.length < 2) continue;
+      return (bytes[0] === PADDING_BYTE && bytes[bytes.length - 1] !== PADDING_BYTE) ? 1 : 0;
+    }
+    return -1;
+  }
+
+  /* The code for a character byte, written the way the game stores it: two hex
+     digits for a one byte table, four for a two byte table, with the padding on
+     the side the loaded table uses. */
+  function codeHexFor(byteValue, width, charIndex) {
+    var b = byteValue & 0xFF;
+    var h = b.toString(16).toUpperCase();
+    if (h.length < 2) h = '0' + h;
+    if (width !== 2) return h;
+    return charIndex === 1 ? '00' + h : h + '00';
+  }
+
+  /* The preview follows the padding side of the table that was loaded; with no
+     table to follow, the endianness setting decides which byte comes first. */
+  function previewCharIndex() {
+    var i = tableCharIndex();
+    if (i === 0 || i === 1) return i;
+    return _state.endianness === 'big' ? 1 : 0;
+  }
+
   function parseTbl(content) {
     var lines = String(content || '').replace(/\r/g, '').split('\n');
     var out = [];
@@ -229,7 +333,10 @@
       if (isEnd && (!ch || ch.trim() === '')) ch = '[END]';
       if (ch.toUpperCase() === '[SPACE]') ch = ' ';
       idx++;
-      var byteVal = parseInt(hex, 16);
+      /* The comment and its hints talk about the character byte, which for a
+         padded two byte code is the byte that is not the padding. */
+      var charByte = characterByteOf(hex);
+      var byteVal = charByte === -1 ? NaN : charByte;
       out.push({
         id: 'e' + idx, hex: hex, char: ch,
         bytes: (hex.match(/.{1,2}/g) || []).join(' '),
@@ -275,9 +382,13 @@
     }
 
     if (u.indexOf('[UNK_') === 0) {
-      var m = u.match(/^\[UNK_([0-9A-F]{2})\]$/);
+      /* Two digits is one byte. Four or more is a code whose padding may sit on
+         either side, so its character byte is the byte that is not padding. */
+      var m = u.match(/^\[UNK_([0-9A-F]{2,})\]$/);
       if (!m) return 'unknown byte';
-      var b = parseInt(m[1], 16);
+      var codeHex = m[1];
+      var b = characterByteOf(codeHex);
+      if (b === -1) return 'unknown code (0x' + codeHex + ') - two real bytes, no single character byte';
       if (!Number.isFinite(b)) return 'unknown byte';
 
       if (b === 0x09) return 'tab';
@@ -294,10 +405,11 @@
         if (b >= 65 && b <= 90) return 'uppercase letter';
         if (b >= 97 && b <= 122) return 'lowercase letter';
         if (b >= 48 && b <= 57) return 'digit';
+        if (b === 0x20) return 'space';
         return 'ASCII "' + ascii + '"';
       }
 
-      return 'extended byte (0x' + m[1] + ')';
+      return 'extended byte (0x' + b.toString(16).toUpperCase().padStart(2, '0') + ')';
     }
 
     if (s.length === 1) return classifyChar(s);
@@ -305,6 +417,7 @@
   }
 
   function classifyChar(s) {
+    if (s === ' ') return 'space';
     var cp = s.charCodeAt(0);
     if (cp >= 65 && cp <= 90) return 'uppercase letter';
     if (cp >= 97 && cp <= 122) return 'lowercase letter';
@@ -346,22 +459,31 @@
 
   function captureWildcardBytes(result) {
     if (!_state.wildcardEnabled) return [];
-    if (_state.byteWidth !== 8) return [];
     var sample = String(result.sampleText || '');
     var wc = _state.wildcardChar.charCodeAt(0);
     if (!sample || !wc) return [];
     var data = _state.romBytes;
     if (!data) return [];
+    /* A character can be two bytes wide, so a wildcard sits width bytes into the
+       sample and the code it captured is the whole code, not one loose byte. */
+    var width = searchCharWidth();
     var cap = [];
     var seen = {};
     for (var k = 0; k < sample.length; k++) {
       if (sample.charCodeAt(k) !== wc) continue;
-      var pos = result.offset + k;
-      if (pos < 0 || pos >= data.length) continue;
-      var v = data[pos] & 0xFF;
-      if (seen[v]) continue;
-      seen[v] = true;
-      cap.push({ pos: k, value: v, char: ruleAssignChar(v) });
+      var pos = result.offset + k * width;
+      if (pos < 0 || pos + width > data.length) continue;
+      var code = '';
+      for (var w = 0; w < width; w++) code += codeHexFor(data[pos + w], 1, 0);
+      if (seen[code]) continue;
+      seen[code] = true;
+      var cb = characterByteOf(code);
+      cap.push({
+        pos: k,
+        code: code,
+        value: cb === -1 ? null : cb,
+        char: cb === -1 ? '[UNK_' + code + ']' : ruleAssignChar(cb)
+      });
     }
     return cap;
   }
@@ -369,9 +491,15 @@
   function buildPreviewFromResult(result, captured) {
     var lines = [];
     var handled = {};
+    /* The preview table is written in the width of the search that produced it:
+       one byte a character gives 41=A, two bytes gives 4100=A, which is the code
+       the game stores and the code the search and the insert read back. */
+    var width = searchCharWidth();
+    var charIndex = previewCharIndex();
+    var codeOf = function (b) { return codeHexFor(b, width, charIndex); };
 
     (captured || []).forEach(function (c) {
-      var h = c.value.toString(16).toUpperCase().padStart(2, '0');
+      var h = c.code || codeOf(c.value);
       if (handled[h]) return;
       handled[h] = true;
       var ch = c.char;
@@ -387,13 +515,13 @@
       if (cp === 65 || cp === 97) {
         for (var lo = 0; lo < 26; lo++) {
           var b = (val + lo) & 0xFF;
-          var hx = b.toString(16).toUpperCase().padStart(2, '0');
+          var hx = codeOf(b);
           if (handled[hx]) continue;
           handled[hx] = true;
           lines.push(hx + '=' + String.fromCharCode(cp + lo));
         }
       } else {
-        var h2 = val.toString(16).toUpperCase().padStart(2, '0');
+        var h2 = codeOf(val);
         if (handled[h2]) return;
         handled[h2] = true;
         lines.push(h2 + '=' + key);
@@ -409,6 +537,7 @@
       romSystem: systemName || 'Unknown',
       romSize: result.size || 0,
       results: [], selectedResultIdx: -1, previewTbl: '', capturedBytes: [],
+      searchCharWidth: 0,
       compareFileName: '', compareTbl: '',
       editEntries: [], editSource: '', isApplied: false,
       smartGuessMap: {}, smartGuessActive: false,
@@ -438,7 +567,11 @@
     if (!K.core || typeof K.core.detectControlCodes !== 'function') return {};
     try {
       return K.core.detectControlCodes(_state.romBytes, results, {
-        maxResults: 500
+        maxResults: 500,
+        /* The scan reads the sample as codes of the table's width, or a sixteen
+           bit sample ends halfway through a character. */
+        charWidth: searchCharWidth(),
+        charByteOffset: previewCharIndex()
       });
     } catch (_) { return {}; }
   }
@@ -455,30 +588,24 @@
     var text = String(_state.sampleText || '');
     var lines = text.split('\n').map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 0; });
     if (!lines.length) { _set({ status: 'Enter text in-game (one per line).' }); return; }
+    /* How many bytes a character takes is a property of the table, not of a setting. A table
+       whose codes are four hex digits (4100=A) says the game stores two bytes a character;
+       searching the samples one byte a character found nothing, so there were no results, and
+       with no results the preview stayed empty - the bug on the sixteen bit rom. The width is
+       read from the table before this search clears the preview, and it is kept, because the
+       capture, the preview and the guess all have to read the result back the same way. */
+    var searchWidth = tableCharWidth();
     _set({
       isSearching: true,
       status: 'Searching ' + lines.length + ' sample(s)...',
       results: [], selectedResultIdx: -1, previewTbl: '', capturedBytes: [],
-      smartGuessMap: {}, smartGuessActive: false
+      smartGuessMap: {}, smartGuessActive: false,
+      searchCharWidth: searchWidth
     });
     pushHistory(lines.join('\n'));
     setTimeout(function () {
       try {
         var all = [];
-        /* How many bytes a character takes is a property of the table, not of a setting. A table
-           whose codes are four hex digits (4100=A) says the game stores two bytes a character;
-           searching the samples one byte a character found nothing, so there were no results, and
-           with no results the preview stayed empty - the bug on the sixteen bit rom. The search
-           follows the table from now on, and the old setting is only the fallback. */
-        var tableBytes = 1;
-        try {
-          var tableEntries = parseTbl(_state.previewTbl || '') || [];
-          for (var te = 0; te < tableEntries.length; te++) {
-            var entry = tableEntries[te];
-            var code = String(entry && (entry.hex !== undefined ? entry.hex : (entry.code !== undefined ? entry.code : entry[0])) || '');
-            if (code.length >= 4 && code.length % 2 === 0) { tableBytes = code.length / 2; break; }
-          }
-        } catch (e) { tableBytes = 1; }
         var maxPer = Math.max(50, Math.floor(500 / lines.length));
         for (var i = 0; i < lines.length; i++) {
           var line = lines[i];
@@ -487,7 +614,7 @@
             keyword: line,
             wildcardEnabled: _state.wildcardEnabled,
             wildcardChar: _state.wildcardChar,
-            byteWidth: tableBytes > 1 ? tableBytes * 8 : _state.byteWidth,
+            byteWidth: searchWidth * 8,
             endianness: _state.endianness,
             maxResults: maxPer
           });
@@ -533,6 +660,7 @@
     _set({
       results: [], selectedResultIdx: -1, previewTbl: '', capturedBytes: [],
       smartGuessMap: {}, smartGuessActive: false,
+      searchCharWidth: 0,
       status: 'Results cleared.'
     });
   }
@@ -773,7 +901,7 @@
     _set({
       romBytes: null, romName: '', romSystem: '', romSize: 0,
       sampleText: '', results: [], selectedResultIdx: -1,
-      previewTbl: '', capturedBytes: [],
+      previewTbl: '', capturedBytes: [], searchCharWidth: 0,
       compareFileName: '', compareTbl: '',
       editEntries: [], editSource: '', isApplied: false,
       isSearching: false, smartGuessMap: {}, smartGuessActive: false,

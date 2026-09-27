@@ -155,6 +155,17 @@
 
     if (!romBytes || !results || !results.length) return {};
 
+    /* A table can put two bytes in one character. The scan then has to read the
+       sample as codes: the code that follows is a whole code away, and which of
+       its bytes is the character depends on the side the padding sits on. With
+       one byte a character this is the byte right after, exactly as before. */
+    var charWidth = Number(opts.charWidth) === 2 ? 2 : 1;
+    var charByteOffset = Number(opts.charByteOffset) === 1 ? 1 : 0;
+    var codeByteAt = function (codeStart) {
+      var at = codeStart + charByteOffset;
+      return (at >= 0 && at < romBytes.length) ? (romBytes[at] & 0xFF) : -1;
+    };
+
     var stats = {};
 
     for (var r = 0; r < maxResults; r++) {
@@ -166,7 +177,7 @@
       var sampleLen = String(result.sampleText || '').length;
       if (sampleLen < 3) continue;
 
-      var sampleEnd = Math.min(romBytes.length, offset + sampleLen);
+      var sampleEnd = Math.min(romBytes.length, offset + sampleLen * charWidth);
 
       for (var i = offset; i < sampleEnd; i++) {
         var b = romBytes[i] & 0xFF;
@@ -175,9 +186,12 @@
         if (!stats[b]) stats[b] = { total: 0, paddingAfter: 0, printableAfter: 0, chainAfter: 0 };
         stats[b].total++;
 
-        var n1 = (i + 1 < romBytes.length) ? (romBytes[i + 1] & 0xFF) : -1;
-        var n2 = (i + 2 < romBytes.length) ? (romBytes[i + 2] & 0xFF) : -1;
-        var n3 = (i + 3 < romBytes.length) ? (romBytes[i + 3] & 0xFF) : -1;
+        /* The code this byte belongs to, then the character byte of the codes that
+           come after it: a lone padding zero is not the end of the text. */
+        var codeStart = offset + Math.floor((i - offset) / charWidth) * charWidth;
+        var n1 = codeByteAt(codeStart + charWidth);
+        var n2 = codeByteAt(codeStart + charWidth * 2);
+        var n3 = codeByteAt(codeStart + charWidth * 3);
 
         if (n1 === 0x00 && n2 === 0x00) stats[b].paddingAfter++;
         if (isPrintable(n1)) stats[b].printableAfter++;

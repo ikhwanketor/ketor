@@ -104,6 +104,10 @@ function loadWorkbench() {
   load(path.join(UI, 'ketor-translate-sidebar.js'));
   load(path.join(CORE, 'rom-identifier.js'));
   load(path.join(CORE, 'control-code-detector.js'));
+  /* The sample search and the table tab itself: a suite about what a table does with
+     a rom needs the same two pieces the app runs. */
+  load(path.join(CORE, 'monkey-moore.js'));
+  load(path.join(UI, 'ketor-table-state.js'));
   load(path.join(CORE, 'pointer-table-detector.js'));
   load(path.join(CORE, 'game-profile.js'));
   /* The font tools the in game preview needs: the game's own glyphs, not a mock up. */

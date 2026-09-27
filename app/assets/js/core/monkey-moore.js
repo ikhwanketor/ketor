@@ -100,11 +100,14 @@
         i += n;
         if (results.length >= maxHits) break;
       } else {
-        // Boyer-Moore shift based on last delta
-        var jj = Math.max(0, j);
-        var cur2 = readChar(data, i + jj + 1, charWidth, little);
-        var prev2 = readChar(data, i + jj, charWidth, little);
-        var shift = 1;
+        /* Boyer-Moore shift. The skip table is built for the delta aligned with
+           the last pattern delta, so that is the one the shift has to be read
+           from. Reading it from the position that happened to mismatch is what
+           let a clean sample with a single occurrence in the rom be skipped
+           over: the scan jumped past the one window that would have matched. */
+        var cur2 = readChar(data, i + m, charWidth, little);
+        var prev2 = readChar(data, i + m - 1, charWidth, little);
+        var shift = m;
         if (cur2 >= 0 && prev2 >= 0) {
           var d2 = cur2 - prev2;
           if (d2 >= -255 && d2 <= 255) {
@@ -311,6 +314,9 @@
       var valuesLabel = keys.map(function (k) {
         var h = (m.values[k] & 0xFF).toString(16).toUpperCase();
         if (h.length < 2) h = '0' + h;
+        /* A two byte character is shown as the code the game stores, padding and
+           all, so the label can be read against the table it becomes. */
+        if (charWidth === 2) h = little ? h + '00' : '00' + h;
         return k + '=' + h;
       }).join(' ');
       out.push({
