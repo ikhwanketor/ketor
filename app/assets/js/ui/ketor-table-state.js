@@ -465,6 +465,20 @@
     setTimeout(function () {
       try {
         var all = [];
+        /* How many bytes a character takes is a property of the table, not of a setting. A table
+           whose codes are four hex digits (4100=A) says the game stores two bytes a character;
+           searching the samples one byte a character found nothing, so there were no results, and
+           with no results the preview stayed empty - the bug on the sixteen bit rom. The search
+           follows the table from now on, and the old setting is only the fallback. */
+        var tableBytes = 1;
+        try {
+          var tableEntries = parseTbl(_state.previewTbl || '') || [];
+          for (var te = 0; te < tableEntries.length; te++) {
+            var entry = tableEntries[te];
+            var code = String(entry && (entry.hex !== undefined ? entry.hex : (entry.code !== undefined ? entry.code : entry[0])) || '');
+            if (code.length >= 4 && code.length % 2 === 0) { tableBytes = code.length / 2; break; }
+          }
+        } catch (e) { tableBytes = 1; }
         var maxPer = Math.max(50, Math.floor(500 / lines.length));
         for (var i = 0; i < lines.length; i++) {
           var line = lines[i];
@@ -473,7 +487,7 @@
             keyword: line,
             wildcardEnabled: _state.wildcardEnabled,
             wildcardChar: _state.wildcardChar,
-            byteWidth: _state.byteWidth,
+            byteWidth: tableBytes > 1 ? tableBytes * 8 : _state.byteWidth,
             endianness: _state.endianness,
             maxResults: maxPer
           });
