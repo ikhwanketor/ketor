@@ -286,12 +286,33 @@
       var lastEnd = last ? last.at + (last.count - 1) * last.stride : -1;
       var close = last && (r.at - lastEnd) >= 0 && (r.at - lastEnd) <= last.stride * 8;
       var sameDelta = last && (last.dominantDelta === r.dominantDelta || last.matchedTexts === 0 || r.matchedTexts === 0);
+      /* The second run has to carry on where the first stopped. A table walks through the
+         image in one direction, so a run whose first target sits below the last one the
+         table reached is not the same table, however close its sites are. Measured on
+         Aria of Sorrow: without this the detector reported 2903 entries where the table
+         holds 2893 - two of the extra were the neighbouring list in front of the table
+         and eight were a foreign run whose targets jump back, glued on by the delta test
+         alone. Entries that jump back *inside* one run are a different thing and stay:
+         that is the secondary list this table really carries. */
       if (close && sameDelta) {
         /* Count the sites between the two runs instead of multiplying a stride across a
            gap of entries that are not pointers: that arithmetic reported 2567 entries
            where the table holds 2893. */
         last.count = r.toIndex - last.fromIndex + 1;
         last.toIndex = r.toIndex;
+        /* Note for a later batch: this merge is where the ten extra entries of Aria of
+           Sorrow come from (2,903 reported against the 2,893 the engine's table holds).
+           Measured: two of them are the neighbouring pointer list in front of the table
+           and eight are sites of the merged run whose targets jump around. Two fixes
+           were tried and measured, and both were wrong: refusing to merge a run whose
+           first target is below the table's last one reported only 2,232 entries (the
+           table is split in the middle by those very jumps, so half of it was lost), and
+           dropping the incoming entries that do not walk forward still left seven of the
+           eight. The next attempt has to keep which run and which mode an entry came from
+           - the run carries mode 'base' or 'raw' - and judge the merged run as a whole.
+           Until then the ten extra entries stay: they cost ten phantom texts in a list of
+           thousands and nothing in a build, because a build only writes the texts the
+           user translated. */
         if (r.entries) last.entries = (last.entries || []).concat(r.entries);
         last.regionEnd = Math.max(last.regionEnd, r.regionEnd);
         last.spansOk += r.spansOk;
