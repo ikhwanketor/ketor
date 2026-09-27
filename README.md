@@ -353,19 +353,37 @@ Prior work this project learned from, credited by the source itself:
   included here.
 
 Where a reference is documentation, no code was taken from it. Nothing above is a
-dependency of the application except the three CDN entries in the table.
+dependency of the application except the three CDN entries in the table. The same
+list, with the exact CDN entry points, is in [THIRD-PARTY.md](THIRD-PARTY.md).
 
 ## License
 
-See [LICENSE](LICENSE) for the terms.
+Ketor is free software under the **GNU General Public License version 3** (GPL-3.0):
+see [LICENSE](LICENSE) for the full text and [NOTICE](NOTICE) for the copyright holder
+and the additional attribution terms.
 
-Third-party components remain under their own licenses, as listed above.
+You may use, study, modify and distribute this project for any purpose, provided that a
+distributed copy or modified version stays under GPL-3.0 and that the copyright notice
+and the author attribution
+(`Ketor by Ikhwan Ketor - https://github.com/ikhwanketor/ketor`) are kept, in the source
+files, in the documentation or in the About display, as [NOTICE](NOTICE) requires under
+Section 7(b) of the license.
+
+Third-party components remain under their own licenses, and the prior work this project
+credits is listed in [THIRD-PARTY.md](THIRD-PARTY.md).
 
 ## Contributing
 
 Issues and pull requests are welcome at
-https://github.com/ikhwanketor/ketor. By sending a contribution you agree that it may be
-distributed under the license of this project.
+https://github.com/ikhwanketor/ketor. Contributions are accepted under GPL-3.0, the
+license of this project, including the attribution terms in [NOTICE](NOTICE);
+[CONTRIBUTING.md](CONTRIBUTING.md) has the commands to run the tests and what a batch
+looks like.
+
+By sending a contribution you agree that it is your own work, that it is licensed under
+GPL-3.0 (or a later version) once it is merged, and that the maintainer may relicense the
+project - your contribution included - so the license can be changed in the future
+without having to track down every contributor.
 
 ## ROMs and tables
 

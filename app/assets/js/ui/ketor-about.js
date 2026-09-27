@@ -81,7 +81,7 @@
             style: { lineHeight: 1.9 }
           },
             e('div', null, 'Author: ', e('strong', null, 'Ikhwan Ketor')),
-            e('div', null, 'License: MIT'),
+            e('div', null, 'License: GPL-3.0'),
             e('div', null,
               'Repository: ',
               e('a', {
