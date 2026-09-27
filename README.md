@@ -14,7 +14,7 @@ a server are the translation calls the user starts by hand.
 - One application, one entry point: `app/index.html`, the workbench. The old
   monolithic page is frozen under `legacy/`, and nothing in `app/` or `tests/` loads
   it.
-- Build token `150`: `window.__KT_BUILD__ = "150"` in the page, and `?v=150` on every
+- Build token `153`: `window.__KT_BUILD__ = "153"` in the page, and `?v=153` on every
   script and stylesheet it loads.
 - Gates: `231 passed, 0 failed` across `28 suites`, from `node tests/run-all.js`
   (run inside `ketor/`).
@@ -291,7 +291,7 @@ Two suites guard the repository itself rather than a behaviour:
 
 ```
 app/
-  index.html                 the workbench (build 150)
+  index.html                 the workbench (build 153)
   assets/css/                four stylesheets: theme, components, base, mobile
   assets/js/core/            engine modules: rom loading and building, codecs
                              (text, tile, font, map, png), pointer search,
@@ -340,11 +340,11 @@ are network calls made by the browser; the ROM is not sent.
 
 Prior work this project learned from, credited by the source itself:
 
-- **Monkey-Moore** (rjricken, GPL-3.0) - the delta (relative) search technique used by
-  `app/assets/js/core/monkey-moore.js` and `core/relative-search.js` is the one
-  popularised by Monkey-Moore. Both files are independent implementations written for
-  this project from the described behaviour, not ports: no code was taken from that
-  project. Its GPL-3.0 license is credited here as the origin of the technique.
+- **Monkey-Moore** (rjricken, GPL-3.0) - `app/assets/js/core/monkey-moore.js` describes
+  itself as a direct port of Monkey-Moore v1.1.0, and `core/relative-search.js` names
+  the same reference. That port is GPL-3.0, the same license as this project, so the two
+  are compatible and the credit stays with it: see [NOTICE](NOTICE) and
+  [THIRD-PARTY.md](THIRD-PARTY.md).
 - **GBATEK** - the GBA format documentation the codecs cite: the BIOS decompression
   formats in `core/gba-compress.js`, the VRAM layout in `core/gba-vram.js` and the
   text-mode background map in the tile activity.

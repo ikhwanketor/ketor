@@ -3,7 +3,8 @@
 Ketor is licensed under the GNU General Public License version 3 (`LICENSE`),
 with the additional attribution terms recorded in `NOTICE`. This file lists the
 third-party components the application uses and the prior work its source credits.
-**Nothing listed below is distributed in this repository.**
+**Nothing in the component table below is distributed in this repository**; the one
+entry under the prior work that is code rather than documentation says so itself.
 
 ## Components the application loads at runtime
 
@@ -26,10 +27,11 @@ the license, not about any code being shared.
 
 - **Monkey-Moore** (rjricken, GPL-3.0; `https://github.com/rjricken/monkey-moore`, also
   credited as Darkl0rd in the source) - the origin of the delta (relative) search
-  technique. `app/assets/js/core/monkey-moore.js` and `app/assets/js/core/relative-search.js`
-  are independent implementations written for Ketor from the described behaviour; no
-  code was taken from that project, and its GPL-3.0 license is credited here as the
-  origin of the technique.
+  technique, and the source of a port that is part of this repository.
+  `app/assets/js/core/monkey-moore.js` describes itself as a direct port of Monkey-Moore
+  v1.1.0, and `app/assets/js/core/relative-search.js` names the same reference. The port
+  is distributed here under GPL-3.0, the same license as this project, so the two are
+  compatible; the credit to rjricken is kept in the source files and in this list.
 - **GBATEK** - the GBA hardware documentation the codecs cite: the BIOS decompression
   formats in `app/assets/js/core/gba-compress.js`, the VRAM layout in
   `app/assets/js/core/gba-vram.js`, and the text-mode background map in
