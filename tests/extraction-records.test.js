@@ -41,9 +41,9 @@ function tableMaps(content) {
   };
 }
 
-async function extract(rom, table) {
+async function extract(rom, table, terminator) {
   K.search.setRomFromLoad({ data: rom, name: 'synthetic.gba', size: rom.length }, 'GBA');
-  K.search.setSystemProfile(GBA);
+  K.search.setSystemProfile(terminator ? Object.assign({}, GBA, { terminator: terminator }) : GBA);
   K.search.setTableData(table);
   K.search.extractTexts();
   for (let i = 0; i < 300; i++) {
@@ -211,6 +211,32 @@ suite.test('the shape of the Kingdom Hearts table is read: sixteen byte stride, 
       'the record whose text starts at 0x' + at.toString(16) + ' is in the list: ' + st.status);
   });
   assertEqual(texts.length, expected.length, 'and the list is those records and nothing else: ' + st.status);
+});
+
+suite.test('the list does not depend on the terminator the profile guessed', async function (t) {
+  /* The workflow hands the extractor a terminator it guessed from the console. When that
+     guess is wrong the table detector cannot close a single span, and the whole list used
+     to collapse: measured on Aria of Sorrow with the profile's 0xFF, 19 texts instead of
+     2,331, and on Kingdom Hearts 16 instead of 1,758. The game's own table says which byte
+     ends its records, so its end codes are read into the terminator list and zero is
+     always there (the build uses the same fallback). */
+  const fixture = buildSyntheticRom({ records: 12, textLength: 36 });
+  const noiseAt = 0x30000;
+  const rom = withNoise(fixture.rom, noiseAt, 0x2000);
+  const content = (function () {
+    const lines = [];
+    for (let i = 0; i < 26; i++) lines.push((0x41 + i).toString(16).toUpperCase() + '=' + String.fromCharCode(0x41 + i));
+    lines.push('20=[SPACE]');
+    lines.push('0A=[END]');
+    return lines.join('\n') + '\n';
+  })();
+  const withZero = await extract(rom, tableMaps(content), [0x00]);
+  const withWrongGuess = await extract(rom, tableMaps(content), [0xFF]);
+  assertEqual(withWrongGuess.texts.length, withZero.texts.length,
+    'a wrong terminator in the profile must not change the list: 0x00 gave ' + withZero.texts.length +
+    ' text(s), 0xFF gave ' + withWrongGuess.texts.length + ' (' + withWrongGuess.status + ')');
+  assert(withZero.texts.length >= fixture.records.length,
+    'and the records are there: ' + withZero.status);
 });
 
 module.exports = { suite: suite };

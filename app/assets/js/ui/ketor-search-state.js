@@ -789,6 +789,28 @@
      the user is the records the game points at, and the status line says how many
      runs were dropped and why.
      ------------------------------------------------------------ */
+  /* The end codes the game's own table declares. A workflow profile can guess the
+     terminator wrong, and then the table detector cannot close a single span: on Aria of
+     Sorrow the profile carries 0xFF while every message ends with the 0x0A that
+     castlevaniaGBA.tbl calls [END]. Measured: with 0xFF the extraction came back with 19
+     junk texts where the same rom and table give 2,331 with 0x00 or 0x0A. The table is
+     evidence about this game, so its end codes are read into the terminator list. */
+  function tableEndCodes() {
+    var out = [];
+    var td = _state.tableData || {};
+    [td.singleByte || {}, td.multiByte || {}].forEach(function (map) {
+      Object.keys(map).forEach(function (key) {
+        var value = String(map[key] === undefined || map[key] === null ? '' : map[key]).toUpperCase();
+        if (value !== '[END]' && value !== '[NULL]') return;
+        var hex = String(key).replace(/\s+/g, '');
+        if (hex.length < 2) return;
+        var byte = parseInt(hex.substring(0, 2), 16);
+        if (Number.isFinite(byte) && out.indexOf(byte) < 0) out.push(byte);
+      });
+    });
+    return out;
+  }
+
   /* Does this read like a message? The same test the tables are judged with: long
      enough, and enough letters to be words rather than bytes. */
   function readsLikeText(en) {
@@ -797,11 +819,10 @@
     return s.length >= 6 && letters >= Math.max(3, Math.floor(s.length * 0.4));
   }
 
-  /* A message comes before something that does not read as one, then by offset. The list
-     is shown a page at a time and sorted by offset, and the low offsets are where the
-     font tables and graphic data are - so the first page used to open on rubbish while
-     thousands of messages waited further down (the user's report: "only seventeen junk
-     texts"). Nothing is dropped here; the readable texts are simply first. */
+  /* The list is ordered by offset, as the user asked for. This comparator keeps the
+     readable-first idea in one place in case it is wanted again, but nothing sorts with
+     it: an ordering that hides where a text really is made the list harder to read
+     against the hex editor, and the user said so in as many words. */
   function byReadableThenOffset(a, b) {
     var aBuild = a && a.buildable === false ? 1 : 0;
     var bBuild = b && b.buildable === false ? 1 : 0;
@@ -834,12 +855,23 @@
       return entries;
     }
     var profile = _state.systemProfile || {};
+    var terminators = [];
+    ((Array.isArray(profile.terminator) && profile.terminator.length) ? profile.terminator : [0x00]).forEach(function (b) {
+      if (terminators.indexOf(b) < 0) terminators.push(b);
+    });
+    tableEndCodes().forEach(function (b) {
+      if (terminators.indexOf(b) < 0) terminators.push(b);
+    });
+    /* And zero, which is what the build uses when a table declares no end code of its
+       own (rebuildRom: [END] else [NULL] else 0x00). Kingdom Hearts' table has no [END]
+       line at all, so without this its records could not close either. */
+    if (terminators.indexOf(0x00) < 0) terminators.push(0x00);
     var found = null;
     try {
       found = detect(_state.romBytes, {
         system: profile.name || _state.romSystem || 'Unknown',
         pipelineId: profile.pipelineId,
-        terminator: (Array.isArray(profile.terminator) && profile.terminator.length) ? profile.terminator : [0x00],
+        terminator: terminators,
         /* A small table is still a table. The intro of Kingdom Hearts names its
            records from a run of eight four byte pointers spaced sixteen bytes apart,
            and the default minimum of sixteen entries hid it - the intro line then
@@ -932,9 +964,6 @@
   /* The list that is shown, and the status line that says what it is. */
   function extractionResult(entries) {
     var kept = recordsOnly(entries);
-    /* recordsOnly hands its records back in offset order; the list the user reads is
-       ordered readable first. */
-    kept.sort(byReadableThenOffset);
     var status = (kept === entries)
       ? 'Extracted ' + entries.length + ' text(s)' + (_recordsNote ? ' (' + _recordsNote + ')' : '') + '.'
       : 'Extracted ' + kept.length + ' text(s) the game points at' + (_recordsNote ? ' (' + _recordsNote + ')' : '') +
