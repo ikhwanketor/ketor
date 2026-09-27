@@ -111,8 +111,10 @@ function loadWorkbench(options) {
   load(path.join(CORE, 'rom-identifier.js'));
   load(path.join(CORE, 'control-code-detector.js'));
   /* The sample search and the table tab itself: a suite about what a table does with
-     a rom needs the same two pieces the app runs. */
+     a rom needs the same two pieces the app runs. The shared box is loaded before them
+     all, the way the page loads it before every module that calls K.ui.KtBox. */
   load(path.join(CORE, 'monkey-moore.js'));
+  load(path.join(UI, 'ketor-ui-box.js'));
   load(path.join(UI, 'ketor-table-state.js'));
   load(path.join(CORE, 'pointer-table-detector.js'));
   load(path.join(CORE, 'game-profile.js'));

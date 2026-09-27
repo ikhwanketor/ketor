@@ -54,7 +54,7 @@ function attributes(text, pattern) {
    holds; everything else the page loads has to be here. */
 function isLocal(ref) { return !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(ref.trim()); }
 
-/* The cache buster (?v=139) belongs to the request, not to the name. */
+/* The cache buster (?v=140) belongs to the request, not to the name. */
 function bareRef(ref) { return ref.trim().replace(/[?#].*$/, ''); }
 
 /* "/assets/x" is how the page is served from app/, "./x" and "x" sit beside the page. */
@@ -117,6 +117,48 @@ function orphans(pages, files, pattern) {
   return files.filter(function (abs) { return !loaded[abs]; }).map(repoPath);
 }
 
+/* ------------------------------------------------------------
+   The load order of the shared box
+   ------------------------------------------------------------
+   KtBox used to be defined in ketor-table-state.js, a file the preview page loads after
+   two modules that talk about the component, and the component now lives in
+   ui/ketor-ui-box.js, which has to be loaded before every module that uses it. What
+   counts as a use is KtBox in code, not in a comment: ketor-tile-activity.js and
+   ketor-groups-panel.js only mention the name while drawing their own markup. */
+const BOX_SCRIPT = path.join(SCRIPT_ROOT, 'ui', 'ketor-ui-box.js');
+const BLOCK_COMMENT = /\/\*[\s\S]*?\*\//g;
+/* A // that follows " or ' or : is part of a string such as a url, not a comment. */
+const LINE_COMMENT = /(^|[^:"'\\])\/\/[^\n]*/gm;
+
+function codeOf(text) {
+  return String(text).replace(BLOCK_COMMENT, ' ').replace(LINE_COMMENT, '$1');
+}
+
+function usesKtBox(abs) {
+  try { return /\bKtBox\b/.test(codeOf(fs.readFileSync(abs, 'utf8'))); } catch (error) { return false; }
+}
+
+/* The local scripts one page loads, in the order the page loads them. */
+function scriptsInOrder(htmlAbs, pattern) {
+  const out = [];
+  attributes(fs.readFileSync(htmlAbs, 'utf8'), pattern).forEach(function (ref) {
+    if (!isLocal(ref)) return;
+    const target = targetOf(htmlAbs, ref);
+    if (target) out.push({ ref: bareRef(ref), abs: target });
+  });
+  return out;
+}
+
+/* The modules tests/helpers/workbench.js loads, in the order its load() calls run. */
+function harnessLoads() {
+  const text = fs.readFileSync(path.join(__dirname, 'helpers', 'workbench.js'), 'utf8');
+  const found = [];
+  const pattern = /load\(path\.join\(\w+,\s*'([^']+)'\)\)/g;
+  let match;
+  while ((match = pattern.exec(text)) !== null) found.push(match[1]);
+  return found;
+}
+
 suite.test('every page under app/ is an entry point, the nested ones included', function () {
   const pages = htmlFiles().map(repoPath);
   /* The three pages the app ships. A page that goes away on purpose takes its name out of
@@ -160,6 +202,46 @@ suite.test('every script under app/assets/js is loaded by some page', function (
 suite.test('every stylesheet under app/assets/css is linked by some page', function () {
   const dead = orphans(htmlFiles(), stylesOnDisk(), LINK_HREF);
   assertEqual(dead.length, 0, 'nothing links ' + dead.join(', ') + '; link it from a page or delete it');
+});
+
+/* The preview page is the only page that loads the UI modules, so a scan that finds no
+   user there would leave the order guard checking nothing at all. */
+suite.test('a module that uses KtBox is loaded by the preview page', function () {
+  const users = scriptsInOrder(path.join(APP, 'workbench-preview.html'), SCRIPT_SRC)
+    .filter(function (s) { return s.abs !== BOX_SCRIPT && usesKtBox(s.abs); })
+    .map(function (s) { return s.ref; });
+  assert(users.length > 0, 'no script loaded by app/workbench-preview.html uses KtBox in code, so the load order guard has nothing to check');
+});
+
+suite.test('every page loads the shared box before the modules that use KtBox', function () {
+  htmlFiles().forEach(function (htmlAbs) {
+    const page = repoPath(htmlAbs);
+    const scripts = scriptsInOrder(htmlAbs, SCRIPT_SRC).filter(function (s) { return /\.js$/i.test(s.abs); });
+    const users = scripts.filter(function (s) { return s.abs !== BOX_SCRIPT && usesKtBox(s.abs); });
+    if (!users.length) return;
+    const boxAt = scripts.findIndex(function (s) { return s.abs === BOX_SCRIPT; });
+    assert(boxAt >= 0, page + ' loads ' + users.map(function (s) { return s.ref; }).join(', ') + ', which use KtBox, but never loads ui/ketor-ui-box.js');
+    users.forEach(function (s) {
+      const userAt = scripts.findIndex(function (u) { return u.abs === s.abs; });
+      assert(boxAt < userAt, page + ' loads ' + s.ref + ' before ui/ketor-ui-box.js (positions ' + userAt + ' and ' + boxAt + '); the box has to come first');
+    });
+  });
+});
+
+suite.test('the test harness loads the shared box before the modules that use KtBox', function () {
+  const order = harnessLoads();
+  const boxAt = order.indexOf('ketor-ui-box.js');
+  assert(boxAt >= 0, 'tests/helpers/workbench.js never loads ketor-ui-box.js, so K.ui.KtBox is undefined for the suites that render it');
+  order.forEach(function (name, i) {
+    if (name === 'ketor-ui-box.js') return;
+    const abs = path.join(SCRIPT_ROOT, 'ui', name);
+    if (!isFile(abs) || !usesKtBox(abs)) return;
+    assert(boxAt < i, 'tests/helpers/workbench.js loads ' + name + ' before ketor-ui-box.js; a module that uses KtBox has to run after the box is defined');
+  });
+  /* The harness loads no tab module that calls KtBox yet, so the anchor is the file the
+     box was lifted out of: the pair stays in the order the page loads it. */
+  const stateAt = order.indexOf('ketor-table-state.js');
+  assert(stateAt < 0 || boxAt < stateAt, 'tests/helpers/workbench.js loads ketor-table-state.js before ketor-ui-box.js; the box keeps the place of the definition it replaced');
 });
 
 module.exports = {
