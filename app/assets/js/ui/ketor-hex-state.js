@@ -1153,7 +1153,21 @@
   K.hex.clearCompiledRom = clearCompiledRom;
   K.hex.adoptInsertedRom = adoptInsertedRom;
   /* Discards the bytes an insert wrote and everything it reported, so Clear
-     means the same thing in both activities: back to the loaded ROM. */
+     means the same thing in both activities: back to the loaded ROM.
+
+     The appended tail is part of what an insert owns. adoptInsertedRom keeps the bytes a
+     longer inserted image added past the end of the file as _state.appended, and both
+     Export and the IPS patch write them, so dropping the inserted patches while leaving the
+     tail behind made Clear insert a half measure: the image stayed longer than the loaded
+     file and Export wrote the leftovers of an insert the user had just discarded.
+
+     Undo and Clear take the same growth apart differently, and that is why the history is
+     touched here. Undo walks one write at a time and _applyPatchEntry cuts the tail back to
+     the length that write grew it from, so the bytes before it stay. Clear drops the whole
+     tail at once, so the history entries that name bytes past the end of the loaded file are
+     dropped with it: the bytes they describe no longer exist, and undoing one of them
+     afterwards would grow a zero filled tail no write ever asked for. Entries inside the
+     loaded file are kept, so the edits that are still in the image stay undoable. */
   function discardInsert() {
     var owned = _state.insertedOffsets || {};
     var patches = Object.assign({}, _state.patches);
@@ -1161,7 +1175,7 @@
     Object.keys(owned).forEach(function (key) {
       if (patches[key] !== undefined) { delete patches[key]; dropped++; }
     });
-    _set({
+    var patch = {
       patches: patches,
       insertedOffsets: {},
       compileRelocations: [],
@@ -1169,7 +1183,20 @@
       status: dropped
         ? 'Insert discarded: ' + dropped + ' byte(s) back to the loaded ROM.'
         : 'Nothing inserted to discard.'
-    });
+    };
+    var tail = appendedLength();
+    if (tail) {
+      var sourceLength = _state.romBytes ? _state.romBytes.length : 0;
+      /* An entry past the end of the loaded file only ever described appended bytes; one
+         inside it still describes a byte the image holds. */
+      var insideFile = function (entry) { return Number(entry && entry.offset) < sourceLength; };
+      patch.appended = null;
+      patch.undoStack = _state.undoStack.filter(insideFile);
+      patch.redoStack = _state.redoStack.filter(insideFile);
+      patch.status = 'Insert discarded: ' + (dropped ? dropped + ' byte(s) and ' : '')
+        + 'the appended tail of ' + tail + ' byte(s) removed, back to the loaded ROM.';
+    }
+    _set(patch);
     return dropped;
   }
   K.hex.discardInsert = discardInsert;

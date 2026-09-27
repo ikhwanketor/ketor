@@ -580,9 +580,11 @@
      to free space and every pointer that named the old address is redirected. */
   var _writeTimer = null;
 
-  /* How far the patch layer will write: the loaded file plus whatever was appended to it.
-     A move that plans to land past this is a move whose every byte would be refused, so
-     the plan has to be checked against it before anything is applied. */
+  /* How far the image the patch layer holds reaches right now: the loaded file plus the
+     appended tail. It is where a move inside the file has to land, but it is not a wall an
+     append cannot cross any more - setByte grows the tail to take a write past it (batch
+     162) - so the caller uses it to tell an append from a plan that would land on top of a
+     tail someone already wrote. */
   function patchableLength(bytes) {
     if (K.hex && typeof K.hex.imageLength === 'function') {
       var length = Number(K.hex.imageLength());
@@ -628,12 +630,26 @@
       _set({ status: 'The new stream is ' + enc.compressedSize + ' bytes and no longer fits at 0x' + hex6(gs.offset) + '. It could not be moved: ' + plan.reason + '. The edit stays in the editor; nothing was written.' });
       return plan;
     }
-    /* An append lands past the last byte the patch layer will accept, so every write of
-       it would be refused one by one while the status claimed a move. Refusing here
-       leaves the file exactly as it was, which is what "nothing was written" means. */
+    /* An append lands past the end of the loaded file, which is no longer where the patch
+       layer stops: setByte writes the appended tail and grows the image for it (batch 162,
+       see the "bytes grown past the end" note in ui/ketor-hex-state.js), so the plan's
+       writes are taken instead of being refused one by one. Two plans are still refused,
+       because they are what makes an append a move rather than bytes nothing reads:
+       - the plan redirects nothing, so the copy would be unreachable: the original is still
+         where the game reads it from. That is the case this refusal has always reported as
+         "no room inside the file", and it is the one the suite locks.
+       - the plan would land inside the appended tail an earlier move (or a longer inserted
+         image) already owns, overwriting bytes a pointer now names. planRelocation measures
+         free space inside the loaded file only, so it cannot see that tail. */
     var limit = patchableLength(bytes);
-    if (plan.newOffset + plan.bytes > limit) {
-      _set({ status: 'The new stream is ' + enc.compressedSize + ' bytes and no longer fits at 0x' + hex6(gs.offset) + '. It would have to be appended past the end of the file (0x' + hex6(plan.newOffset) + '), where the patch layer cannot write. The edit stays in the editor; nothing was written.' });
+    var appends = plan.newOffset >= bytes.length;
+    var appended = (K.hex && typeof K.hex.appendedLength === 'function') ? (Number(K.hex.appendedLength()) || 0) : 0;
+    var ontoTail = appends && appended > 0 && plan.newOffset < limit;
+    var beyondImage = plan.newOffset + plan.bytes > limit && !(appends && plan.pointers.length > 0);
+    if (ontoTail || beyondImage) {
+      _set({ status: 'The new stream is ' + enc.compressedSize + ' bytes and no longer fits at 0x' + hex6(gs.offset) + '. ' + (ontoTail
+        ? 'It would land on the ' + appended + ' byte(s) already appended at 0x' + hex6(bytes.length) + ', which a pointer may name.'
+        : 'It would have to be appended past the end of the file (0x' + hex6(plan.newOffset) + ') and nothing named the old address, so the copy would be unreachable.') + ' The edit stays in the editor; nothing was written.' });
       return { ok: false, reason: 'no room inside the file', newOffset: plan.newOffset, bytes: plan.bytes };
     }
     var written = C.applyPlan(plan, function (offset, value) { return K.hex.setByte(offset, value); });

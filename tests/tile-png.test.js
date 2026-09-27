@@ -12,7 +12,9 @@
    A compressed graphic is the second half of the import: the pixels land in the decompressed
    copy and writeBackCompressed puts them back - in place while the stream still fits its
    budget, by moving the block and redirecting the ROM's pointer when it grew, and by refusing
-   and writing nothing when the address looks like data rather than a pointer table. The
+   and writing nothing when the address looks like data rather than a pointer table. When the
+   file has no run left inside it the block is appended past the end, which the patch layer
+   grows the image for; the tail case at the end checks the whole file and the tail for it. The
    relocation lives in core/pointer-map.js and the bus it names comes from
    core/console-profiles.js; the preview page loads both, the harness had no reason to, so this
    suite loads them the way the page does.
@@ -500,6 +502,89 @@ suite.test('the two buttons add no global keyboard listener', function (t) {
   t.assertDeepEqual(loaded.calls.slice(baseline.calls.length), ['window:ketor:rom-loaded'],
     'the tile module registers the rom loaded event and nothing else, got: '
       + JSON.stringify(loaded.calls.slice(baseline.calls.length)));
+});
+
+/* ---------- a move with nowhere inside to go ---------- */
+
+/* Every untouched run inside the file painted over leaves the end of the file as the only
+   place the block can go. The patch layer grows the image to take such a write (batch 162,
+   ui/ketor-hex-state.js), so the plan is applied rather than refused: the stream lands past
+   the last loaded byte, the word that named the old address is rewritten to the new one, and
+   the whole file and the whole tail are compared so a byte written anywhere else fails. */
+suite.test('a graphic that grew with nowhere inside is appended and the pointer follows', function (t) {
+  const { env, K } = openCompressed({
+    tiles: 4,
+    fill: true,
+    pointers: function (rom) { writePointer(rom, 0x400, 0x08000000 + STREAM_AT); }
+  });
+
+  const png = K.tile.exportTilesPng({ at: SOURCE_AT, count: 4 }).bytes;
+  const source = K.hex.getSourceBytes();
+  const res = K.tile.importTilesPng(png, { at: STREAM_AT, count: 4 });
+
+  t.assert(res && res.writeBack, 'the import ran and asked for the write back');
+  t.assertEqual(res.writeBack.ok, true, 'the append plan ran: ' + (res.writeBack.reason || ''));
+  t.assertEqual(res.writeBack.grows, true, 'there is no run left inside the file, so the block had to be appended');
+  t.assertEqual(res.writeBack.newOffset, ROM_SIZE, 'and it lands right after the last byte of the loaded file');
+  t.assertEqual(res.writeBack.pointers.length, 1, 'the word that named the old block was found');
+  t.assert(K.tile.getState().status.indexOf('pointer(s) redirected') >= 0,
+    'and the write back reports the move it made: ' + K.tile.getState().status);
+  const written = /(\d+) byte\(s\) written/.exec(K.tile.getState().status);
+  t.assert(written, 'the move reports how many bytes it wrote: ' + K.tile.getState().status);
+  t.assert(Number(written[1]) >= res.writeBack.bytes,
+    'the whole appended block was taken, not refused byte by byte (' + written[1] + ' of ' + res.writeBack.bytes + ')');
+  const moved = res.writeBack.newOffset;
+
+  t.assertEqual(K.hex.imageLength(), ROM_SIZE + res.writeBack.bytes, 'the image grew by exactly the block');
+  t.assertEqual(K.tile.getState().graphicSource.offset, moved, 'the editor follows the block it appended');
+
+  const patched = K.hex.getPatchedBytes();
+  t.assertEqual(patched.length, ROM_SIZE + res.writeBack.bytes, 'and getPatchedBytes returns an image of that length');
+  t.assertEqual(K.core.readPointer(patched, 0x400, 'gba'), 0x08000000 + moved, 'the pointer names the new address');
+  t.assertEqual(patched[STREAM_AT], source[STREAM_AT], 'the old stream is still there, untouched');
+
+  const back = K.core.decompressAt(patched, moved, {});
+  t.assert(back !== null, 'the appended stream decodes where the pointer now points');
+  for (let i = 0; i < 4 * TILE_BYTES; i++) {
+    t.assertEqual(back.data[i], source[SOURCE_AT + i], 'decompressed byte ' + i + ' is the imported tile byte');
+  }
+
+  /* Every changed byte of the file and of the tail is the pointer word or the block it now
+     names: the filter leaves nothing else, and the image ends with the block itself. */
+  const outside = diffOffsets(source, patched).filter(function (o) {
+    return !(o >= 0x400 && o < 0x404) && !(o >= moved && o < moved + res.writeBack.bytes);
+  });
+  t.assertDeepEqual(outside, [], 'every changed byte is the pointer or the block it now names');
+});
+
+/* The tail an earlier move (or a longer inserted image) appended is data a pointer may now
+   name, and planRelocation measures free space inside the loaded file only, so it cannot see
+   it. A plan that would land on top of that tail is refused, or the second move would
+   quietly overwrite the bytes the first one wrote. */
+suite.test('a move that would land on the tail an earlier append owns is refused', function (t) {
+  const { env, K } = openCompressed({
+    tiles: 4,
+    fill: true,
+    pointers: function (rom) { writePointer(rom, 0x400, 0x08000000 + STREAM_AT); }
+  });
+  const TAIL = 0x40;
+  K.hex.appendBytes(new Uint8Array(TAIL));   // what a first append move leaves behind
+  const png = K.tile.exportTilesPng({ at: SOURCE_AT, count: 4 }).bytes;
+  const source = K.hex.getSourceBytes();
+  const before = K.hex.getPatchedBytes();
+
+  const res = K.tile.importTilesPng(png, { at: STREAM_AT, count: 4 });
+
+  t.assert(res && res.writeBack, 'the import ran and asked for the write back');
+  t.assertEqual(res.writeBack.ok, false, 'the move was refused');
+  t.assertEqual(res.writeBack.reason, 'no room inside the file', 'because the only room left is the tail an earlier append owns');
+  t.assert(K.tile.getState().status.indexOf('nothing was written') >= 0,
+    'and the status says so: ' + K.tile.getState().status);
+  t.assertEqual(K.hex.imageLength(), ROM_SIZE + TAIL, 'the image did not grow past the appended tail');
+  t.assertDeepEqual(diffOffsets(before, K.hex.getPatchedBytes()), [], 'not one byte of the file or of the tail moved');
+  t.assertEqual(K.tile.getState().graphicSource.offset, STREAM_AT, 'the graphic stays where it was');
+  t.assertEqual(K.core.readPointer(K.hex.getPatchedBytes(), 0x400, 'gba'), 0x08000000 + STREAM_AT,
+    'and the pointer still names it');
 });
 
 module.exports = { suite: suite };

@@ -14,7 +14,11 @@
 
    The last case is the one the bug was found through: the tile editor moves a region to
    free space, and when the only room left is past the end of the file the move used to
-   apply zero of its planned writes while the status called it done. */
+   apply zero of its planned writes while the status called it done.
+
+   Clear insert is the other side of the tail: an insert that made the image longer owns
+   those extra bytes, so discarding it has to take them out too. It used to remove only the
+   inserted patches, and the appended tail stayed in the image and in Export. */
 
 'use strict';
 const fs = require('fs');
@@ -210,6 +214,67 @@ suite.test('a relocation that appends writes the bytes it planned, not a status 
   while (K.hex.undo() && guard < 256) guard++;
   t.assertEqual(K.hex.imageLength(), ROM_SIZE, 'undoing the move takes the appended bytes back out');
   t.assertEqual(firstDifference(K.hex.getPatchedBytes(), source), -1, 'and the image is the loaded file again');
+});
+
+/* ---------- Clear insert gives the tail back ---------- */
+
+/* The tail an inserted image added is part of the insert. This is the path the Translation
+   activity drives: a compiled image longer than the file is applied as patches over the
+   loaded ROM, the extra bytes become the appended tail, and Clear insert has to leave the
+   loaded file behind - length and all 262144 bytes of it. */
+suite.test('Clear insert takes the appended tail an inserted image added out of the image', function (t) {
+  const { K } = openRom();
+  const source = K.hex.getSourceBytes();
+  const TAIL = 0x20;
+  const image = new Uint8Array(ROM_SIZE + TAIL);
+  image.set(source);
+  image[PATCHED] = source[PATCHED] ^ 0xFF;      // a byte the insert rewrote inside the file
+  image[REGION] = source[REGION] ^ 0x5A;        // and a second one, further in
+  for (let i = 0; i < TAIL; i++) image[ROM_SIZE + i] = 0x40 + i;   // the bytes a longer image added
+
+  t.assertEqual(K.hex.adoptInsertedRom(image, { relocations: [{ from: REGION, to: ROM_SIZE }] }), true,
+    'the longer inserted image is applied as patches over the loaded ROM');
+  t.assertEqual(K.hex.appendedLength(), TAIL, 'and its extra bytes are the appended tail');
+  t.assertEqual(K.hex.imageLength(), ROM_SIZE + TAIL, 'so the image is longer than the loaded file');
+  t.assertEqual(K.hex.getPatchedBytes()[ROM_SIZE + 3], 0x43, 'the tail is in the image');
+  t.assertEqual(K.hex.isPatched(ROM_SIZE + 3), true, 'and counts as a changed byte');
+
+  K.hex.discardInsert();
+
+  t.assertEqual(K.hex.appendedLength(), 0, 'Clear insert empties the appended tail');
+  t.assertEqual(K.hex.getAppended(), null, 'the tail itself is gone, not just its length');
+  t.assertEqual(K.hex.imageLength(), ROM_SIZE, 'and the image is as long as the loaded ROM again');
+  const back = K.hex.getPatchedBytes();
+  t.assertEqual(back.length, ROM_SIZE, 'getPatchedBytes returns a file of that length');
+  t.assertEqual(firstDifference(back, source), -1, 'and every one of its 262144 bytes is the loaded file');
+  t.assertEqual(K.hex.isPatched(ROM_SIZE + 3), false, 'a byte that only existed in the tail is not a patch any more');
+  t.assertEqual(K.hex.isPatched(PATCHED), false, 'and neither is the byte inside the file the insert rewrote');
+  t.assertDeepEqual(K.hex.getInsertedOffsets(), {}, 'nothing is owned by the insert any more');
+});
+
+/* A write the editor made past the end of the file is in the same tail, and Clear insert
+   takes it with the insert. The history step that grew it goes too: the bytes it names no
+   longer exist, so undoing it would grow the zero run back. */
+suite.test('Clear insert drops the appended bytes the editor wrote, and undo cannot grow them back', function (t) {
+  const { K } = openRom();
+  const source = K.hex.getSourceBytes();
+  t.assertEqual(K.hex.setByte(FIRST, 0x5A), true, 'the editor writes a byte past the end of the file');
+  t.assertEqual(K.hex.appendedLength(), 0x11, 'which grows the appended tail');
+  t.assertEqual(K.hex.setByte(PATCHED, source[PATCHED] ^ 0xFF), true, 'and an ordinary patch inside the file');
+
+  K.hex.discardInsert();
+
+  t.assertEqual(K.hex.appendedLength(), 0, 'Clear insert takes the whole tail out');
+  t.assertEqual(K.hex.imageLength(), ROM_SIZE, 'so the image is the loaded ROM again');
+  t.assertEqual(K.hex.getPatchedBytes().length, ROM_SIZE, 'and getPatchedBytes returns a file of that length');
+  t.assertEqual(K.hex.getPatchedBytes()[PATCHED], source[PATCHED] ^ 0xFF,
+    'the patch inside the file survives: it is an ordinary edit, not the insert');
+
+  t.assertEqual(K.hex.undo(), true, 'the in-file patch is still an undo step');
+  t.assertEqual(K.hex.getPatchedBytes()[PATCHED], source[PATCHED], 'and undoing it restores the loaded byte');
+  t.assertEqual(K.hex.undo(), false, 'the step that grew the tail is gone with the bytes it named');
+  t.assertEqual(K.hex.imageLength(), ROM_SIZE, 'so no undo grows an empty tail back');
+  t.assertEqual(firstDifference(K.hex.getPatchedBytes(), source), -1, 'and the image is still the loaded file');
 });
 
 module.exports = { suite: suite };
