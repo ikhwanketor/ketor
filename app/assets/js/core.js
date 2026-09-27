@@ -1942,6 +1942,30 @@ let _recordTable = null;
         const bad = [];
         const total = Math.min(sites.length, (table.entries || []).length);
         if (total < 8) return bad;
+        /* How many bytes in front of a record are a header rather than the text itself,
+           worked out from where the texts of this build begin. A record whose text starts
+           at the record start has no header to keep: on Kingdom Hearts the intro record
+           begins with the letter 'A' and its translation begins with 'D', and the two
+           byte comparison below read that as "this record lost its header" - so every
+           translation of a header-less record was refused and the original rom was handed
+           back, which is exactly the build the user kept getting. A record with a real
+           header (Aria of Sorrow: 01 00 in front of every message) keeps its test: the
+           text starts two bytes later, so two bytes are compared, as before. The Insert
+           check further down is the net for the text itself. */
+        const textStarts = [];
+        for (const t of allTexts) {
+          const s = Number(t && t.startByte);
+          if (Number.isFinite(s) && s >= 0) textStarts.push(s);
+        }
+        textStarts.sort((a, b) => a - b);
+        const headerLengthOf = (recordStart, recordEnd) => {
+          for (const s of textStarts) {
+            if (s < recordStart) continue;
+            if (recordEnd !== undefined && s >= recordEnd) break;
+            return s - recordStart;
+          }
+          return 0;
+        };
         for (let i = 0; i < total - 1; i++) {
           const at = sites[i];
           let v = 0;
@@ -1959,8 +1983,17 @@ let _recordTable = null;
             for (let p = from; p < limit; p++) { if (romCopy[p] === terminatorHex) { closes = true; break; } }
           }
           const originalStart = (table.entries || [])[i];
-          const headerKept = originalStart === undefined ||
-            (romCopy[from] === originalRom[originalStart] && romCopy[from + 1] === originalRom[originalStart + 1]);
+          const originalEnd = (table.entries || [])[i + 1];
+          const headerLength = originalStart === undefined
+            ? 0
+            : headerLengthOf(originalStart, originalEnd === undefined ? originalStart + 0x10000 : originalEnd);
+          let headerKept = true;
+          if (originalStart !== undefined && headerLength > 0) {
+            for (let h = 0; h < headerLength; h++) {
+              const at = from + h;
+              if (at >= romCopy.length || romCopy[at] !== originalRom[originalStart + h]) { headerKept = false; break; }
+            }
+          }
           if (!closes || !headerKept) bad.push(from);
         }
         return bad;
@@ -2024,7 +2057,20 @@ let _recordTable = null;
             // larger than the text region: an over-long translation then looked
             // like it still fit, was written in place and was silently cut to
             // the region. Only a prefix right in front of the text counts.
-            if (aliases.length > 0 && aliases[0] >= Number(textItem.startByte) - 8) {
+            //
+            // It also has to be an address the engine itself names. Two bytes that
+            // merely happen to sit in the control range are not a prefix: on the
+            // header-less record fixture two filler bytes of 0x11 did this, the block
+            // start moved two bytes back, and the record was then read as a page inside
+            // the record before it - and a page inside a record may not move, so the
+            // build refused the translation. On Aria of Sorrow the alias is the table
+            // entry itself (0xEA744, with the text at 0xEA746), which is exactly the
+            // case this is for.
+            const aliasEntries = (recordTable().entries || []);
+            const aliasIsRecordStart = aliases.length > 0 &&
+              Number(aliases[0]) !== Number(textItem.startByte) &&
+              aliasEntries.indexOf(Number(aliases[0])) >= 0;
+            if (aliasIsRecordStart && aliases[0] >= Number(textItem.startByte) - 8) {
               effectiveBlockStart = Math.min(effectiveBlockStart, aliases[0]);
             }
           }
