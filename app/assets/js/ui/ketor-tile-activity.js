@@ -76,13 +76,21 @@
        pixels back through setPixel, so a copied tile lands in the hex patch layer like a
        painted one, and a later batch can widen the box without parsing anything. */
     clipboard: null,
-    /* The tile range the Select tool drags out: { tile, w, h } in tiles, with tile the
-       anchor the block starts at and w the tiles one clipboard row holds. The anchor is a
-       tile index and not a column, because which tiles share a screen row depends on how
-       wide the viewport is; a copy reads the w*h tiles that follow the anchor in reading
-       order, which is the order the paste writes them back in. No selection is null, so
-       the editor copies exactly the one tile it always did. */
+    /* The tile range the Select tool drags out, in one of two shapes. A run is
+       { tile, w, h }: the w*h tiles that follow the anchor tile in reading order, w to a
+       clipboard row, which is what batch 165 stored and what setSelection({ tile, w, h })
+       still hands over. A marquee is { col, row, cols, rows, tile }: the rectangle of cols by
+       rows cells whose top left cell is (col,row) of the sheet grid the canvas draws, with
+       tile the sheet tile of that first cell (a font view draws the sheet from another tile
+       on, so the cell alone would name the wrong glyph). Which tiles share a screen row
+       depends on how wide the viewport is, so the cells only mean something together with
+       gridCols. No selection is null, so the editor copies exactly the one tile it always
+       did. */
     selection: null,
+    /* How many tiles one screen row of the sheet holds: what turns a tile index into a
+       (col,row) cell and back. The canvas reports it as it draws (setGridCols) and a marquee
+       cannot be read without it; 0 is "no canvas has named one yet". */
+    gridCols: 0,
     view: 'tiles',
     mapScreenBase: null,
     mapCharBase: null,
@@ -499,21 +507,82 @@
     return Math.floor(rel / tilePitch());
   }
 
-  /* The tile range the Select tool drags out is { tile, w, h } in tiles, and this is where
-     it is made safe to copy and to draw: the anchor has to be a tile of the sheet and w and
-     h at least one tile each, never more tiles than the sheet holds. Anything that is not a
-     range - null, an object without a usable anchor - is no selection at all, and no
-     selection is the single tile box the editor had before ranges existed. */
+  /* How many tiles one screen row of the sheet holds. The canvas draws a row of this many
+     and the Select tool counts the cells of its marquee with the same call, so the tile under
+     the pointer and the cell a block names cannot drift apart. */
+  function rowTiles(canvasWidth, zoom) {
+    return Math.max(1, Math.floor((Number(canvasWidth) || 0) / (8 * (Number(zoom) || 1))));
+  }
+  /* The same number for a caller that has the viewport and not the canvas: the canvas is the
+     viewport minus its padding, never thinner than 200 pixels. */
+  function viewportRowTiles(viewWidth, zoom) {
+    return rowTiles(Math.max(200, (Number(viewWidth) || 0) - 16), zoom);
+  }
+  /* The grid the store knows: 0 until a canvas - or a caller that measured the row itself -
+     says how wide it is. */
+  function sheetGridCols() {
+    var n = Math.floor(Number(_state.gridCols));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  }
+  function setGridCols(n) {
+    var v = Math.floor(Number(n));
+    if (!Number.isFinite(v) || v < 1) v = 0;
+    if (v !== (Number(_state.gridCols) || 0)) _set({ gridCols: v });
+  }
+
+  /* The tile range the Select tool drags out, made safe to copy and to draw. A run is the
+     { tile, w, h } batch 165 stored - w*h tiles from the anchor tile in reading order, w to a
+     clipboard row - and it is still what setSelection({ tile, w, h }) hands over. A marquee is
+     { col, row, cols, rows, tile }: the rectangle of cols by rows cells of the sheet grid
+     whose top left cell holds tile. A block has to start on the sheet, both sizes are whole
+     tiles of at least one, and it never claims more tiles than the sheet holds: a marquee also
+     stops at the end of the row it starts on and at the last row of the sheet, so it stays a
+     rectangle and never becomes a run that wraps. A marquee without a sheet grid - no canvas
+     has named the row width - is no range at all, because a cell is not a tile yet. Anything
+     that is not a range - null, an object without a usable anchor - is no selection at all,
+     and no selection is the single tile box the editor had before ranges existed. */
   function normalizeSelection(sel) {
     if (!sel || typeof sel !== 'object') return null;
+    var most = Math.max(1, Math.round(Number(_state.tiles) || 1));
+    if (sel.cols !== undefined || sel.rows !== undefined || sel.col !== undefined || sel.row !== undefined) {
+      var grid = sheetGridCols();
+      if (!grid) return null;
+      var col = Math.floor(Number(sel.col));
+      var row = Math.floor(Number(sel.row));
+      if (!Number.isFinite(col) || col < 0 || !Number.isFinite(row) || row < 0) return null;
+      var sheetRows = Math.max(1, Math.ceil(most / grid));
+      if (col >= grid || row >= sheetRows) return null;
+      var cols = Math.floor(Number(sel.cols));
+      var rows = Math.floor(Number(sel.rows));
+      if (!Number.isFinite(cols) || cols < 1) cols = 1;
+      if (!Number.isFinite(rows) || rows < 1) rows = 1;
+      cols = Math.min(cols, grid - col);
+      rows = Math.min(rows, sheetRows - row);
+      var at = Math.floor(Number(sel.tile));
+      if (!Number.isFinite(at) || at < 0) at = row * grid + col;
+      return { col: col, row: row, cols: cols, rows: rows, tile: at };
+    }
     var tile = Math.floor(Number(sel.tile));
     if (!Number.isFinite(tile) || tile < 0) return null;
-    var most = Math.max(1, Math.round(Number(_state.tiles) || 1));
     var w = Math.floor(Number(sel.w));
     var h = Math.floor(Number(sel.h));
     if (!Number.isFinite(w) || w < 1) w = 1;
     if (!Number.isFinite(h) || h < 1) h = 1;
     return { tile: tile, w: Math.min(most, w), h: Math.min(most, h) };
+  }
+
+  /* One reading of both shapes: a block is cols tiles across and rows down, and stride says
+     which tile the next cell of the same block row holds. A run measures that stride in its
+     own width - which is what makes an old w x 1 range and a one row marquee the same block -
+     and a marquee measures it in the sheet grid. Only a marquee carries the cell it starts on:
+     a run's anchor is a tile, not a cell of any grid. */
+  function selectionBlock(sel) {
+    var s = normalizeSelection(sel);
+    if (!s) return null;
+    if (s.cols !== undefined) {
+      return { marquee: true, tile: s.tile, cols: s.cols, rows: s.rows, stride: sheetGridCols(), col: s.col, row: s.row };
+    }
+    return { marquee: false, tile: s.tile, cols: s.w, rows: s.h, stride: s.w };
   }
 
   /* The one way a selection enters the store: the Select tool hands its two corners here
@@ -526,24 +595,28 @@
   /* A copy reads a region into the clipboard and writes nothing: copying is not an edit, so
      the patch layer and the loaded file stay exactly as they were. The region is the one
      tile the caller named - the selected tile, else the tile the Hex Editor cursor sits on -
-     or, with a selection in the store, the whole range it names: the w*h tiles that follow
-     its anchor, w of them to a clipboard row, which is the order the paste writes them back
-     in. A tile of the range the window does not hold stays blank and is counted in the
-     status, so a range half off the sheet still copies the tiles that are there. */
+     or, with a selection in the store, the block it names: a run of w*h tiles from its anchor
+     or the cols x rows rectangle of the sheet grid, either way cols tiles to a clipboard row,
+     which is the order the paste writes them back in. A tile of the block the window does not
+     hold stays blank and is counted in the status, so a block half off the sheet still copies
+     the tiles that are there. */
   function copyRegion(tileIndex) {
-    var sel = normalizeSelection(_state.selection);
-    var anchor = sel ? sel.tile : regionTileIndex(tileIndex);
-    var ws = sel ? sel.w : 1;
-    var hs = sel ? sel.h : 1;
+    var stored = _state.selection;
+    var block = selectionBlock(stored);
+    if (!block && stored) { _set({ status: 'Cannot copy the range: no sheet grid is open, so a cell of it is not a tile yet.' }); return false; }
+    var anchor = block ? block.tile : regionTileIndex(tileIndex);
+    var ws = block ? block.cols : 1;
+    var hs = block ? block.rows : 1;
+    var stride = block ? block.stride : 1;
     var pixels = [], missing = 0, read = {};
     var w = 8 * ws, h = 8 * hs;
     /* The pixels go into the clipboard the way the paste reads them back: row by row over
-       the whole block, with the tile a pixel belongs to worked out from its column. Reading
-       one tile after another instead would put the second tile of a row under the first in
-       the clipboard and a paste would scatter the block. */
+       the whole block, with the tile a pixel belongs to worked out from its column and the
+       stride of the block. Reading one tile after another instead would put the second tile
+       of a row under the first in the clipboard and a paste would scatter the block. */
     for (var y = 0; y < h; y++) {
       for (var x = 0; x < w; x++) {
-        var src = anchor + Math.floor(y / 8) * ws + Math.floor(x / 8);
+        var src = anchor + Math.floor(y / 8) * stride + Math.floor(x / 8);
         var px = read[src];
         if (px === undefined) {
           px = readTile(src) || null;
@@ -554,12 +627,17 @@
       }
     }
     if (missing >= ws * hs) { _set({ status: 'Nothing to copy: open a tile region first.' }); return false; }
+    /* The clipboard remembers which of the two shapes it came from: the paste lays a marquee
+       out on the screen rows below its destination and a run out on its own clipboard row. */
     _set({
-      clipboard: { w: w, h: h, cols: w, tile: anchor, pixels: pixels },
-      status: (ws === 1 && hs === 1)
-        ? 'Tile ' + anchor + ' copied as an 8x8 region (' + pixels.length + ' pixels).'
-        : 'Tiles ' + anchor + '..' + (anchor + ws * hs - 1) + ' copied as a ' + w + 'x' + h + ' region (' + pixels.length + ' pixels)'
+      clipboard: { w: w, h: h, cols: w, tile: anchor, pixels: pixels, marquee: block ? block.marquee : false },
+      status: (block && block.marquee)
+        ? 'Region col ' + block.col + ',row ' + block.row + ' (' + ws + 'x' + hs + ' tile(s)) copied as a ' + w + 'x' + h + ' block (' + pixels.length + ' pixels)'
           + (missing ? ', ' + missing + ' tile(s) outside the window are blank.' : '.')
+        : (ws === 1 && hs === 1)
+          ? 'Tile ' + anchor + ' copied as an 8x8 region (' + pixels.length + ' pixels).'
+          : 'Tiles ' + anchor + '..' + (anchor + ws * hs - 1) + ' copied as a ' + w + 'x' + h + ' region (' + pixels.length + ' pixels)'
+            + (missing ? ', ' + missing + ' tile(s) outside the window are blank.' : '.')
     });
     return true;
   }
@@ -567,12 +645,14 @@
   /* The paste writes every pixel back through setPixel, the one path a byte takes, so the
      pasted pixels become hex patches and take part in Undo, Clear and Export. A region of
      more than one tile is mapped tile by tile: the clipboard pixel (x,y) belongs to the tile
-     floor(y/8) rows and floor(x/8) columns away from the destination - one clipboard row is
-     cols/8 tiles wide - and lands at the pixel (x%8,y%8) inside it. The 8x8 case is the same
-     arithmetic and writes the same bytes in the same order as the tile box always did. A
-     destination tile that is not wholly inside the window is cut instead of half written,
-     and the status says how many were: on a sheet that ends mid tile the last byte of it
-     never moves. */
+     floor(y/8) rows and floor(x/8) columns away from the destination, and lands at the pixel
+     (x%8,y%8) inside it. A marquee was cut out of the screen grid, so its rows go back down
+     the screen rows below the destination tile - the tile the caller names is where its first
+     block row starts - while a run keeps the batch 165 stride of one clipboard row (cols/8
+     tiles). The 8x8 case is the same arithmetic and writes the same bytes in the same order
+     as the tile box always did. A destination tile that is not wholly inside the window is
+     cut instead of half written, and the status says how many were: on a sheet that ends mid
+     tile the last byte of it never moves. */
   function pasteRegion(tileIndex) {
     var clip = _state.clipboard;
     if (!clip || !clip.pixels || !clip.pixels.length) { _set({ status: 'Copy a tile first.' }); return false; }
@@ -580,7 +660,13 @@
     var w = Math.max(0, Math.floor(Number(clip.w) || 0));
     var hh = Math.max(0, Math.floor(Number(clip.h) || 0));
     var cols = Math.floor(Number(clip.cols) || 0) || w;
-    var perRow = Math.max(1, Math.floor(cols / 8));
+    var clipTiles = Math.max(1, Math.floor(cols / 8));
+    var grid = sheetGridCols();
+    var marquee = clip.marquee === true;
+    /* A marquee is placed on the screen grid the canvas draws; without one its cells are not
+       tiles, so nothing is written rather than a block somewhere else. */
+    if (marquee && !grid) { _set({ status: 'Cannot paste the copied block: no sheet grid is open, so a cell of it is not a tile yet.' }); return false; }
+    var perRow = marquee ? grid : clipTiles;
     var fit = {};
     var cut = 0, wrote = 0;
     for (var y = 0; y < hh; y++) {
@@ -1934,7 +2020,8 @@
       // itself is still as many bytes as its format reads
       var step = Number(props.pitch) > 0 ? Number(props.pitch) : size;
       var z = props.zoom;
-      var perRow = Math.max(1, Math.floor(props.width / (8 * z)));
+      // the row of tiles the canvas draws: the same number the Select tool counts cells with
+      var perRow = rowTiles(props.width, z);
       var rows = Math.ceil(props.tiles / perRow);
       canvas.width = perRow * 8 * z;
       canvas.height = rows * 8 * z;
@@ -1983,31 +2070,46 @@
         ctx.lineWidth = 1;
         ctx.strokeRect(sx + 0.5, sy + 0.5, 8 * z - 1, 8 * z - 1);
       }
-      /* The range the Select tool dragged out, drawn as the tiles a copy takes: the run of
-         w*h tiles that follows the anchor, cut into screen rows where the sheet wraps at
-         perRow, so a range that runs past the right edge shows the row of tiles it really
-         is and never one rectangle over the gap between the rows. The dash is what tells a
-         range from the solid box of the picked tile. */
+      /* The block the Select tool dragged out, drawn as the tiles a copy takes. A marquee is
+         one dashed box per block row, cut where the row of the sheet ends: it is a rectangle
+         of cells, so a box never reaches over the gap to the next screen row (batch 167). A
+         run is the w*h tiles that follow its anchor, cut into screen rows where the sheet
+         wraps at perRow, so a range that runs past the right edge shows the row of tiles it
+         really is. The dash is what tells a block from the solid box of the picked tile. */
       if (props.selection) {
         var range = props.selection;
-        var anchor = Math.floor(Number(range.tile));
-        var rw = Math.max(1, Math.floor(Number(range.w) || 1));
-        var rh = Math.max(1, Math.floor(Number(range.h) || 1));
-        if (Number.isFinite(anchor) && anchor >= 0) {
-          ctx.strokeStyle = '#3fb950';
-          ctx.lineWidth = 1;
-          ctx.setLineDash([4, 2]);
-          for (var si = 0; si < rw * rh;) {
-            var slot = anchor + si;
-            if (slot >= props.tiles) break;
-            var scol = slot % perRow;
-            var srow = Math.floor(slot / perRow);
-            var run = Math.min(rw * rh - si, perRow - scol);
-            ctx.strokeRect(scol * 8 * z + 0.5, srow * 8 * z + 0.5, run * 8 * z - 1, 8 * z - 1);
-            si += run;
+        ctx.strokeStyle = '#3fb950';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 2]);
+        if (range.cols !== undefined || range.col !== undefined) {
+          var gcol = Math.floor(Number(range.col));
+          var grow = Math.floor(Number(range.row));
+          var gcols = Math.max(1, Math.floor(Number(range.cols) || 1));
+          var grows = Math.max(1, Math.floor(Number(range.rows) || 1));
+          if (Number.isFinite(gcol) && gcol >= 0 && Number.isFinite(grow) && grow >= 0) {
+            for (var br = 0; br < grows; br++) {
+              var cut = Math.min(gcols, perRow - gcol);
+              if (cut < 1) break;
+              ctx.strokeRect(gcol * 8 * z + 0.5, (grow + br) * 8 * z + 0.5, cut * 8 * z - 1, 8 * z - 1);
+            }
           }
-          ctx.setLineDash([]);
+        } else {
+          var anchor = Math.floor(Number(range.tile));
+          var rw = Math.max(1, Math.floor(Number(range.w) || 1));
+          var rh = Math.max(1, Math.floor(Number(range.h) || 1));
+          if (Number.isFinite(anchor) && anchor >= 0) {
+            for (var si = 0; si < rw * rh;) {
+              var slot = anchor + si;
+              if (slot >= props.tiles) break;
+              var scol = slot % perRow;
+              var srow = Math.floor(slot / perRow);
+              var run = Math.min(rw * rh - si, perRow - scol);
+              ctx.strokeRect(scol * 8 * z + 0.5, srow * 8 * z + 0.5, run * 8 * z - 1, 8 * z - 1);
+              si += run;
+            }
+          }
         }
+        ctx.setLineDash([]);
       }
       if (props.selPixel) {
         var ptx = ((props.selPixel.tile % perRow) * 8 + props.selPixel.x) * z;
@@ -2164,6 +2266,14 @@
       global.addEventListener('resize', measure);
       return function () { return global.removeEventListener('resize', measure); };
     }, []);
+
+    /* How wide one screen row of tiles is, told to the store: the canvas draws that many and
+       the Select tool counts the cells of its marquee with the same number, so the marker and
+       the block a copy reads are the block the user dragged out. A resized window writes a new
+       one straight away. */
+    uE(function () {
+      setGridCols(viewportRowTiles(width, st.zoom));
+    }, [width, st.zoom]);
 
     var win = regionWindow();
     var mapWin = mapWindow();
@@ -2335,21 +2445,29 @@
       setSel({ tile: tile, x: 0, y: 0 });
     }
 
-    /* The Select tool drags a range out of the sheet: the anchor is the tile the mouse went
-       down on and every move grows the block towards the tile under the pointer. The two
-       corners are the slots the canvas drew, and the block they make is counted along the
-       run between them, one row of the clipboard as wide as a screen row is (perRow), so a
-       drag along one row is a w x 1 block and a drag past the end of a row keeps going on
-       the next one instead of jumping back. Only the tile the run starts on is stored, so
-       the range survives a window that is resized under it. */
+    /* The Select tool drags a 2D marquee out of the sheet: the anchor is the cell the mouse
+       went down on and every move makes the block the rectangle between that cell and the cell
+       under the pointer, cols cells across and rows cells down (batch 167). A drag along one
+       screen row is a w x 1 run whatever the viewport is, so it is stored in the shape batch
+       165 used; a taller drag is a rectangle of cells and stores the cells it spans plus the
+       tile of its first cell, so a copy reads the tiles the canvas drew. The row width the
+       drag counts with is the one the canvas counts with, and it is handed to the store here
+       too, because a marquee cannot be read back without it - the Select tool can be the first
+       thing that measures the sheet. */
     function growSelection(anchorSlot, slot) {
-      var perRow = Math.max(1, Math.floor((width - 16) / (8 * (Number(st.zoom) || 1))));
-      var from = Math.min(anchorSlot, slot);
-      var count = Math.abs(slot - anchorSlot) + 1;
-      var real = fontOrder ? fontOrder[from] : from;
-      if (real === null || real === undefined) return;
-      var w = Math.min(count, perRow);
-      setSelection({ tile: real, w: w, h: Math.ceil(count / w) });
+      var perRow = viewportRowTiles(width, st.zoom);
+      setGridCols(perRow);
+      var aCol = anchorSlot % perRow, aRow = Math.floor(anchorSlot / perRow);
+      var bCol = slot % perRow, bRow = Math.floor(slot / perRow);
+      var col = Math.min(aCol, bCol), row = Math.min(aRow, bRow);
+      var cols = Math.abs(aCol - bCol) + 1;
+      var rows = Math.abs(aRow - bRow) + 1;
+      /* The tile of the first cell of the block: a font view draws the sheet from another
+         tile on, so the cell alone would name the wrong glyph. */
+      var first = fontOrder ? fontOrder[row * perRow + col] : row * perRow + col;
+      if (first === null || first === undefined) return;
+      if (rows === 1) { setSelection({ tile: first, w: cols, h: 1 }); return; }
+      setSelection({ col: col, row: row, cols: cols, rows: rows, tile: first });
     }
 
     function onDown(ev) {
@@ -3296,7 +3414,7 @@
     setFormat: function (f) { var format = String(f); _set(Object.assign({ format: format }, formatPatch(format))); }, colourAt: colourCss,
     setColour: function (v) { _set({ colour: Number(v) }); }, readTile: readTile,
     copyRegion: copyRegion, pasteRegion: pasteRegion,
-    setSelection: setSelection, clearSelection: clearSelection,
+    setSelection: setSelection, clearSelection: clearSelection, setGridCols: setGridCols,
     regionWindow: regionWindow, tileAbsoluteOffset: tileAbsoluteOffset, statusLine: statusLine,
     loadPalette: loadPalette, readPaletteAt: readPaletteAt, findPalette: findPalette, paletteScore: paletteScore,
     writePaletteColour: writePaletteColour,

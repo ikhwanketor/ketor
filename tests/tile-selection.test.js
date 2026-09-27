@@ -510,13 +510,15 @@ suite.test('the Select tool drags a range out of the sheet and Escape clears it'
   mouse(up, c.x, c.y);
   t.assertDeepEqual(K.tile.getState().selection, { tile: 2, w: 3, h: 1 }, 'letting go keeps the range');
 
-  /* One screen row holds 49 tiles, so a drag from tile 4 down to tile 53 is the run that
-     starts at 4, wraps at the edge and ends on 53: 49 tiles to the first clipboard row. */
+  /* One screen row holds 49 tiles, so tile 53 is the tile of the second screen row under
+     tile 4. Batch 167 made the Select tool drag a 2D marquee, so that drag is the rectangle
+     of cells it really is - one column, two rows - and not the run of 49 tiles to a clipboard
+     row batch 165 counted for a drag that left the anchor's screen row. */
   const d = tilePoint(4), e2 = tilePoint(53);
   mouse(down, d.x, d.y);
   mouse(move, e2.x, e2.y);
-  t.assertDeepEqual(K.tile.getState().selection, { tile: 4, w: 49, h: 2 },
-    'a drag past the end of a screen row keeps going on the next one');
+  t.assertDeepEqual(K.tile.getState().selection, { col: 4, row: 0, cols: 1, rows: 2, tile: 4 },
+    'a drag into another screen row is the rectangle of cells between the two corners, not a run');
   mouse(up, e2.x, e2.y);
 
   press(rootHandler(env), 'Escape', element('CANVAS'), 'none');
