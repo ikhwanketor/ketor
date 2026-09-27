@@ -3627,6 +3627,16 @@ let _recordTable = null;
                 strictSceneProfile
               } = options;
               const PADDING_BYTE = 0x00;
+              /* A table can say that one character is two bytes (4100=A). A single byte the
+                 table does not name is then not a character, and a run of them is not a text:
+                 in the Kingdom Hearts rom a 446 byte run of 0x22 filler sits in front of the
+                 next record, and the extractor glued it to that record's text as 446 quote
+                 marks. The text it built was not a record - it began in filler, and the build
+                 refused to move it ("Relocation skipped (no safe pointers found)"). A loose
+                 byte may still continue a text the table itself started, because mixed
+                 encodings exist; it may not start one. */
+              const tableCharBytes = (Object.keys((tableData && tableData.multiByte) || {}).length >= 12) ? 2 : 1;
+              const looseByteMayStartText = tableCharBytes === 1;
               const useAsciiFallback = !!asciiFallback;
               const isRetroPipeline = systemPipeline === 'pipeline_nes' || systemPipeline === 'pipeline_snes' || systemPipeline === 'pipeline_gb' || systemPipeline === 'pipeline_gbc' || systemPipeline === 'pipeline_pce';
               const effectiveMinLength = isRetroPipeline ? Math.max(3, minLength || 0) : minLength;
@@ -4295,7 +4305,7 @@ let _recordTable = null;
                             if (usePaddingByte && i + 1 < sourceLength && sourceBytes[i + 1] === PADDING_BYTE) {
                                 advance = 2;
                             }
-                        } else if (useAsciiFallback && currentByte >= 0x20 && currentByte <= 0x7E) {
+                        } else if (useAsciiFallback && (looseByteMayStartText || stringStartOffset !== -1) && currentByte >= 0x20 && currentByte <= 0x7E) {
                             if (stringStartOffset === -1) stringStartOffset = i;
                             currentStringChars.push(String.fromCharCode(currentByte));
                             charFound = true;
