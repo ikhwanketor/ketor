@@ -1011,16 +1011,16 @@
     if (!tableData) return null;
     var built = _charToBytes(tableData);
     if (!built) return null;
-    var legacy = K.legacy || {};
-    if (typeof legacy.createTokenizer !== 'function' || typeof legacy.smartTextParse !== 'function') return null;
+    var core = K.core || {};
+    if (typeof core.createTokenizer !== 'function' || typeof core.smartTextParse !== 'function') return null;
 
-    var tokenizer = legacy.createTokenizer(built.keys.slice());
+    var tokenizer = core.createTokenizer(built.keys.slice());
     var master = new Map();
     Object.keys(built.map).forEach(function (k) { master.set(k, built.map[k]); });
     try {
       // enableDteMte false keeps the plain longest-match encoding, so
       // the bytes searched here are the bytes a build would write.
-      var out = legacy.smartTextParse(String(q || ''), tokenizer, master, false, { enableDteMte: false });
+      var out = core.smartTextParse(String(q || ''), tokenizer, master, false, { enableDteMte: false });
       return out && out.length ? out : null;
     } catch (_) { return null; }
   }

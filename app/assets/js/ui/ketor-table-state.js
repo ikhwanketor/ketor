@@ -2,7 +2,7 @@
    Ketor - Table Activity State
    ------------------------------------------------------------
    Monkey-Moore style candidate list (Offset / Values / Preview).
-   Reuses legacy relative search worker (async, non-blocking).
+   Reuses relative search worker (async, non-blocking).
    Persists search history + active table to sessionStorage.
    ============================================================ */
 

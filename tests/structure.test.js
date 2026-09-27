@@ -8,6 +8,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 const { createSuite, assert, assertEqual } = require('./helpers/tiny-test');
 
 const suite = createSuite('structure');
@@ -54,7 +55,7 @@ function attributes(text, pattern) {
    holds; everything else the page loads has to be here. */
 function isLocal(ref) { return !/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(ref.trim()); }
 
-/* The cache buster (?v=140) belongs to the request, not to the name. */
+/* The cache buster (?v=141) belongs to the request, not to the name. */
 function bareRef(ref) { return ref.trim().replace(/[?#].*$/, ''); }
 
 /* "/assets/x" is how the page is served from app/, "./x" and "x" sit beside the page. */
@@ -161,10 +162,11 @@ function harnessLoads() {
 
 suite.test('every page under app/ is an entry point, the nested ones included', function () {
   const pages = htmlFiles().map(repoPath);
-  /* The three pages the app ships. A page that goes away on purpose takes its name out of
-     this list in the same commit; the point of naming them is that the recursive walk is
-     checked, not just the two pages at the top. */
-  ['app/index.html', 'app/workbench-preview.html', 'app/wasm-runtime/index.html'].forEach(function (known) {
+  /* The pages the app ships. A page that goes away on purpose takes its name out of this
+     list in the same commit; the point of naming them is that the recursive walk is
+     checked, not just the two pages at the top. The old PocketTranslate page left app/
+     for legacy/ in batch 180, so its name left this list with it. */
+  ['app/workbench-preview.html', 'app/wasm-runtime/index.html'].forEach(function (known) {
     assert(pages.indexOf(known) >= 0, 'the walk over app/ did not find the page ' + known + '; it found ' + JSON.stringify(pages));
   });
 });
@@ -242,6 +244,96 @@ suite.test('the test harness loads the shared box before the modules that use Kt
      box was lifted out of: the pair stays in the order the page loads it. */
   const stateAt = order.indexOf('ketor-table-state.js');
   assert(stateAt < 0 || boxAt < stateAt, 'tests/helpers/workbench.js loads ketor-table-state.js before ketor-ui-box.js; the box keeps the place of the definition it replaced');
+});
+
+/* ------------------------------------------------------------
+   The workbench and the legacy core.js
+   ------------------------------------------------------------
+   The workbench used to load app/assets/js/core.js for seven names and reach them through
+   an inline bridge that copied fourteen keys onto window.Ketor.legacy; only six of those
+   keys were ever read. Batch 180 moved the code the workbench really used into
+   app/assets/js/core/ and archived the old engine under legacy/, so these tests hold the
+   line: the shared names are published, the build worker still carries its four helpers as
+   source, and neither the page nor app/ has anything left of the old file. */
+const CORE_ROOT = path.join(SCRIPT_ROOT, 'core');
+const WORKBENCH = path.join(APP, 'workbench-preview.html');
+const WORKBENCH_BUILD = '141';
+const WORKBENCH_CORE_FILES = ['text-codec.js', 'rom-builder.js', 'worker-text-extract.js', 'worker-build.js', 'worker-table.js'];
+/* What the ui reads out of window.Ketor.core, one name per module. */
+const CORE_NAMES = ['escapeRegex', 'createTokenizer', 'smartTextParse', 'getSmartByteLength',
+  'rebuildRom', 'createTextExtractorWorker', 'createBuildWorker', 'createTableWorker'];
+/* The helpers createBuildWorker stringifies into the worker it builds. */
+const WORKER_HELPERS = ['escapeRegex', 'createTokenizer', 'smartTextParse', 'rebuildRom'];
+/* What batch 180 moved out of app/. The path under legacy/ mirrors the path it had. */
+const ARCHIVED = ['app/index.html', 'app/assets/js/core.js', 'app/assets/js/app-ui.js', 'app/assets/css/main.css'];
+
+/* A window just bare enough to run the core modules: they touch nothing else at load. */
+function sandboxOf() {
+  const win = { console: console, Uint8Array: Uint8Array, Map: Map, Set: Set, RegExp: RegExp, Math: Math,
+    Number: Number, String: String, Object: Object, Array: Array, JSON: JSON, Error: Error, Promise: Promise,
+    Symbol: Symbol, Boolean: Boolean, TextDecoder: TextDecoder, TextEncoder: TextEncoder,
+    setTimeout: setTimeout, clearTimeout: clearTimeout, queueMicrotask: queueMicrotask,
+    Worker: function () {}, Blob: function () {},
+    URL: { createObjectURL: function () { return 'blob:test'; }, revokeObjectURL: function () {} } };
+  win.window = win;
+  return win;
+}
+
+function loadCoreInto(win, file) {
+  const abs = path.join(CORE_ROOT, file);
+  vm.runInNewContext(fs.readFileSync(abs, 'utf8'), win, { filename: abs });
+}
+
+suite.test('the workbench core modules publish the eight shared names on window.Ketor.core', function () {
+  const win = sandboxOf();
+  WORKBENCH_CORE_FILES.forEach(function (file) { loadCoreInto(win, file); });
+  CORE_NAMES.forEach(function (name) {
+    assert(typeof win.Ketor.core[name] === 'function',
+      'app/assets/js/core does not publish Ketor.core.' + name + '; the workbench ui reads it from there');
+  });
+});
+
+suite.test('the build worker source still carries the four helpers it stringifies', function () {
+  const win = sandboxOf();
+  ['text-codec.js', 'rom-builder.js', 'worker-build.js'].forEach(function (file) { loadCoreInto(win, file); });
+  const source = win.Ketor.core.createBuildWorker.toString();
+  WORKER_HELPERS.forEach(function (name) {
+    assert(source.indexOf('const ' + name + ' = ') >= 0,
+      'createBuildWorker no longer puts "const ' + name + ' = " into the worker source it builds; the worker would run without its ' + name);
+  });
+});
+
+suite.test('the workbench page loads core.js no more and keeps no Ketor.legacy bridge', function () {
+  const text = fs.readFileSync(WORKBENCH, 'utf8');
+  assert(text.indexOf('core.js') < 0, 'app/workbench-preview.html still mentions core.js; the old engine lives in legacy/ now');
+  assert(text.indexOf('Ketor.legacy') < 0, 'app/workbench-preview.html still installs the Ketor.legacy bridge; the ui reads window.Ketor.core instead');
+  assert(text.indexOf('(build ' + WORKBENCH_BUILD + ')') >= 0, 'app/workbench-preview.html is not at build ' + WORKBENCH_BUILD);
+  assert(text.indexOf('__KT_BUILD__ = "' + WORKBENCH_BUILD + '"') >= 0, 'window.__KT_BUILD__ is not ' + WORKBENCH_BUILD);
+  const refs = attributes(text, SCRIPT_SRC).map(bareRef);
+  let previous = -1;
+  WORKBENCH_CORE_FILES.forEach(function (file) {
+    const ref = './assets/js/core/' + file;
+    const at = refs.indexOf(ref);
+    assert(at >= 0, 'app/workbench-preview.html does not load ' + ref);
+    assert(at > previous, 'app/workbench-preview.html loads ' + ref + ' before the module it is built on; the page has to load them in order: ' + WORKBENCH_CORE_FILES.join(', '));
+    previous = at;
+  });
+});
+
+suite.test('the one css rule the workbench needs from main.css came across with it', function () {
+  const text = fs.readFileSync(path.join(STYLE_ROOT, 'vscode-components.css'), 'utf8');
+  ['.btn-danger {', '.btn-danger:hover {'].forEach(function (rule) {
+    assert(text.indexOf(rule) >= 0, 'app/assets/css/vscode-components.css has no ' + rule + ', a rule ui/ketor-table-tab.js sets on a kt-btn and main.css used to carry');
+  });
+});
+
+suite.test('the legacy engine and the old page are archived under legacy/, out of app/', function () {
+  ARCHIVED.forEach(function (rel) {
+    assert(!isFile(path.join(REPO, rel)), rel + ' is still inside app/; batch 180 moved it to legacy/');
+    const archived = 'legacy/' + rel.slice('app/'.length);
+    assert(isFile(path.join(REPO, archived)), archived + ' is missing; the archive under legacy/ has to hold the old engine and its page');
+  });
+  assert(isFile(path.join(REPO, 'legacy', 'README.md')), 'legacy/README.md is missing; the archive has to say what it is and how to open it');
 });
 
 module.exports = {

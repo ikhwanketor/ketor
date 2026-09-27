@@ -95,13 +95,13 @@
   }
 
   function _ensureWorkers() {
-    var lg = K.legacy || {};
-    if (!_workers.table && typeof lg.createTableWorker === 'function') {
-      _workers.table = lg.createTableWorker();
+    var core = K.core || {};
+    if (!_workers.table && typeof core.createTableWorker === 'function') {
+      _workers.table = core.createTableWorker();
       _workers.table.onmessage = _onTableMsg;
     }
-    if (!_workers.build && typeof lg.createBuildWorker === 'function') {
-      _workers.build = lg.createBuildWorker();
+    if (!_workers.build && typeof core.createBuildWorker === 'function') {
+      _workers.build = core.createBuildWorker();
       _workers.build.onmessage = _onBuildMsg;
     }
   }
@@ -251,8 +251,8 @@
 
   function _measureTools(tableData) {
     if (_measure.table === tableData && _measure.tokenizer) return _measure;
-    var lg = K.legacy || {};
-    if (typeof lg.createTokenizer !== 'function') return null;
+    var core = K.core || {};
+    if (typeof core.createTokenizer !== 'function') return null;
 
     var target = {};
     _buildMasterMap(tableData, target);
@@ -275,18 +275,18 @@
     });
     if (!tokens.length) return null;
 
-    _measure = { table: tableData, tokenizer: lg.createTokenizer(tokens), map: map };
+    _measure = { table: tableData, tokenizer: core.createTokenizer(tokens), map: map };
     return _measure;
   }
 
   function measureBytes(text) {
     var value = String(text == null ? '' : text);
     if (!value) return 0;
-    var lg = K.legacy || {};
+    var core = K.core || {};
     var tools = _measureTools(_state.tableData);
-    if (!tools || typeof lg.getSmartByteLength !== 'function') return value.length;
+    if (!tools || typeof core.getSmartByteLength !== 'function') return value.length;
     try {
-      return lg.getSmartByteLength(value, tools.tokenizer, tools.map, false, null);
+      return core.getSmartByteLength(value, tools.tokenizer, tools.map, false, null);
     } catch (_) {
       return value.length;
     }

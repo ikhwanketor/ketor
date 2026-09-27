@@ -577,3 +577,14 @@
 .kt-items-center { align-items: center; }
 .kt-justify-between { justify-content: space-between; }
 .kt-hidden { display: none !important; }
+
+/* Danger state for a kt-btn: the workbench puts .btn-danger on Clear and on Clear Compare. */
+.btn-danger {
+  border-color: #ff4444;
+  color: #ff4444;
+}
+
+.btn-danger:hover {
+  background: #ff4444;
+  color: #000;
+}

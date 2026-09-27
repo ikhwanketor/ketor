@@ -2,8 +2,8 @@
    Ketor - Search Text State (v1)
    ------------------------------------------------------------
    Extraction + filter + mark + group assignment. Mirrors the
-   pattern of ketor-table-state.js. Extraction uses the legacy
-   worker (Ketor.legacy.createTextExtractorWorker).
+   pattern of ketor-table-state.js. Extraction uses the shared
+   worker (Ketor.core.createTextExtractorWorker).
    Groups + marked + filter + options persist to sessionStorage.
    Extracted texts live only in memory (re-extract after reload).
    ============================================================ */
@@ -1279,8 +1279,8 @@
   }
 
   function extractTexts() {
-    var lg = K.legacy || {};
-    if (typeof lg.createTextExtractorWorker !== 'function') {
+    var core = K.core || {};
+    if (typeof core.createTextExtractorWorker !== 'function') {
       _set({ status: 'Extractor worker is not available.' });
       return;
     }
@@ -1300,7 +1300,7 @@
     var buffer = [];
     var worker;
     try {
-      worker = lg.createTextExtractorWorker();
+      worker = core.createTextExtractorWorker();
     } catch (err) {
       _set({ isExtracting: false, status: 'Failed to start extractor: ' + (err.message || '') });
       return;

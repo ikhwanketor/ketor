@@ -101,9 +101,21 @@ function loadWorkbench(options) {
   if (typeof opts.beforeLoad === 'function') opts.beforeLoad(win);
 
   const load = (file) => vm.runInNewContext(fs.readFileSync(file, 'utf8'), win, { filename: file });
-  load(path.join(JS, 'core.js'));
-  vm.runInNewContext('window.__probe = { createTextExtractorWorker: createTextExtractorWorker, createBuildWorker: createBuildWorker, createTableWorker: createTableWorker };', win);
-  win.Ketor.legacy = win.__probe;
+  /* The text codecs, the rom builder and the three workers the page loads out of
+     app/assets/js/core/ before any ui module that reaches for them. Each one publishes
+     its names under window.Ketor.core, which is what the ui modules read. */
+  load(path.join(CORE, 'text-codec.js'));
+  load(path.join(CORE, 'rom-builder.js'));
+  load(path.join(CORE, 'worker-text-extract.js'));
+  load(path.join(CORE, 'worker-build.js'));
+  load(path.join(CORE, 'worker-table.js'));
+  /* A suite that drives a build or an extraction reaches the engine through the same
+     window.Ketor.core the page hands the ui; a name that is missing has to be said out
+     loud here rather than surface later as an undefined is not a function. */
+  ['escapeRegex', 'createTokenizer', 'smartTextParse', 'getSmartByteLength', 'rebuildRom',
+    'createTextExtractorWorker', 'createBuildWorker', 'createTableWorker'].forEach(function (name) {
+    if (typeof win.Ketor.core[name] !== 'function') throw new Error('tests/helpers/workbench.js: app/assets/js/core did not publish Ketor.core.' + name);
+  });
   load(path.join(UI, 'ketor-search-state.js'));
   load(path.join(UI, 'ketor-hex-state.js'));
   load(path.join(UI, 'ketor-translate-state.js'));
