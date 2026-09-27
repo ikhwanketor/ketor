@@ -811,6 +811,45 @@
     return out;
   }
 
+  /* Read one record's text out of the cartridge with the loaded table, for the records the
+     scan never produced a text for. Aria of Sorrow's Soma dialogues are like that: they
+     open with codes (05 04 03 00 07 01) that the table does not name, so the scan walked
+     past them and only 25 of the user's 100 saved offsets were ever indexed. Leading codes
+     are skipped, the characters are taken up to the record's end, and the result has to
+     read like text - nothing is invented. */
+  function decodeRecordText(recordStart, limit) {
+    var bytes = _state.romBytes;
+    var map = (_state.tableData && _state.tableData.singleByte) || {};
+    if (!bytes) return null;
+    var start = -1;
+    var text = '';
+    var end = Number(limit);
+    for (var p = Number(recordStart); p < Number(limit) && p < bytes.length; p++) {
+      var b = bytes[p] & 0xFF;
+      if (b === 0x00) { if (text) { end = p; break; } continue; }
+      var ch = map[b];
+      if (ch === undefined && b >= 0x20 && b <= 0x7E) ch = String.fromCharCode(b);
+      if (ch === undefined) { if (text) { end = p; break; } continue; }
+      if (start < 0) start = p;
+      text += String(ch);
+    }
+    if (start < 0 || !text) return null;
+    if (end <= start) end = start + text.length;
+    var entry = {
+      id: 'ty-' + Number(recordStart),
+      startByte: start,
+      offset: start,
+      byteLength: end - start,
+      originalText: text,
+      translatedText: '',
+      comment: '',
+      textType: 'dialogue',
+      buildable: true,
+      source: 'table'
+    };
+    return readsLikeText(entry) ? entry : null;
+  }
+
   /* Does this read like a message? The same test the tables are judged with: long
      enough, and enough letters to be words rather than bytes. */
   function readsLikeText(en) {
@@ -969,6 +1008,7 @@
         }
       })();
       var cursor = 0;   /* one walk per table: another table's records may sit anywhere */
+      var spans = [];   /* what each record of this table covers, for the second pass */
       for (var ti = 0; ti < targets.length; ti++) {
         var base = targets[ti];
         var nextTarget = (ti + 1 < targets.length) ? targets[ti + 1] : base + 0x400;
@@ -986,7 +1026,7 @@
            that span covers the image and pulled 245,538 texts in when it was tried. */
         var gap = nextTarget - base;
         var spanEnd;
-        if (gap > 0 && gap <= 0x400) {
+        if (gap > 0 && gap <= 0x800) {
           spanEnd = nextTarget;
         } else {
           spanEnd = base + 0x100;
@@ -1005,6 +1045,7 @@
            record holding several lines, and keeping only the text nearest the address
            indexed the first line and dropped the rest - their report, in one line. */
         while (cursor < startsInOrder.length && startsInOrder[cursor] < base) cursor++;
+        spans.push({ base: base, end: spanEnd });
         var insideCount = 0;
         while (cursor < startsInOrder.length && startsInOrder[cursor] < spanEnd) {
           var inside = byStart[startsInOrder[cursor]];
@@ -1022,6 +1063,25 @@
          point into font or graphic data produces records like 'Hh@x' and 'I  "P', and
          those are not messages; what separates the two is that most records of a real
          table read like text. */
+      /* Records the scan never produced a text for are read out of the cartridge with this
+         table - but only when the table is proved by text consensus and the scan already
+         found most of its records: a table the scan never hits is not a text table, and
+         reading it poured font data into the list when that check was missing (measured:
+         4,332 texts instead of 2,929). This is what the user's Soma dialogues need - 72 of
+         their 100 saved offsets were in records like that. */
+      if (table.confirmed === true && tableSamples.length >= Math.max(4, Math.floor(targets.length * 0.5))) {
+        for (var sp = 0; sp < spans.length; sp++) {
+          var span = spans[sp];
+          var hadText = false;
+          for (var tk = 0; tk < tableKeep.length && !hadText; tk++) {
+            var ts = Number(tableKeep[tk].startByte);
+            if (ts >= span.base && ts < span.end) hadText = true;
+          }
+          if (hadText) continue;
+          var made = decodeRecordText(span.base, span.end);
+          if (made) tableKeep.push(made);
+        }
+      }
       var readable = tableSamples.filter(readsLikeText).length;
       if (tableSamples.length === 0 || readable / tableSamples.length < 0.6) { droppedUnreadable++; return; }
       tableKeep.forEach(function (en) {
