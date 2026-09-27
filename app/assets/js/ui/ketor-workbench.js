@@ -180,7 +180,6 @@
       placeholderHint: 'Unit tests and preview pipeline checks per workflow.'
     }
   };
-  Ketor.ui.ACTIVITY_META = ACTIVITY_META;
 
   function TitleBar(props) {
     return e('header', { className: 'kt-titlebar' },

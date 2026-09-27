@@ -285,13 +285,8 @@
     };
   }
 
-  K.core.PROFILE_FORMAT = PROFILE_FORMAT;
   K.core.BUILT_IN_PROFILES = BUILT_IN;
-  K.core.isGameProfile = isProfile;
-  K.core.normalizeProfile = normalizeProfile;
   K.core.parseProfile = parseProfile;
-  K.core.validateProfile = validateProfile;
   K.core.profileForHash = profileForHash;
-  K.core.draftProfile = draftProfile;
   K.core.profileSummary = profileSummary;
 })(typeof window !== 'undefined' ? window : this);

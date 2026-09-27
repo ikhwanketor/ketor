@@ -110,6 +110,5 @@
 
   Ketor.core.loadRomFile = loadRomFile;
   Ketor.core.formatSize = formatSize;
-  Ketor.core.getExt = getExt;
 
 })(window);

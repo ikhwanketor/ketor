@@ -170,8 +170,5 @@
   }
 
   K.core.GBA_REGISTERS = REGISTERS;
-  K.core.decodeBgxcnt = decodeBgxcnt;
-  K.core.decodeDispcnt = decodeDispcnt;
-  K.core.scanDisplaySetup = scanDisplaySetup;
   K.core.backgroundsFrom = backgroundsFrom;
 })(window);

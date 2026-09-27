@@ -258,6 +258,5 @@
   }
 
   Ketor.ui.KetorMenubar = KetorMenubar;
-  Ketor.ui.DEFAULT_MENUS = DEFAULT_MENUS;
 
 })(window);

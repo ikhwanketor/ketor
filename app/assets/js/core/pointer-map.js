@@ -350,20 +350,10 @@
     return written;
   }
 
-  K.core.POINTER_SYSTEMS = SYSTEMS;
   K.core.pointerSystem = systemOf;
   K.core.snesHeader = snesHeader;
-  K.core.snesToOffset = snesToOffset;
-  K.core.offsetToSnes = offsetToSnes;
   K.core.toRomOffset = toRomOffset;
-  K.core.toBusAddress = toBusAddress;
   K.core.readPointer = readPointer;
-  K.core.pointerBytesOf = pointerBytesOf;
-  K.core.findFreeRuns = findFreeRuns;
-  K.core.findFreeSpace = findFreeSpace;
-  K.core.findPointersTo = findPointersTo;
-  K.core.classifyPointerSites = classifyPointerSites;
-  K.core.POINTER_MAX_SITES = MAX_SITES;
   K.core.planRelocation = planRelocation;
   K.core.applyPlan = applyPlan;
 })(window);

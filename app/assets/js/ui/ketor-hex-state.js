@@ -1134,21 +1134,16 @@
   K.hex.useHex = useHex;
   K.hex.setRomFromLoad = setRomFromLoad;
   K.hex.refreshSections = refreshSections;
-  K.hex.reset = reset;
   K.hex.setCursor = setCursor;
   K.hex.gotoOffset = gotoOffset;
   K.hex.setSelection = setSelection;
-  K.hex.clearSelection = clearSelection;
-  K.hex.selectionRange = selectionRange;
   K.hex.selectionText = selectionText;
   K.hex.setBytesPerRow = setBytesPerRow;
   K.hex.setViewMode = setViewMode;
-  K.hex.setHighlightLayers = setHighlightLayers;
   K.hex.toggleHighlightLayer = toggleHighlightLayer;
   K.hex.currentByte = currentByte;
   K.hex.viewBytes = viewBytes;
   K.hex.viewPatches = viewPatches;
-  K.hex.isCompiledView = isCompiledView;
   K.hex.setCompiledRom = setCompiledRom;
   K.hex.clearCompiledRom = clearCompiledRom;
   K.hex.adoptInsertedRom = adoptInsertedRom;
@@ -1225,14 +1220,12 @@
   K.hex.redo = redo;
   K.hex.clearPatches = clearPatches;
   K.hex.getPatchedBytes = getPatchedBytes;
-  K.hex.syncRegistryFor = _syncRegistryFor;
   K.hex.exportPatchedRom = exportPatchedRom;
   K.hex.addBookmark = addBookmark;
   K.hex.removeBookmark = removeBookmark;
   K.hex.renameBookmark = renameBookmark;
   K.hex.clearBookmarks = clearBookmarks;
   K.hex.activeTable = activeTable;
-  K.hex.decodeRange = decodeRange;
   K.hex.addSelectionToGroup = addSelectionToGroup;
   K.hex.selectionTexts = selectionTexts;
   K.hex.setSearchMode = setSearchMode;
@@ -1241,7 +1234,5 @@
   K.hex.nextResult = nextResult;
   K.hex.prevResult = prevResult;
   K.hex.clearSearch = clearSearch;
-  K.hex.buildSections = buildSections;
-  K.hex.SECTION_COLORS = SECTION_COLORS;
 
 })(window);

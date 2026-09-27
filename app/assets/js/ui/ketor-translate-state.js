@@ -1569,25 +1569,19 @@
   K.translate.subscribe = subscribe;
   K.translate.useTranslate = useTranslate;
   K.translate.loadTableContent = loadTableContent;
-  K.translate.extractTexts = extractTexts;
   K.translate.measureBytes = measureBytes;
   K.translate.measureOriginal = measureOriginal;
-  K.translate.lineBudget = lineBudget;
   K.translate.previewLayout = previewLayout;
-  K.translate.getActiveGroupId = getActiveGroupId;
-  K.translate.getActiveGroupEntries = getActiveGroupEntries;
   K.translate.setFilter = setFilter;
   K.translate.setPage = setPage;
   K.translate.selectOffset = selectOffset;
   K.translate.setSourceLang = setSourceLang;
   K.translate.setTargetLang = setTargetLang;
   K.translate.setProviderMode = setProviderMode;
-  K.translate.setProviderId = setProviderId;
   K.translate.setProvider = setProvider;
   K.translate.setProviderEndpoint = setProviderEndpoint;
   K.translate.setProviderModel = setProviderModel;
   K.translate.setProviderApiKey = setProviderApiKey;
-  K.translate.getProviderApiKey = getProviderApiKey;
   /* Sends the compiled image to the Hex Editor and switches it to the
      compiled view, so a compile can be checked byte by byte without leaving
      the ecosystem. The loaded ROM keeps its own patches, bookmarks and
@@ -1606,7 +1600,6 @@
   }
 
   K.translate.buildModifiedRom = buildModifiedRom;
-  K.translate.showCompiledInHex = showCompiledInHex;
   K.translate.toDisplay = toDisplay;
   K.translate.fromDisplay = fromDisplay;
   K.translate.lineToken = lineToken;
@@ -1614,17 +1607,14 @@
   K.translate.clearGroupTranslations = clearGroupTranslations;
   K.translate.saveProject = saveProject;
   K.translate.loadProjectContent = loadProjectContent;
-  K.translate.downloadModifiedRom = downloadModifiedRom;
   K.translate.exportCsv = exportCsv;
   K.translate.importCsvContent = importCsvContent;
   K.translate.autoTranslateText = autoTranslateText;
   K.translate.autoTranslateGroup = autoTranslateGroup;
   K.translate.stopAutoTranslateGroup = stopAutoTranslateGroup;
-  K.translate.reset = reset;
   K.translate.setRomFromLoad = setRomFromLoad;
   K.translate.getProfile = getProfile;
   K.translate.getProfileInfo = getProfileInfo;
   K.translate.loadProfileContent = loadProfileContent;
-  K.translate.applyProfileForRom = _applyProfileForRom;
 
 })(window);

@@ -153,9 +153,4 @@
   }
 
   K.core.scanReferencedBlocks = scanReferencedBlocks;
-  K.core.readU32 = readU32;
-  K.core.readU16 = readU16;
-  K.core.findU32 = writeU32List;
-  K.core.scanPointerTables = scanTables;
-  K.core.graphicsClassifier = graphicsClassifier;
 })(window);

@@ -225,11 +225,5 @@
     };
   }
 
-  K.core.sha1 = sha1;
-  K.core.KNOWN_ROMS = KNOWN_ROMS;
-  K.core.registerRom = registerRom;
-  K.core.headerSystem = headerSystem;
-  K.core.hasBytes = hasBytes;
   K.core.identifyRom = identify;
-  K.core.ROM_HEADER_BYTES = HEADER_BYTES;
 })(window);

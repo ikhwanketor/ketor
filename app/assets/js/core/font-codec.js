@@ -324,19 +324,6 @@
     return out.slice(0, 12);
   }
 
-  K.core.glyphStats = glyphStats;
-  K.core.looksLikeFont = looksLikeFont;
-  K.core.suggestFontBase = suggestFontBase;
-  K.core.COMMON_WORDS = COMMON_WORDS;
-  K.core.countWords = countWords;
-  K.core.scoreWords = scoreWords;
-  K.core.scoreBytesAsText = scoreBytesAsText;
-  K.core.charCodes = charCodes;
   K.core.codeChars = codeChars;
-  K.core.readTextFromMap = readTextFromMap;
-  K.core.scoreText = scoreText;
-  K.core.findFontBase = findFontBase;
-  K.core.textToTiles = textToTiles;
   K.core.planTextOnMap = planTextOnMap;
-  K.core.glyphSheet = glyphSheet;
 })(window);

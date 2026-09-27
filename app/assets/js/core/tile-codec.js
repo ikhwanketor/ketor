@@ -362,6 +362,4 @@
   Ketor.core.encodeTile = encodeTile;
   Ketor.core.tileRoundTrip = roundTrip;
   Ketor.core.scoreTileRegion = scoreRegion;
-  Ketor.core.tileRegionMetrics = regionMetrics;
-  Ketor.core.clamp01 = clamp01;
 })(window);

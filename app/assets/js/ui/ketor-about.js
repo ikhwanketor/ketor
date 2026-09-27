@@ -107,7 +107,5 @@
   }
 
   Ketor.ui.KetorAboutModal = KetorAboutModal;
-  Ketor.ui.KETOR_VERSION = VERSION;
-  Ketor.ui.KETOR_MEANING = KETOR_MEANING;
 
 })(window);

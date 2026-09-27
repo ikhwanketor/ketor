@@ -189,7 +189,4 @@
   }
 
   K.core.paletteCandidates = paletteCandidates;
-  K.core.paletteScore = paletteScore;
-  K.core.classifyBlock = classifyBlock;
-  K.core.referencedKinds = referencedKinds;
 })(window);

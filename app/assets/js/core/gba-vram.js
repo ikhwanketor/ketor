@@ -228,9 +228,4 @@
     };
   }
 
-  K.core.VRAM = { base: VRAM_BASE, charBlock: CHAR_BLOCK, screenBlock: SCREEN_BLOCK, bgEnd: BG_END, objTilesEnd: OBJ_TILES_END, objMapEnd: OBJ_MAP_END };
-  K.core.vramKind = vramKind;
-  K.core.findVramPairs = findVramPairs;
-  K.core.screenCandidates = screenCandidates;
-  K.core.gatherReferenced = gatherReferenced;
 })(window);

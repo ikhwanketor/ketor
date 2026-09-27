@@ -621,8 +621,5 @@
   }
 
   K.ui.KetorPanel = KetorPanel;
-  K.ui.KetorSessionTab = SessionTab;
-  K.ui.KetorLogTab = LogTab;
-  K.ui.KetorProblemsTab = ProblemsTab;
 
 })(window);

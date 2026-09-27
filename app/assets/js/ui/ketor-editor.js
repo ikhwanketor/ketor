@@ -292,8 +292,5 @@
   }
 
   Ketor.ui.KetorEditorArea = KetorEditorArea;
-  Ketor.ui.KetorEditorGroup = KetorEditorGroup;
-  Ketor.ui.KetorTab = KetorTab;
-  Ketor.ui.KetorWelcome = KetorWelcome;
 
 })(window);

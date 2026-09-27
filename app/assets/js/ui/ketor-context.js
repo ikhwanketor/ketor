@@ -652,11 +652,7 @@
     return React.useContext(WorkbenchContext);
   }
 
-  Ketor.ui.WorkbenchContext = WorkbenchContext;
   Ketor.ui.WorkbenchProvider = WorkbenchProvider;
   Ketor.ui.useWorkbench = useWorkbench;
-  Ketor.ui.useViewport = useViewport;
-  Ketor.ui.detectViewport = detectViewport;
-  Ketor.ui.clearSessionState = clearSession;
 
 })(window);

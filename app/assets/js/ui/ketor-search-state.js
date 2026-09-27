@@ -1418,20 +1418,15 @@
   K.search.setFilter = setFilter;
   K.search.setPage = setPage;
   K.search.setListScrollTop = setListScrollTop;
-  K.search.setExpandedGroups = setExpandedGroups;
   K.search.toggleGroupExpand = toggleGroupExpand;
-  K.search.expandGroup = expandGroup;
   K.search.toggleMark = toggleMark;
   K.search.markAll = markAll;
   K.search.unmarkAll = unmarkAll;
-  K.search.getMarkedOffsets = getMarkedOffsets;
   K.search.createGroup = createGroup;
   K.search.renameGroup = renameGroup;
   K.search.deleteGroup = deleteGroup;
   K.search.selectGroup = selectGroup;
   K.search.moveGroup = moveGroup;
-  K.search.moveGroupTo = moveGroupTo;
-  K.search.sortGroupsByName = sortGroupsByName;
   K.search.moveTextInGroup = moveTextInGroup;
   K.search.sortTextsInGroup = sortTextsInGroup;
   K.search.assignMarkedToGroup = assignMarkedToGroup;
@@ -1439,7 +1434,6 @@
   K.search.getGroupForText = getGroupForText;
   K.search.getAssignedOffsets = getAssignedOffsets;
   K.search.getTextsByGroup = getTextsByGroup;
-  K.search.getSortedTexts = getSortedTexts;
   K.search.getFilteredTexts = getFilteredTexts;
   K.search.getTextsInRange = getTextsInRange;
   K.search.addManualEntry = addManualEntry;
@@ -1447,11 +1441,8 @@
   K.search.applyTranslations = applyTranslations;
   K.search.getAssignedEntries = getAssignedEntries;
   K.search.loadSnapshot = loadSnapshot;
-  K.search.setComment = setComment;
   K.search.setOriginalText = setOriginalText;
   K.search.extractTexts = extractTexts;
-  K.search.refresh = refresh;
-  K.search.reset = reset;
   K.search.COLOR_PALETTE = COLOR_PALETTE;
 
 })(window);

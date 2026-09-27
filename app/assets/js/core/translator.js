@@ -354,13 +354,7 @@
   }
 
   Ketor.core.translate = translate;
-  Ketor.core.translateMyMemory = translateMyMemory;
-  Ketor.core.translateGoogleUnofficial = translateGoogleUnofficial;
-  Ketor.core.translateLibreTranslate = translateLibreTranslate;
-  Ketor.core.translateApertium = translateApertium;
-  Ketor.core.translateCustom = translateCustom;
   Ketor.core.TRANSLATOR_PROVIDERS = TRANSLATOR_PROVIDERS;
   Ketor.core.getTranslatorProvider = getProvider;
-  Ketor.core.FALLBACK_CHAIN = FALLBACK_CHAIN;
 
 })(window);

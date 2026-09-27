@@ -70,7 +70,6 @@
     }
   ];
 
-  Ketor.ui.KEBAB_SECTIONS = SECTIONS;
 
   function KebabSection(props) {
     var section = props.section;

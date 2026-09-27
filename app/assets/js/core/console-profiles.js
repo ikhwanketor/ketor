@@ -148,6 +148,4 @@
   K.core.CONSOLE_PROFILES = PROFILES;
   K.core.normalizeSystem = normalizeSystem;
   K.core.consoleProfile = profileFor;
-  K.core.consoleFormats = formatsFor;
-  K.core.consoleSupports = supportsCompression;
 })(window);

@@ -271,8 +271,5 @@
     return { width: width, height: height, pixels: pixels };
   }
 
-  Ketor.core.detectFontCandidates = detectFontCandidates;
-  Ketor.core.generatePreview = generatePreview;
-  Ketor.core.scoreCandidate = scoreCandidate;
 
 })(window);

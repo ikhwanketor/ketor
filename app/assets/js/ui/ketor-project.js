@@ -886,15 +886,7 @@
   K.project = {
     getState: getState,
     subscribe: subscribe,
-    useProject: useProject,
-    useLiveData: useLiveData,
     setRomFromLoad: setRomFromLoad,
-    toggleShowAllHeader: toggleShowAllHeader,
-    toggleExpanded: toggleExpanded,
-    selectNode: selectNode,
-    clearRecent: clearRecent,
-    reset: reset,
-    formatBytes: formatBytes
   };
 
   K.ui.registerSidebarProvider('project', ProjectSidebar);

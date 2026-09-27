@@ -330,6 +330,5 @@
   }
 
   K.core.runMonkeyMoore = runSearch;
-  K.core.MM_PREVIEW_WIDTH = PREVIEW_WIDTH;
 
 })(window);

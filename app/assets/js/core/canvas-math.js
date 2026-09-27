@@ -173,12 +173,6 @@
 
   K.core.screenToCanvas = screenToCanvas;
   K.core.tileHit = tileHit;
-  K.core.tileSheetSize = tileSheetSize;
   K.core.mapHit = mapHit;
-  K.core.cellIndex = cellIndex;
-  K.core.indexToCell = indexToCell;
-  K.core.cellAddress = cellAddress;
-  K.core.addressToCell = addressToCell;
-  K.core.hitToAddress = hitToAddress;
   K.core.byteToPixels = byteToPixels;
 })(window);

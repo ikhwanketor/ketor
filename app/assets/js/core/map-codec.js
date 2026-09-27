@@ -214,7 +214,6 @@
   }
 
   K.core.mapUsageScore = mapUsageScore;
-  K.core.MAP_LAYOUTS = LAYOUTS;
   K.core.mapLayout = layoutOf;
   K.core.mapSizes = sizesOf;
   K.core.readMapEntry = readEntry;
@@ -222,7 +221,6 @@
   K.core.entryFlipH = entryFlipH;
   K.core.entryFlipV = entryFlipV;
   K.core.entryPalette = entryPalette;
-  K.core.entryPriority = entryPriority;
   K.core.buildEntry = buildEntry;
   K.core.entryBytesOf = entryBytesOf;
   K.core.scoreMapBlock = scoreMapBlock;

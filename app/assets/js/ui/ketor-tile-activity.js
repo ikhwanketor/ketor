@@ -3714,39 +3714,22 @@
      provider (--kt-rightpanel-width becomes 0px), so removing the registration cannot leave
      an empty fourth column behind. */
   K.tile = {
-    getState: getState, subscribe: subscribe, useTile: useTile,
-    detect: detect, setPixel: setPixel, setRegion: function (o) { _set({ region: Number(o) }); },
+    getState: getState,
+    setPixel: setPixel, setRegion: function (o) { _set({ region: Number(o) }); },
     setFormat: function (f) { var format = String(f); _set(Object.assign({ format: format }, formatPatch(format))); }, colourAt: colourCss,
-    setColour: function (v) { _set({ colour: Number(v) }); }, readTile: readTile,
+    readTile: readTile,
     copyRegion: copyRegion, pasteRegion: pasteRegion,
     setSelection: setSelection, clearSelection: clearSelection, setGridCols: setGridCols,
-    regionWindow: regionWindow, tileAbsoluteOffset: tileAbsoluteOffset, statusLine: statusLine,
+    regionWindow: regionWindow, statusLine: statusLine,
     loadPalette: loadPalette, readPaletteAt: readPaletteAt, findPalette: findPalette, paletteScore: paletteScore,
     writePaletteColour: writePaletteColour,
-    parsePaletteText: parsePaletteText, paletteText: paletteText,
-    parseHexString: parseHexString, applyHex: applyHex, tileHexText: tileHexText,
-    pixelSpanForByte: pixelSpanForByte, fromBgr555: fromBgr555, toBgr555: toBgr555,
-    MAP_SIZES: MAP_SIZES, mapWindow: mapWindow, charWindow: charWindow, mapEntry: mapEntry,
-    detectMap: detectMap, scoreMapBlock: scoreMapBlock, charBase: charBase,
-    findScreens: findScreens, screenCoverage: screenCoverage, charTilesLimit: charTilesLimit, scanCharBases: scanCharBases,
-    findPalettes: function () {
-      if (!K.core.paletteCandidates) return null;
-      var res = K.core.paletteCandidates(romBytes() || new Uint8Array(0), {
-        near: charBase(), span: 0x40000, referenced: true, system: consoleProfile().id, max: 10
-      });
-      _set({ palettes: res.top, status: 'Palettes: ' + res.pointed + ' pointed at, ' + res.total + ' total.' });
-      return res;
-    },
-    consoleProfile: consoleProfile, mapLayoutId: mapLayoutId, openCandidate: openCandidate, clearSource: clearSource,
-    repointRegion: repointRegion, romIdentity: function () { return _state.romIdentity; },
-    parseOffsetInput: parseOffsetInput, savedScreens: savedScreens, saveCurrentScreen: saveCurrentScreen,
-    loadSavedScreen: loadSavedScreen, deleteSavedScreen: deleteSavedScreen,
-    writeBackCompressed: writeBackCompressed, scheduleCompressedWrite: scheduleCompressedWrite,
-    exportTilesPng: exportTilesPng, importTilesPng: importTilesPng, importTilesPngDialog: importTilesPngDialog,
+    parsePaletteText: parsePaletteText,
+    applyHex: applyHex,
+    fromBgr555: fromBgr555,
+    consoleProfile: consoleProfile, openCandidate: openCandidate,
+    repointRegion: repointRegion,
+    exportTilesPng: exportTilesPng, importTilesPng: importTilesPng,
     openAt: function (offset, options) { return K.tileOpenAt(offset, options); },
-    writeMapEntry: writeMapEntry, mapBucket: mapBucket, renderMap: renderMap, bankPalette: bankPalette,
-    decodeMapTile: decodeMapTile, entryTile: entryTile, entryFlipH: entryFlipH, entryFlipV: entryFlipV,
-    entryBank: entryBank, setView: function (v) { _set({ view: String(v) }); },
     setMap: function (o) { _set(o || {}); },
     /* The width of the palette the sheet on screen may hold, so a caller does not have to
        know that an 8bpp format carries 256 entries and a 4bpp one sixteen. */

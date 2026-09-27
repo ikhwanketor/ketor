@@ -203,6 +203,5 @@
   K.ui.registerTabProvider('patch', PatchTab);
   K.ui.registerSidebarProvider('patch', PatchSidebar);
   K.patch = {
-    changeRuns: changeRuns, buildPatch: buildPatch, state: patchState, summary: short
   };
 })(window);

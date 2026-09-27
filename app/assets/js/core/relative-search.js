@@ -307,11 +307,5 @@
     return results;
   }
 
-  Ketor.core.relativeSearch = relativeSearch;
-  Ketor.core.valueScanRelative = valueScanRelative;
-  Ketor.core.wildcardRelativeSearch = wildcardRelativeSearch;
-  Ketor.core.computeRelativePattern = computeRelativePattern;
-  Ketor.core.boyerMooreRelative = boyerMooreRelative;
-  Ketor.core.DEFAULT_CHARSET_FULL = DEFAULT_CHARSET_FULL;
 
 })(window);

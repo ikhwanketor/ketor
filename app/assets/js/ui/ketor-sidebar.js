@@ -185,6 +185,5 @@
 
   Ketor.ui.KetorSidebar = KetorSidebar;
   Ketor.ui.KetorSidebarSection = KetorSidebarSection;
-  Ketor.ui.KetorTreeView = KetorTreeView;
 
 })(window);

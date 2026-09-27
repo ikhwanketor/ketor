@@ -346,17 +346,8 @@
     return true;
   }
 
-  K.core.lz77Encode = lz77Encode;
-  K.core.rleEncode = rleEncode;
   K.core.encodeLike = encodeLike;
-  K.core.sameBytes = sameBytes;
-  K.core.minimumCompressedSize = minimumCompressedSize;
-  K.core.GBA_COMPRESSION = { LZ77: TYPE_LZ77, HUFFMAN: TYPE_HUFFMAN, RLE: TYPE_RLE };
   K.core.compressionHeaderAt = headerAt;
   K.core.decompressAt = decodeAt;
-  K.core.lz77Decompress = lz77Decompress;
-  K.core.rleDecompress = rleDecompress;
-  K.core.lz77Decode = lz77Decode;
-  K.core.rleDecode = rleDecode;
   K.core.scanCompressed = scanCompressed;
 })(window);

@@ -168,9 +168,6 @@
     return changes;
   }
 
-  K.core.MAX_IPS_OFFSET = MAX_OFFSET;
   K.core.buildIps = buildIps;
-  K.core.parseIps = parseIps;
-  K.core.applyIps = applyIps;
   K.core.diffBytes = diffBytes;
 })(window);

@@ -218,9 +218,5 @@
     return { singleByte: singleByte, multiByte: multiByte, entryCount: entryCount };
   }
 
-  Ketor.core.generateTableContent = generateTableContent;
-  Ketor.core.parseTableContent = parseTableContent;
-  Ketor.core.detectControlBytes = detectControlBytes;
-  Ketor.core.formatByteKey = formatByteKey;
 
 })(window);
