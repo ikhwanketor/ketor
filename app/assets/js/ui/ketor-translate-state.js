@@ -606,7 +606,10 @@
       if (byText[key].length >= 4) return;
       byText[key].push({
         ptrOffset: Number(hit.at),
-        targetOffset: Number(hit.text),
+        /* The address the engine stores. For a record that opens with a header the
+           detector hands back the record start, which is what the pointer has to name -
+           naming the text start instead would skip the header when the record moves. */
+        targetOffset: Number(hit.target === undefined ? hit.text : hit.target),
         ptrSize: Number(hit.size) || (Number(system && system.pointerSize) || 2),
         transformId: transformId
       });

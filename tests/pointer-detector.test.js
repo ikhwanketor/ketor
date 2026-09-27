@@ -139,4 +139,44 @@ suite.test('the console rules carry the model the engine uses', async function (
   t.assert(names.length >= 20, 'the table should cover the consoles added in batch 73, got ' + names.length);
 });
 
+suite.test('a pointer that names the record in front of the text is found', function (t) {
+  /* Aria of Sorrow opens every record with two bytes and its table names the record, so
+     the address the engine stores is two bytes in front of the text. Reading only the
+     text address found 46 sites on that cartridge and not one of them was the engine's
+     table; reading the four bytes in front as well found 3,369, of which 2,893 are that
+     table - every message, at its own entry. This gate is the small version of it. */
+  const rom = new Uint8Array(0x40000);
+  rom.fill(0x11, 0x1000, 0x3000);
+  const heads = [];
+  const texts = [];
+  const sites = [];
+  for (let i = 0; i < 20; i++) {
+    const head = 0x2000 + i * 0x40;
+    const text = 'MESSAGE ' + String.fromCharCode(0x41 + i) + ' SAYS TEXT';
+    rom[head] = 0x01;
+    rom[head + 1] = 0x00;
+    for (let k = 0; k < text.length; k++) rom[head + 2 + k] = text.charCodeAt(k);
+    rom[head + 2 + text.length] = 0x0A;
+    heads.push(head);
+    texts.push(head + 2);
+    const pointer = (0x08000000 + head) >>> 0;
+    const site = 0x1000 + i * 4;
+    sites.push(site);
+    rom[site] = pointer & 0xFF;
+    rom[site + 1] = (pointer >>> 8) & 0xFF;
+    rom[site + 2] = (pointer >>> 16) & 0xFF;
+    rom[site + 3] = (pointer >>> 24) & 0xFF;
+  }
+  const hints = findForTexts(rom, { console: 'gba', textOffsets: texts });
+  t.assertEqual(hints.length, texts.length, 'one hint per text, got ' + hints.length);
+  const byText = {};
+  hints.forEach(function (h) { byText[Number(h.text)] = h; });
+  texts.forEach(function (textAt, i) {
+    const hit = byText[textAt];
+    t.assert(hit, 'the text at 0x' + textAt.toString(16) + ' has a hint');
+    t.assertEqual(Number(hit.at), sites[i], 'the site is the table entry for that record');
+    t.assertEqual(Number(hit.target), heads[i], 'and the address it names is the record, not the text');
+  });
+});
+
 module.exports = { suite: suite };

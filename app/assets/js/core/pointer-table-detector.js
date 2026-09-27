@@ -380,9 +380,24 @@
         values.push({ value: rules.base + within, kind: 'bank' });
         if (rules.flagMask) values.push({ value: (rules.base + within) | 0x8000, kind: 'bank' });
       } else {
-        values.push({ value: rules.base + t, kind: 'base' });
-        values.push({ value: t, kind: 'raw' });
-        values.push({ value: t + 0x10, kind: 'header' });
+        values.push({ value: rules.base + t, kind: 'base', target: t });
+        values.push({ value: t, kind: 'raw', target: t });
+        values.push({ value: t + 0x10, kind: 'header', target: t });
+        /* The record a text sits in does not always start where the text starts: the
+           engine's entry can aim at a header in front of it. Measured on Aria of Sorrow,
+           whose records open with two bytes: reading only the text address found 46
+           pointer sites and not one of them was the engine's own table entry, while
+           reading two bytes earlier found 3,144 sites of which 2,893 are that table -
+           every message of the game, at its own entry. Cheat Engine calls this the
+           structure size: a pointer may aim inside the structure, not only at the field.
+           Only the four bytes in front are tried; a longer guess is another game's
+           header, and the value has to be the address the engine stores. */
+        for (var back = 1; back <= 4; back++) {
+          var recordStart = t - back;
+          if (recordStart < 0) break;
+          values.push({ value: rules.base + recordStart, kind: 'base', target: recordStart, headerBytes: back });
+          values.push({ value: recordStart, kind: 'raw', target: recordStart, headerBytes: back });
+        }
       }
       var seen = Object.create(null);
       values.forEach(function (candidate) {
@@ -392,7 +407,14 @@
         var sites = map[v];
         if (!sites) return;
         sites.slice(0, maxSites).forEach(function (at) {
-          out.push({ text: t, at: at, value: v, kind: candidate.kind, size: rules.size, target: t });
+          /* target is the address the engine stores, which for a record with a header in
+             front of its text is the record start, not the text start. The insert path
+             writes the pointer for that address, so the two must not be confused. */
+          out.push({
+            text: t, at: at, value: v, kind: candidate.kind, size: rules.size,
+            target: candidate.target === undefined ? t : candidate.target,
+            headerBytes: candidate.headerBytes
+          });
         });
       });
     });
