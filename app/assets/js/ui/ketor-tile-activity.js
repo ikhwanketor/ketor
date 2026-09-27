@@ -33,6 +33,21 @@
   var uS = R.useState;
   var uE = R.useEffect;
   var uR = R.useRef;
+  /* One group of the inspector, the shape every other activity panel is built from
+     (ketor-translate-sidebar.js, ketor-hex-sidebar.js, ketor-table-sidebar.js,
+     ketor-search-sidebar.js): a .kt-sidebar-section with a header and a padded body, so the
+     right hand panel of this activity reads like the sidebar of the others. */
+  function Section(props) {
+    return e('div', { className: 'kt-sidebar-section' },
+      e('div', { className: 'kt-sidebar-section-header' }, props.title),
+      e('div', {
+        className: 'kt-sidebar-section-body',
+        style: Object.assign({ padding: '6px 12px 12px 12px' }, props.bodyStyle || {})
+      },
+        props.children
+      )
+    );
+  }
   var MONO = 'var(--kt-font-mono)';
   /* A palette is as wide as the format it is read for: sixteen BGR555 words (32 bytes) for
      the 1bpp/2bpp/4bpp layouts and 256 (512 bytes) for an 8bpp one. Which formats are 8bpp is
@@ -3122,208 +3137,212 @@
 
     var rowStyle = { display: 'flex', gap: 4, alignItems: 'center' };
     var inputStyle = { flex: '1 1 auto', fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' };
-    var head = { fontWeight: 600, marginTop: 4 };
-
     return e('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
-      e('div', { style: head }, 'Map'),
-      e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'One entry per cell: tile number in bits 0-9, flips in 10-11, palette bank in 12-15. Click places the current tile, Ctrl+click picks it, Alt+click swaps it, Shift+click fills, middle drag scrolls.'),
-      e('button', {
-        type: 'button', className: 'kt-btn',
-        disabled: !hex || !hex.romBytes || st.mapScanning,
-        onClick: detectMap,
-        title: 'Scan 2 KiB aligned blocks for one whose cells reuse few tile numbers'
-      }, st.mapScanning ? 'Scanning...' : 'Detect map'),
-      st.mapCandidates.length ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-        e('div', { style: { opacity: 0.75 } }, 'Screen base candidates'),
-        st.mapCandidates.slice(0, 6).map(function (c) {
-          return e('button', {
-            key: 'map' + c.offset,
-            type: 'button',
-            className: 'kt-btn small' + (st.mapScreenBase === c.offset ? '' : ' secondary'),
-            style: { fontFamily: MONO, justifyContent: 'flex-start' },
-            onClick: function () { _set({ mapScreenBase: c.offset }); }
-          }, '0x' + hex6(c.offset) + '  ' + c.score.toFixed(2) + '  ' + c.distinct + ' tiles');
-        })
-      ) : null,
-      e('div', { style: rowStyle },
-        e('input', {
-          style: inputStyle, value: mapScreenSt[0], spellCheck: false,
-          placeholder: 'screen base: pointer or offset',
-          title: 'Accepts a pointer (0x08159000), a file offset (0x159000) or a number',
-          onChange: function (ev) { mapScreenSt[1](ev.target.value); },
-          onKeyDown: function (ev) { if (ev.key === 'Enter') commitMapScreen(); }
-        }),
-        e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapScreen }, 'Go'),
-        e('button', { type: 'button', className: 'kt-btn small secondary', title: 'Use the offset the hex cursor is on', onClick: screenFromCursor }, 'cursor')
-      ),
-      e('div', { style: rowStyle },
-        e('input', {
-          style: inputStyle, value: mapCharSt[0], spellCheck: false,
-          placeholder: 'character base: pointer or offset',
-          title: 'Accepts a pointer (0x080E0000), a file offset (0xE0000) or a number',
-          onChange: function (ev) { mapCharSt[1](ev.target.value); },
-          onKeyDown: function (ev) { if (ev.key === 'Enter') commitMapChar(); }
-        }),
-        e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapChar }, 'Go'),
-        e('button', { type: 'button', className: 'kt-btn small secondary', title: 'Use the offset the hex cursor is on', onClick: charFromCursor }, 'cursor')
-      ),
-      e('div', { style: { display: 'flex', gap: 4 } },
-        e('input', {
-          style: inputStyle, value: nameSt[0], spellCheck: false, placeholder: 'name this screen',
-          onChange: function (ev) { nameSt[1](ev.target.value); },
-          onKeyDown: function (ev) { if (ev.key === 'Enter') commitScreenName(); }
-        }),
-        e('button', { type: 'button', className: 'kt-btn small', onClick: commitScreenName, disabled: st.mapScreenBase === null }, 'Remember')
-      ),
-      (st.savedScreens && st.savedScreens.length) ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-        e('div', { style: { opacity: 0.75 } }, 'Screens remembered for this ROM'),
-        st.savedScreens.slice(0, 8).map(function (s) {
-          return e('div', { key: 'saved' + s.mapOffset + '-' + s.charBase, style: { display: 'flex', gap: 4, alignItems: 'center' } },
-            e('button', {
-              type: 'button', className: 'kt-btn small', style: { flex: '1 1 auto', justifyContent: 'flex-start' },
-              title: 'Load this screen: map 0x' + hex6(s.mapOffset) + ', character block 0x' + hex6(s.charBase),
-              onClick: function () { loadSavedScreen(s); }
-            }, s.name + '  ' + hex6(s.mapOffset)),
-            e('button', {
-              type: 'button', className: 'kt-btn small secondary', title: 'Forget this screen',
-              onClick: function () { deleteSavedScreen(s); }
-            }, 'x')
-          );
-        })
-      ) : null,
-      e('button', {
-        type: 'button', className: 'kt-btn small secondary',
-        title: 'A GBA character base is a 16 KiB block: take the block the current tile region lives in',
-        disabled: st.region === null,
-        onClick: function () {
-          var base = Number(st.region) & ~0x3FFF;
-          _set({ mapCharBase: base, status: 'Character base set to 0x' + hex6(base) + ', the 16 KiB block of the tile region.' });
-        }
-      }, 'Character block of the tile region'),
-      e('label', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-        'Map size',
-        e('select', {
-          className: 'kt-select', value: st.mapSize,
-          onChange: function (ev) { _set({ mapSize: ev.target.value }); },
-          style: { fontSize: 11 }
-        }, Object.keys(mapSizes()).map(function (id) { return e('option', { key: id, value: id }, id); }))
-      ),
-      e('div', { style: rowStyle },
-        e('input', {
-          style: inputStyle, value: mapTileSt[0], spellCheck: false, placeholder: 'tile to place (hex, empty = selected)',
-          onChange: function (ev) { mapTileSt[1](ev.target.value); },
-          onKeyDown: function (ev) { if (ev.key === 'Enter') commitMapTile(); }
-        }),
-        e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapTile }, 'Set')
+      e(Section, { title: 'Map' },
+        e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'One entry per cell: tile number in bits 0-9, flips in 10-11, palette bank in 12-15. Click places the current tile, Ctrl+click picks it, Alt+click swaps it, Shift+click fills, middle drag scrolls.'),
+        e('button', {
+          type: 'button', className: 'kt-btn',
+          disabled: !hex || !hex.romBytes || st.mapScanning,
+          onClick: detectMap,
+          title: 'Scan 2 KiB aligned blocks for one whose cells reuse few tile numbers'
+        }, st.mapScanning ? 'Scanning...' : 'Detect map'),
+        st.mapCandidates.length ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+          e('div', { style: { opacity: 0.75 } }, 'Screen base candidates'),
+          st.mapCandidates.slice(0, 6).map(function (c) {
+            return e('button', {
+              key: 'map' + c.offset,
+              type: 'button',
+              className: 'kt-btn small' + (st.mapScreenBase === c.offset ? '' : ' secondary'),
+              style: { fontFamily: MONO, justifyContent: 'flex-start' },
+              onClick: function () { _set({ mapScreenBase: c.offset }); }
+            }, '0x' + hex6(c.offset) + '  ' + c.score.toFixed(2) + '  ' + c.distinct + ' tiles');
+          })
+        ) : null,
+        e('div', { style: rowStyle },
+          e('input', {
+            style: inputStyle, value: mapScreenSt[0], spellCheck: false,
+            placeholder: 'screen base: pointer or offset',
+            title: 'Accepts a pointer (0x08159000), a file offset (0x159000) or a number',
+            onChange: function (ev) { mapScreenSt[1](ev.target.value); },
+            onKeyDown: function (ev) { if (ev.key === 'Enter') commitMapScreen(); }
+          }),
+          e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapScreen }, 'Go'),
+          e('button', { type: 'button', className: 'kt-btn small secondary', title: 'Use the offset the hex cursor is on', onClick: screenFromCursor }, 'cursor')
+        ),
+        e('div', { style: rowStyle },
+          e('input', {
+            style: inputStyle, value: mapCharSt[0], spellCheck: false,
+            placeholder: 'character base: pointer or offset',
+            title: 'Accepts a pointer (0x080E0000), a file offset (0xE0000) or a number',
+            onChange: function (ev) { mapCharSt[1](ev.target.value); },
+            onKeyDown: function (ev) { if (ev.key === 'Enter') commitMapChar(); }
+          }),
+          e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapChar }, 'Go'),
+          e('button', { type: 'button', className: 'kt-btn small secondary', title: 'Use the offset the hex cursor is on', onClick: charFromCursor }, 'cursor')
+        ),
+        e('div', { style: { display: 'flex', gap: 4 } },
+          e('input', {
+            style: inputStyle, value: nameSt[0], spellCheck: false, placeholder: 'name this screen',
+            onChange: function (ev) { nameSt[1](ev.target.value); },
+            onKeyDown: function (ev) { if (ev.key === 'Enter') commitScreenName(); }
+          }),
+          e('button', { type: 'button', className: 'kt-btn small', onClick: commitScreenName, disabled: st.mapScreenBase === null }, 'Remember')
+        ),
+        (st.savedScreens && st.savedScreens.length) ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+          e('div', { style: { opacity: 0.75 } }, 'Screens remembered for this ROM'),
+          st.savedScreens.slice(0, 8).map(function (s) {
+            return e('div', { key: 'saved' + s.mapOffset + '-' + s.charBase, style: { display: 'flex', gap: 4, alignItems: 'center' } },
+              e('button', {
+                type: 'button', className: 'kt-btn small', style: { flex: '1 1 auto', justifyContent: 'flex-start' },
+                title: 'Load this screen: map 0x' + hex6(s.mapOffset) + ', character block 0x' + hex6(s.charBase),
+                onClick: function () { loadSavedScreen(s); }
+              }, s.name + '  ' + hex6(s.mapOffset)),
+              e('button', {
+                type: 'button', className: 'kt-btn small secondary', title: 'Forget this screen',
+                onClick: function () { deleteSavedScreen(s); }
+              }, 'x')
+            );
+          })
+        ) : null,
+        e('button', {
+          type: 'button', className: 'kt-btn small secondary',
+          title: 'A GBA character base is a 16 KiB block: take the block the current tile region lives in',
+          disabled: st.region === null,
+          onClick: function () {
+            var base = Number(st.region) & ~0x3FFF;
+            _set({ mapCharBase: base, status: 'Character base set to 0x' + hex6(base) + ', the 16 KiB block of the tile region.' });
+          }
+        }, 'Character block of the tile region'),
+        e('label', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+          'Map size',
+          e('select', {
+            className: 'kt-select', value: st.mapSize,
+            onChange: function (ev) { _set({ mapSize: ev.target.value }); },
+            style: { fontSize: 11 }
+          }, Object.keys(mapSizes()).map(function (id) { return e('option', { key: id, value: id }, id); }))
+        ),
+        e('div', { style: rowStyle },
+          e('input', {
+            style: inputStyle, value: mapTileSt[0], spellCheck: false, placeholder: 'tile to place (hex, empty = selected)',
+            onChange: function (ev) { mapTileSt[1](ev.target.value); },
+            onKeyDown: function (ev) { if (ev.key === 'Enter') commitMapTile(); }
+          }),
+          e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapTile }, 'Set')
+        )
       ),
 
-      e('div', { style: head }, 'Screens'),
-      e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'Pairs each map candidate with the character blocks the detection named, and keeps the ones that actually draw a full screen.'),
-      e('button', {
-        type: 'button', className: 'kt-btn',
-        disabled: !hex || !hex.romBytes,
-        onClick: findScreens,
-        title: 'A map can only name the tiles of one character block, so a pairing that leaves the screen full of holes is wrong'
-      }, 'Find screens'),
-      st.screens && st.screens.length ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-        st.screens.slice(0, 6).map(function (s) {
-          return e('button', {
-            key: 'scr' + s.mapOffset + '-' + s.charBase,
-            type: 'button',
-            className: 'kt-btn small' + (st.mapScreenBase === s.mapOffset && charBase() === s.charBase ? '' : ' secondary'),
-            style: { fontFamily: MONO, justifyContent: 'flex-start' },
-            title: 'Load this map and this character block into the map view',
-            onClick: function () {
-              _set({
-                mapScreenBase: s.mapOffset, mapCharBase: s.charBase, view: 'map',
-                status: 'Screen: map 0x' + hex6(s.mapOffset) + ' drawn with character block 0x' + hex6(s.charBase)
-                  + ' (' + Math.round(s.coverage * 100) + '% of cells, ' + s.distinct + ' tiles).'
-              });
-            }
-          }, 'map ' + hex6(s.mapOffset) + ' + chr ' + hex6(s.charBase) + '  ' + Math.round(s.coverage * 100) + '%  ' + s.distinct + ' tiles');
-        })
-      ) : null,
-      e('div', { style: head }, 'Palettes for this screen'),
-      e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'A palette cannot be worked out from a ROM alone: hundreds of thousands of offsets near a character block score the same. These are the ones the ROM points at and the ones sitting beside the tiles, so click through them with the screen in front of you. The one that looks right is remembered with the screen.'),
-      e('button', {
-        type: 'button', className: 'kt-btn',
-        disabled: !hex || !hex.romBytes || !K.core.paletteCandidates,
-        onClick: function () {
-          var res = K.core.paletteCandidates(romBytes(), {
-            near: charBase(), span: 0x40000, referenced: true, system: consoleProfile().id, max: 10
-          });
-          _set({
-            palettes: res.top,
-            status: 'Palettes: ' + res.pointed + ' the ROM points at, ' + res.total + ' candidate(s) in total, showing ' + res.top.length + '.'
-          });
-        },
-        title: 'The ROM is asked which palettes it names, and the tiles are asked which palettes sit beside them'
-      }, 'Find palettes'),
-      (st.palettes && st.palettes.length) ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-        st.palettes.map(function (p) {
-          return e('button', {
-            key: 'pal' + p.offset,
-            type: 'button',
-            className: 'kt-btn small' + (st.paletteOffset === p.offset ? '' : ' secondary'),
-            style: { fontFamily: MONO, justifyContent: 'flex-start' },
-            title: 'Load these 16 colours',
-            onClick: function () { loadPalette(p.offset, ''); }
-          }, '0x' + hex6(p.offset) + '  ' + p.score.toFixed(2) + '  ' + p.reason);
-        })
-      ) : null,
-      e('div', { style: head }, 'Write text on this screen'),
-      e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'The table gives the code of each character and the font base gives the tile that holds code 0, so this writes the tile numbers a screen needs. A newline starts the next row.'),
-      e('textarea', {
-        value: textSt[0],
-        onChange: function (ev) { textSt[1](ev.target.value); },
-        placeholder: 'your name, or two lines',
-        spellCheck: false,
-        style: { minHeight: 44, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: 4, resize: 'vertical' }
-      }),
-      e('div', { style: rowStyle },
-        e('input', {
-          style: inputStyle, value: startSt[0], spellCheck: false, placeholder: 'start cell (empty = map cursor)',
-          onChange: function (ev) { startSt[1](ev.target.value); }
-        }),
-        e('button', { type: 'button', className: 'kt-btn small', onClick: writeText }, 'Write')
-      ),
-      e('div', { style: rowStyle },
-        e('span', { style: { opacity: 0.7 } }, 'font base'),
-        e('input', {
-          style: { width: 58, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' },
-          type: 'number', value: st.fontBase,
-          onChange: function (ev) { _set({ fontBase: Math.max(0, Number(ev.target.value) || 0) }); }
-        }),
-        e('span', { style: { opacity: 0.7 } }, 'first code'),
-        e('input', {
-          style: { width: 52, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' },
-          type: 'text', value: '0x' + (Number(st.fontFirstCode) || 0).toString(16).toUpperCase(),
-          onChange: function (ev) { _set({ fontFirstCode: parseInt(String(ev.target.value).replace(/^0x/i, ''), 16) || 0 }); }
-        })
-      ),
-      e('div', { style: { display: 'flex', gap: 4 } },
+      e(Section, { title: 'Screens' },
+        e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'Pairs each map candidate with the character blocks the detection named, and keeps the ones that actually draw a full screen.'),
         e('button', {
-          type: 'button', className: 'kt-btn small secondary',
-          disabled: st.region === null || !hex || !hex.romBytes,
-          title: 'Copy this region into free space and rewrite every pointer that named the old address',
-          onClick: function () { repointRegion(64); }
-        }, 'Move region'),
-        e('button', {
-          type: 'button', className: 'kt-btn small secondary',
+          type: 'button', className: 'kt-btn',
           disabled: !hex || !hex.romBytes,
-          title: 'Take the offset the Hex Editor cursor sits on as the region, and open it as a compressed graphic when a stream starts there',
+          onClick: findScreens,
+          title: 'A map can only name the tiles of one character block, so a pairing that leaves the screen full of holes is wrong'
+        }, 'Find screens'),
+        st.screens && st.screens.length ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+          st.screens.slice(0, 6).map(function (s) {
+            return e('button', {
+              key: 'scr' + s.mapOffset + '-' + s.charBase,
+              type: 'button',
+              className: 'kt-btn small' + (st.mapScreenBase === s.mapOffset && charBase() === s.charBase ? '' : ' secondary'),
+              style: { fontFamily: MONO, justifyContent: 'flex-start' },
+              title: 'Load this map and this character block into the map view',
+              onClick: function () {
+                _set({
+                  mapScreenBase: s.mapOffset, mapCharBase: s.charBase, view: 'map',
+                  status: 'Screen: map 0x' + hex6(s.mapOffset) + ' drawn with character block 0x' + hex6(s.charBase)
+                    + ' (' + Math.round(s.coverage * 100) + '% of cells, ' + s.distinct + ' tiles).'
+                });
+              }
+            }, 'map ' + hex6(s.mapOffset) + ' + chr ' + hex6(s.charBase) + '  ' + Math.round(s.coverage * 100) + '%  ' + s.distinct + ' tiles');
+          })
+        ) : null
+      ),
+
+      e(Section, { title: 'Palettes for this screen' },
+        e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'A palette cannot be worked out from a ROM alone: hundreds of thousands of offsets near a character block score the same. These are the ones the ROM points at and the ones sitting beside the tiles, so click through them with the screen in front of you. The one that looks right is remembered with the screen.'),
+        e('button', {
+          type: 'button', className: 'kt-btn',
+          disabled: !hex || !hex.romBytes || !K.core.paletteCandidates,
           onClick: function () {
-            var at = Number(K.hex.getState().cursorOffset) || 0;
-            var src = K.hex.getSourceBytes();
-            var head2 = (K.core.compressionHeaderAt && src) ? K.core.compressionHeaderAt(src, at, {}) : null;
-            if (head2) {
-              var dec = K.core.decompressAt(src, at, {});
-              openCandidate({ kind: 'compressed', offset: at, type: head2.type, size: head2.size, label: head2.label, dataOffset: 0, compressedSize: dec ? (dec.end - at) : 0 });
-              return;
+            var res = K.core.paletteCandidates(romBytes(), {
+              near: charBase(), span: 0x40000, referenced: true, system: consoleProfile().id, max: 10
+            });
+            _set({
+              palettes: res.top,
+              status: 'Palettes: ' + res.pointed + ' the ROM points at, ' + res.total + ' candidate(s) in total, showing ' + res.top.length + '.'
+            });
+          },
+          title: 'The ROM is asked which palettes it names, and the tiles are asked which palettes sit beside them'
+        }, 'Find palettes'),
+        (st.palettes && st.palettes.length) ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+          st.palettes.map(function (p) {
+            return e('button', {
+              key: 'pal' + p.offset,
+              type: 'button',
+              className: 'kt-btn small' + (st.paletteOffset === p.offset ? '' : ' secondary'),
+              style: { fontFamily: MONO, justifyContent: 'flex-start' },
+              title: 'Load these 16 colours',
+              onClick: function () { loadPalette(p.offset, ''); }
+            }, '0x' + hex6(p.offset) + '  ' + p.score.toFixed(2) + '  ' + p.reason);
+          })
+        ) : null
+      ),
+
+      e(Section, { title: 'Write text on this screen' },
+        e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'The table gives the code of each character and the font base gives the tile that holds code 0, so this writes the tile numbers a screen needs. A newline starts the next row.'),
+        e('textarea', {
+          value: textSt[0],
+          onChange: function (ev) { textSt[1](ev.target.value); },
+          placeholder: 'your name, or two lines',
+          spellCheck: false,
+          style: { minHeight: 44, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: 4, resize: 'vertical' }
+        }),
+        e('div', { style: rowStyle },
+          e('input', {
+            style: inputStyle, value: startSt[0], spellCheck: false, placeholder: 'start cell (empty = map cursor)',
+            onChange: function (ev) { startSt[1](ev.target.value); }
+          }),
+          e('button', { type: 'button', className: 'kt-btn small', onClick: writeText }, 'Write')
+        ),
+        e('div', { style: rowStyle },
+          e('span', { style: { opacity: 0.7 } }, 'font base'),
+          e('input', {
+            style: { width: 58, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' },
+            type: 'number', value: st.fontBase,
+            onChange: function (ev) { _set({ fontBase: Math.max(0, Number(ev.target.value) || 0) }); }
+          }),
+          e('span', { style: { opacity: 0.7 } }, 'first code'),
+          e('input', {
+            style: { width: 52, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' },
+            type: 'text', value: '0x' + (Number(st.fontFirstCode) || 0).toString(16).toUpperCase(),
+            onChange: function (ev) { _set({ fontFirstCode: parseInt(String(ev.target.value).replace(/^0x/i, ''), 16) || 0 }); }
+          })
+        ),
+        e('div', { style: { display: 'flex', gap: 4 } },
+          e('button', {
+            type: 'button', className: 'kt-btn small secondary',
+            disabled: st.region === null || !hex || !hex.romBytes,
+            title: 'Copy this region into free space and rewrite every pointer that named the old address',
+            onClick: function () { repointRegion(64); }
+          }, 'Move region'),
+          e('button', {
+            type: 'button', className: 'kt-btn small secondary',
+            disabled: !hex || !hex.romBytes,
+            title: 'Take the offset the Hex Editor cursor sits on as the region, and open it as a compressed graphic when a stream starts there',
+            onClick: function () {
+              var at = Number(K.hex.getState().cursorOffset) || 0;
+              var src = K.hex.getSourceBytes();
+              var head2 = (K.core.compressionHeaderAt && src) ? K.core.compressionHeaderAt(src, at, {}) : null;
+              if (head2) {
+                var dec = K.core.decompressAt(src, at, {});
+                openCandidate({ kind: 'compressed', offset: at, type: head2.type, size: head2.size, label: head2.label, dataOffset: 0, compressedSize: dec ? (dec.end - at) : 0 });
+                return;
+              }
+              _set({ region: at, graphicSource: null, status: 'Region set to the hex cursor: 0x' + hex6(at) + '.' });
             }
-            _set({ region: at, graphicSource: null, status: 'Region set to the hex cursor: 0x' + hex6(at) + '.' });
-          }
-        }, 'Region = cursor')
+          }, 'Region = cursor')
+        )
       )
     );
   }
@@ -3371,88 +3390,85 @@
 
     var rowStyle = { display: 'flex', gap: 4, alignItems: 'center' };
     var inputStyle = { flex: '1 1 auto', fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' };
-    var head = { fontWeight: 600, marginTop: 2 };
-
     return e('div', {
       /* The right panel host (.kt-right-panel-body) brings the column, its border and its
-         background: the inspector fills it and scrolls its own content. */
-      style: {
-        flex: '1 1 auto', minWidth: 0, overflowY: 'auto', padding: '8px 10px',
-        display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12
-      }
+         background: the inspector fills it with one Section per group, and each section
+         brings the padding and the scrolling a sidebar section has. */
+      style: { flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }
     },
-      st.graphicSource ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3, padding: '4px 6px', border: '1px solid var(--kt-widget-border-default)', borderRadius: 3 } },
-        e('div', { style: head }, 'Compressed graphic'),
-        e('div', { style: { fontFamily: MONO } }, st.graphicSource.label + ' at 0x' + hex6(st.graphicSource.offset)),
-        e('div', { style: { opacity: 0.7 } }, st.graphicSource.size + ' bytes decompressed'
-          + (st.graphicSource.dataOffset ? ', tiles start ' + st.graphicSource.dataOffset + ' byte(s) in' : '') + '.'),
-        e('div', { style: { opacity: 0.7 } }, st.graphicSource.compressedSize
-          ? (st.graphicSource.compressedSize + ' of ' + st.graphicSource.budget + ' byte(s) used' + (st.graphicSource.dirty ? ', waiting to write back' : ', written'))
-          : 'not written back yet'),
+      st.graphicSource ? e(Section, { title: 'Compressed graphic' },
+          e('div', { style: { fontFamily: MONO } }, st.graphicSource.label + ' at 0x' + hex6(st.graphicSource.offset)),
+          e('div', { style: { opacity: 0.7 } }, st.graphicSource.size + ' bytes decompressed'
+            + (st.graphicSource.dataOffset ? ', tiles start ' + st.graphicSource.dataOffset + ' byte(s) in' : '') + '.'),
+          e('div', { style: { opacity: 0.7 } }, st.graphicSource.compressedSize
+            ? (st.graphicSource.compressedSize + ' of ' + st.graphicSource.budget + ' byte(s) used' + (st.graphicSource.dirty ? ', waiting to write back' : ', written'))
+            : 'not written back yet'),
+          e('div', { style: { display: 'flex', gap: 4 } },
+            e('button', { type: 'button', className: 'kt-btn small', onClick: function () { writeBackCompressed(); } }, 'Write back'),
+            e('button', { type: 'button', className: 'kt-btn small secondary', onClick: clearSource }, 'Read ROM')
+          )
+        ) : null,
+
+      e(Section, { title: 'Palette' },
+        e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, paletteModelText()),
+        e('div', { style: rowStyle },
+          e('input', {
+            style: inputStyle, value: palSt[0], spellCheck: false, placeholder: 'palette offset',
+            onChange: function (ev) { palSt[1](ev.target.value); },
+            onKeyDown: function (ev) { if (ev.key === 'Enter') commitPalette(); }
+          }),
+          e('button', { type: 'button', className: 'kt-btn small', onClick: commitPalette, disabled: !hex || !hex.romBytes }, 'Load')
+        ),
         e('div', { style: { display: 'flex', gap: 4 } },
-          e('button', { type: 'button', className: 'kt-btn small', onClick: function () { writeBackCompressed(); } }, 'Write back'),
-          e('button', { type: 'button', className: 'kt-btn small secondary', onClick: clearSource }, 'Read ROM')
-        )
-      ) : null,
+          e('button', { type: 'button', className: 'kt-btn small secondary', style: { flex: '1 1 auto' }, onClick: findPalette, title: paletteFindTitle(), disabled: !hex || !hex.romBytes || !paletteModel().inRom }, 'Find'),
+          e('button', { type: 'button', className: 'kt-btn small secondary', disabled: !st.palette, onClick: exportPalette }, 'Export .pal'),
+          e('button', { type: 'button', className: 'kt-btn small secondary', onClick: importPaletteDialog }, 'Import')
+        ),
+        st.paletteCandidates && st.paletteCandidates.length ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+          e('div', { style: { opacity: 0.75 } }, 'Palette candidates'),
+          st.paletteCandidates.map(function (c) {
+            return e('button', {
+              key: 'pal' + c.offset,
+              type: 'button',
+              className: 'kt-btn small' + (st.paletteOffset === c.offset ? '' : ' secondary'),
+              style: { fontFamily: MONO, justifyContent: 'flex-start' },
+              onClick: function () { loadPalette(c.offset); }
+            }, '0x' + hex6(c.offset) + '  ' + c.score.toFixed(2));
+          })
+        ) : null,
+        st.palette ? e('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
+          e('span', { style: { opacity: 0.75 } }, 'Colour ' + st.colour),
+          e('input', {
+          type: 'color', value: colourHex(paletteColour(st.colour)),
+          title: 'Edit palette colour ' + st.colour + ' (written as a patch)',
+          onChange: function (ev) {
+            var m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(ev.target.value);
+            if (!m) return;
+            writePaletteColour(st.colour, { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) });
+          },
+            style: { width: 46, height: 22, padding: 0, background: 'transparent', border: '1px solid var(--kt-widget-border-default)' }
+          })
+        ) : null
+      ),
 
-      e('div', { style: head }, 'Palette'),
-      e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, paletteModelText()),
-      e('div', { style: rowStyle },
-        e('input', {
-          style: inputStyle, value: palSt[0], spellCheck: false, placeholder: 'palette offset',
-          onChange: function (ev) { palSt[1](ev.target.value); },
-          onKeyDown: function (ev) { if (ev.key === 'Enter') commitPalette(); }
+      e(Section, { title: 'Paste hex from an emulator' },
+        e('textarea', {
+          value: pasteSt[0],
+          onChange: function (ev) { pasteSt[1](ev.target.value); },
+          placeholder: '20 21 22 ... tile bytes, or 32 bytes of BGR555 for a palette (512 for 8bpp)',
+          spellCheck: false,
+          style: { minHeight: 54, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: 4, resize: 'vertical' }
         }),
-        e('button', { type: 'button', className: 'kt-btn small', onClick: commitPalette, disabled: !hex || !hex.romBytes }, 'Load')
-      ),
-      e('div', { style: { display: 'flex', gap: 4 } },
-        e('button', { type: 'button', className: 'kt-btn small secondary', style: { flex: '1 1 auto' }, onClick: findPalette, title: paletteFindTitle(), disabled: !hex || !hex.romBytes || !paletteModel().inRom }, 'Find'),
-        e('button', { type: 'button', className: 'kt-btn small secondary', disabled: !st.palette, onClick: exportPalette }, 'Export .pal'),
-        e('button', { type: 'button', className: 'kt-btn small secondary', onClick: importPaletteDialog }, 'Import')
-      ),
-      st.paletteCandidates && st.paletteCandidates.length ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-        e('div', { style: { opacity: 0.75 } }, 'Palette candidates'),
-        st.paletteCandidates.map(function (c) {
-          return e('button', {
-            key: 'pal' + c.offset,
-            type: 'button',
-            className: 'kt-btn small' + (st.paletteOffset === c.offset ? '' : ' secondary'),
-            style: { fontFamily: MONO, justifyContent: 'flex-start' },
-            onClick: function () { loadPalette(c.offset); }
-          }, '0x' + hex6(c.offset) + '  ' + c.score.toFixed(2));
-        })
-      ) : null,
-      st.palette ? e('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } },
-        e('span', { style: { opacity: 0.75 } }, 'Colour ' + st.colour),
-        e('input', {
-        type: 'color', value: colourHex(paletteColour(st.colour)),
-        title: 'Edit palette colour ' + st.colour + ' (written as a patch)',
-        onChange: function (ev) {
-          var m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(ev.target.value);
-          if (!m) return;
-          writePaletteColour(st.colour, { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16) });
-        },
-          style: { width: 46, height: 22, padding: 0, background: 'transparent', border: '1px solid var(--kt-widget-border-default)' }
-        })
-      ) : null,
-
-      e('div', { style: head }, 'Paste hex from an emulator'),
-      e('textarea', {
-        value: pasteSt[0],
-        onChange: function (ev) { pasteSt[1](ev.target.value); },
-        placeholder: '20 21 22 ... tile bytes, or 32 bytes of BGR555 for a palette (512 for 8bpp)',
-        spellCheck: false,
-        style: { minHeight: 54, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: 4, resize: 'vertical' }
-      }),
-      e('select', { className: 'kt-select', value: targetSt[0], onChange: function (ev) { targetSt[1](ev.target.value); }, style: { fontSize: 11 } },
-        e('option', { value: 'tile' }, 'Write at tile 0 of the region'),
-        e('option', { value: 'region' }, 'Write at the region start'),
-        e('option', { value: 'palette' }, 'Load as palette'),
-        e('option', { value: 'palette-rom' }, 'Write at the palette offset')),
-      e('div', { style: { display: 'flex', gap: 4 } },
-        e('button', { type: 'button', className: 'kt-btn small', onClick: applyPaste }, 'Apply'),
-        e('button', { type: 'button', className: 'kt-btn small secondary', onClick: copyHexText }, 'Copy tile 0'),
-        e('button', { type: 'button', className: 'kt-btn small secondary', onClick: function () { pasteSt[1](''); } }, 'Clear')
+        e('select', { className: 'kt-select', value: targetSt[0], onChange: function (ev) { targetSt[1](ev.target.value); }, style: { fontSize: 11 } },
+          e('option', { value: 'tile' }, 'Write at tile 0 of the region'),
+          e('option', { value: 'region' }, 'Write at the region start'),
+          e('option', { value: 'palette' }, 'Load as palette'),
+          e('option', { value: 'palette-rom' }, 'Write at the palette offset')),
+        e('div', { style: { display: 'flex', gap: 4 } },
+          e('button', { type: 'button', className: 'kt-btn small', onClick: applyPaste }, 'Apply'),
+          e('button', { type: 'button', className: 'kt-btn small secondary', onClick: copyHexText }, 'Copy tile 0'),
+          e('button', { type: 'button', className: 'kt-btn small secondary', onClick: function () { pasteSt[1](''); } }, 'Clear')
+        )
       ),
       e(MapInspector, null)
     );
