@@ -32,4 +32,4 @@ titles.
 The heavier, rom specific harnesses (a full 151417 text project, a 400 text insert, the
 detector across five real roms) stay outside the repository for that reason. They are
 run by hand when a change deserves them, and their results are recorded in the commit
-messages and in PRD_KETOR_BATCH16-20.md.
+messages. The batch notes (PRD_KETOR_BATCH16-20.md) are kept outside this repository.
