@@ -789,15 +789,50 @@
      the user is the records the game points at, and the status line says how many
      runs were dropped and why.
      ------------------------------------------------------------ */
+  /* Does this read like a message? The same test the tables are judged with: long
+     enough, and enough letters to be words rather than bytes. */
+  function readsLikeText(en) {
+    var s = String((en && (en.originalText !== undefined ? en.originalText : en.text)) || '');
+    var letters = (s.match(/[A-Za-z]/g) || []).length;
+    return s.length >= 6 && letters >= Math.max(3, Math.floor(s.length * 0.4));
+  }
+
+  /* A message comes before something that does not read as one, then by offset. The list
+     is shown a page at a time and sorted by offset, and the low offsets are where the
+     font tables and graphic data are - so the first page used to open on rubbish while
+     thousands of messages waited further down (the user's report: "only seventeen junk
+     texts"). Nothing is dropped here; the readable texts are simply first. */
+  function byReadableThenOffset(a, b) {
+    var aBuild = a && a.buildable === false ? 1 : 0;
+    var bBuild = b && b.buildable === false ? 1 : 0;
+    if (aBuild !== bBuild) return aBuild - bBuild;
+    var aRead = readsLikeText(a) ? 0 : 1;
+    var bRead = readsLikeText(b) ? 0 : 1;
+    if (aRead !== bRead) return aRead - bRead;
+    var aS = Number.isFinite(a && a.startByte) ? a.startByte : Number.MAX_SAFE_INTEGER;
+    var bS = Number.isFinite(b && b.startByte) ? b.startByte : Number.MAX_SAFE_INTEGER;
+    return aS - bS;
+  }
+
+  /* Why the list came out the way it did, for the status line. A user who sees a list
+     that is too short needs to know which side cut it: the scan, the detector, or the
+     reading test below. */
+  var _recordsNote = '';
+
   function recordsOnly(entries) {
+    _recordsNote = '';
     var detect = K.core && K.core.detectPointerTables;
-    if (typeof detect !== 'function' || !entries.length || !_state.romBytes) return entries;
+    if (typeof detect !== 'function') { _recordsNote = 'no pointer table detector is loaded'; return entries; }
+    if (!entries.length || !_state.romBytes) { _recordsNote = 'nothing to test against a table'; return entries; }
     var offsets = [];
     entries.forEach(function (en) {
       var s = Number(en && en.startByte);
       if (Number.isFinite(s)) offsets.push(s);
     });
-    if (offsets.length < 8) return entries;
+    if (offsets.length < 8) {
+      _recordsNote = 'the scan found ' + offsets.length + ' run(s), too few to test a table with';
+      return entries;
+    }
     var profile = _state.systemProfile || {};
     var found = null;
     try {
@@ -818,8 +853,16 @@
         maxResults: 64,
         textOffsets: offsets
       });
-    } catch (_) { return entries; }
-    if (!Array.isArray(found) || !found.length) return entries;
+    } catch (err) {
+      _recordsNote = 'the table detector failed: ' + String((err && err.message) || err);
+      return entries;
+    }
+    if (!Array.isArray(found) || !found.length) {
+      _recordsNote = 'the detector found no table in this rom';
+      return entries;
+    }
+    var considered = 0;
+    var droppedUnreadable = 0;
 
     var byStart = Object.create(null);
     entries.forEach(function (en) {
@@ -839,6 +882,7 @@
          same number of header bytes, and dropping it lost the intro line. */
       var structural = Number(table.spansBad) === 0 && Number(table.count) >= 6 && Number(table.matchedTexts) >= 2;
       if (table.confirmed !== true && !structural) return;
+      considered++;
       /* A record can hold a header before its first character, and the width of that
          header is not the same for every record: on Kingdom Hearts the intro starts
          with the letter itself while the record after it opens with a two byte code.
@@ -866,20 +910,21 @@
          point into font or graphic data produces records like 'Hh@x' and 'I  "P', and
          those are not messages; what separates the two is that most records of a real
          table read like text. */
-      var readable = tableKeep.filter(function (en) {
-        var s = String((en && en.originalText) || '');
-        var letters = (s.match(/[A-Za-z]/g) || []).length;
-        return s.length >= 6 && letters >= Math.max(3, Math.floor(s.length * 0.4));
-      }).length;
-      if (tableKeep.length === 0 || readable / tableKeep.length < 0.6) return;
+      var readable = tableKeep.filter(readsLikeText).length;
+      if (tableKeep.length === 0 || readable / tableKeep.length < 0.6) { droppedUnreadable++; return; }
       tableKeep.forEach(function (en) {
         var at = Number(en.startByte);
         if (!taken[at]) { taken[at] = true; keep.push(en); }
       });
     });
+    _recordsNote = keep.length + ' record(s) from ' + considered + ' table(s) of ' + found.length +
+      (droppedUnreadable > 0 ? ', ' + droppedUnreadable + ' dropped as unreadable' : '');
     /* Fewer records than a table needs to be a table means the evidence is too thin
        to cut the scanned list down; the user gets what the scan found. */
-    if (keep.length < 8) return entries;
+    if (keep.length < 8) {
+      _recordsNote = 'only ' + _recordsNote + ', too few to cut the list with';
+      return entries;
+    }
     keep.sort(function (a, b) { return Number(a.startByte) - Number(b.startByte); });
     return keep;
   }
@@ -887,10 +932,13 @@
   /* The list that is shown, and the status line that says what it is. */
   function extractionResult(entries) {
     var kept = recordsOnly(entries);
+    /* recordsOnly hands its records back in offset order; the list the user reads is
+       ordered readable first. */
+    kept.sort(byReadableThenOffset);
     var status = (kept === entries)
-      ? 'Extracted ' + entries.length + ' text(s).'
-      : 'Extracted ' + kept.length + ' text(s) the game points at; the scan had found ' + entries.length +
-        ' printable run(s) in graphics and code as well.';
+      ? 'Extracted ' + entries.length + ' text(s)' + (_recordsNote ? ' (' + _recordsNote + ')' : '') + '.'
+      : 'Extracted ' + kept.length + ' text(s) the game points at' + (_recordsNote ? ' (' + _recordsNote + ')' : '') +
+        '; the scan had found ' + entries.length + ' printable run(s) in graphics and code as well.';
     return { texts: kept, isExtracting: false, progress: 0, status: status };
   }
 
@@ -934,14 +982,7 @@
         }
         if (d.done) {
           var final = buffer.map(_normalizeEntry);
-          final.sort(function (a, b) {
-            var aBuild = a.buildable === false ? 1 : 0;
-            var bBuild = b.buildable === false ? 1 : 0;
-            if (aBuild !== bBuild) return aBuild - bBuild;
-            var aS = Number.isFinite(a.startByte) ? a.startByte : Number.MAX_SAFE_INTEGER;
-            var bS = Number.isFinite(b.startByte) ? b.startByte : Number.MAX_SAFE_INTEGER;
-            return aS - bS;
-          });
+          final.sort(byReadableThenOffset);
           buffer = [];
           _set(extractionResult(final));
           try { worker.terminate(); } catch (_) { }
@@ -950,11 +991,7 @@
       }
       if (d.type === 'result' && Array.isArray(d.texts)) {
         var arr = d.texts.map(_normalizeEntry);
-        arr.sort(function (a, b) {
-          var aS = Number.isFinite(a.startByte) ? a.startByte : Number.MAX_SAFE_INTEGER;
-          var bS = Number.isFinite(b.startByte) ? b.startByte : Number.MAX_SAFE_INTEGER;
-          return aS - bS;
-        });
+        arr.sort(byReadableThenOffset);
         _set(extractionResult(arr));
         try { worker.terminate(); } catch (_) { }
         return;
