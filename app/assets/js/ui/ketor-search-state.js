@@ -778,6 +778,99 @@
     if (changed) _set({ texts: next });
   }
 
+  /* ------------------------------------------------------------
+     The scanned list is not the game's text list.
+     A scan of a whole rom finds text in graphics, in fonts and in code as well: on
+     Aria of Sorrow it finds 244,921 runs where the game has 2,893 messages. What
+     separates a message from a coincidence is the pointer table: the game names the
+     address of every message it shows. The detector finds such a table, and it also
+     reports the small offset between a record and its first character (on Aria of
+     Sorrow every mapped text sits two bytes into its record). So the list handed to
+     the user is the records the game points at, and the status line says how many
+     runs were dropped and why.
+     ------------------------------------------------------------ */
+  function recordsOnly(entries) {
+    var detect = K.core && K.core.detectPointerTables;
+    if (typeof detect !== 'function' || !entries.length || !_state.romBytes) return entries;
+    var offsets = [];
+    entries.forEach(function (en) {
+      var s = Number(en && en.startByte);
+      if (Number.isFinite(s)) offsets.push(s);
+    });
+    if (offsets.length < 8) return entries;
+    var profile = _state.systemProfile || {};
+    var found = null;
+    try {
+      found = detect(_state.romBytes, {
+        system: profile.name || _state.romSystem || 'Unknown',
+        pipelineId: profile.pipelineId,
+        terminator: (Array.isArray(profile.terminator) && profile.terminator.length) ? profile.terminator : [0x00],
+        textOffsets: offsets
+      });
+    } catch (_) { return entries; }
+    if (!Array.isArray(found) || !found.length) return entries;
+
+    var byStart = Object.create(null);
+    entries.forEach(function (en) {
+      var s = Number(en && en.startByte);
+      if (!Number.isFinite(s)) return;
+      if (!byStart[s]) byStart[s] = en;
+    });
+
+    var keep = [];
+    var taken = Object.create(null);
+    found.forEach(function (table) {
+      if (!table || !Array.isArray(table.entries)) return;
+      /* A table the detector could confirm by text consensus is taken as it is. A table
+         that only passes the structural test - every forward span closing like a record,
+         at least one mapped text sitting on it - is taken too: on Kingdom Hearts the
+         intro's own table is like that, because its records do not all open with the
+         same number of header bytes, and dropping it lost the intro line. */
+      var structural = Number(table.spansBad) === 0 && Number(table.count) >= 16 && Number(table.matchedTexts) >= 1;
+      if (table.confirmed !== true && !structural) return;
+      /* A record can hold a header before its first character, and the width of that
+         header is not the same for every record: on Kingdom Hearts the intro starts
+         with the letter itself while the record after it opens with a two byte code.
+         So a few bytes around the address the game names are in play, and of those the
+         longest text wins - a three byte run that happens to sit one byte earlier is a
+         shred of the record's header, not its message. The text also has to end before
+         the next record starts, or what was found is a run that runs over the record
+         and cannot be its text. */
+      var targets = table.entries.map(Number).filter(Number.isFinite).sort(function (a, b) { return a - b; });
+      for (var ti = 0; ti < targets.length; ti++) {
+        var base = targets[ti];
+        var nextTarget = (ti + 1 < targets.length) ? targets[ti + 1] : base + 0x400;
+        var best = null;
+        for (var d = -1; d <= 4; d++) {
+          var hit = byStart[base + d];
+          if (!hit) continue;
+          var length = Number(hit.byteLength) || 0;
+          if (base + d + length > nextTarget) continue;
+          if (!best || length > (Number(best.byteLength) || 0)) best = hit;
+        }
+        if (best) {
+          var at = Number(best.startByte);
+          if (!taken[at]) { taken[at] = true; keep.push(best); }
+        }
+      }
+    });
+    /* Fewer records than a table needs to be a table means the evidence is too thin
+       to cut the scanned list down; the user gets what the scan found. */
+    if (keep.length < 8) return entries;
+    keep.sort(function (a, b) { return Number(a.startByte) - Number(b.startByte); });
+    return keep;
+  }
+
+  /* The list that is shown, and the status line that says what it is. */
+  function extractionResult(entries) {
+    var kept = recordsOnly(entries);
+    var status = (kept === entries)
+      ? 'Extracted ' + entries.length + ' text(s).'
+      : 'Extracted ' + kept.length + ' text(s) the game points at; the scan had found ' + entries.length +
+        ' printable run(s) in graphics and code as well.';
+    return { texts: kept, isExtracting: false, progress: 0, status: status };
+  }
+
   function extractTexts() {
     var lg = K.legacy || {};
     if (typeof lg.createTextExtractorWorker !== 'function') {
@@ -827,12 +920,7 @@
             return aS - bS;
           });
           buffer = [];
-          _set({
-            texts: final,
-            isExtracting: false,
-            progress: 0,
-            status: 'Extracted ' + final.length + ' text(s).'
-          });
+          _set(extractionResult(final));
           try { worker.terminate(); } catch (_) { }
         }
         return;
@@ -844,12 +932,7 @@
           var bS = Number.isFinite(b.startByte) ? b.startByte : Number.MAX_SAFE_INTEGER;
           return aS - bS;
         });
-        _set({
-          texts: arr,
-          isExtracting: false,
-          progress: 0,
-          status: 'Extracted ' + arr.length + ' text(s).'
-        });
+        _set(extractionResult(arr));
         try { worker.terminate(); } catch (_) { }
         return;
       }

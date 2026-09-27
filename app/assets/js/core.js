@@ -3635,7 +3635,24 @@ let _recordTable = null;
                  refused to move it ("Relocation skipped (no safe pointers found)"). A loose
                  byte may still continue a text the table itself started, because mixed
                  encodings exist; it may not start one. */
-              const tableCharBytes = (Object.keys((tableData && tableData.multiByte) || {}).length >= 12) ? 2 : 1;
+              /* Which one it is has to be read the same way rebuildRom reads it: only a
+                 multi-byte entry whose value is a real character counts. Castlevania's table
+                 carries nineteen multi-byte entries and every one of them is a bracket token
+                 ([YOKO], [JULIUS]), so that table is a one byte table and its loose bytes must
+                 keep opening texts; the Kingdom Hearts table is eighty four letters in two
+                 bytes each and has no single byte entries at all. */
+              const tableCharBytes = (() => {
+                const multi = (tableData && tableData.multiByte) || {};
+                let printable = 0;
+                for (const key of Object.keys(multi)) {
+                  const ch = String(multi[key] === undefined || multi[key] === null ? '' : multi[key]);
+                  if (!ch || ch === '\\n' || ch === '\\r' || ch === '/') continue;
+                  if (ch.length >= 2 && ch.startsWith('[') && ch.endsWith(']')) continue;
+                  printable++;
+                  if (printable >= 12) return 2;
+                }
+                return 1;
+              })();
               const looseByteMayStartText = tableCharBytes === 1;
               const useAsciiFallback = !!asciiFallback;
               const isRetroPipeline = systemPipeline === 'pipeline_nes' || systemPipeline === 'pipeline_snes' || systemPipeline === 'pipeline_gb' || systemPipeline === 'pipeline_gbc' || systemPipeline === 'pipeline_pce';
