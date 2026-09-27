@@ -1,334 +1,343 @@
 /* ============================================================
-   Ketor - Monkey-Moore Core Algorithm (faithful port)
+   Ketor - Delta Search Core
    ------------------------------------------------------------
-   Direct port of Monkey-Moore v1.1.0 (rjricken).
+   Locates a sample in a ROM by the steps between its characters
+   instead of the codes themselves, so a text block whose
+   alphabet is still unknown can be found. The delta (relative)
+   search technique is the one popularised by Monkey-Moore
+   (rjricken, GPL-3.0); this file is an independent Ketor
+   implementation of that behaviour and contains no code copied
+   from that project.
+
    Modes: simple_relative, wildcard_relative, value_scan.
-   Preview uses '#' for unknown bytes, 50-char window, match
-   centered. Case change auto-detects wildcard mode.
+   Preview: a 50 character window, '#' wherever the sample cannot
+   name the byte, the match kept as close to the middle as the
+   ends of the ROM allow.
    ============================================================ */
 
 (function (global) {
   'use strict';
+
   var K = global.Ketor = global.Ketor || {};
   K.core = K.core || {};
 
-  var PREVIEW_WIDTH = 50;
+  var WINDOW = 50;              /* characters shown in a preview */
+  var UNKNOWN = '#';            /* a slot the sample gives no character for */
+  var CAPITAL_A = 65;
+  var SMALL_A = 97;
+  var ALPHABET = 26;
+  var BYTE_MASK = 0xFF;
+  var STEP_FLOOR = -255;        /* a step between two 8 bit values */
+  var STEP_CEIL = 255;
+  var DEFAULT_LIMIT = 200;
 
-  function isUpper(cp) { return cp >= 65 && cp <= 90; }
-  function isLower(cp) { return cp >= 97 && cp <= 122; }
+  function isCapital(code) { return code >= CAPITAL_A && code <= CAPITAL_A + ALPHABET - 1; }
+  function isSmall(code) { return code >= SMALL_A && code <= SMALL_A + ALPHABET - 1; }
 
-  function keywordToCodepoints(str) {
-    var out = [];
-    for (var i = 0; i < str.length; i++) out.push(str.charCodeAt(i));
-    return out;
+  /* The sample as numbers: one code unit per character. */
+  function codeUnits(text) {
+    var codes = [];
+    for (var i = 0; i < text.length; i++) codes.push(text.charCodeAt(i));
+    return codes;
   }
 
-  function computeRelativeValues(codepoints) {
-    var d = [];
-    for (var i = 1; i < codepoints.length; i++) {
-      d.push(codepoints[i] - codepoints[i - 1]);
+  /* The steps a run of numbers walks: steps[k] is what has to be added to the k-th
+     number to reach the one after it. A sample of one number walks nowhere. */
+  function stepsOf(numbers) {
+    var steps = [];
+    for (var i = 1; i < numbers.length; i++) steps.push(numbers[i] - numbers[i - 1]);
+    return steps;
+  }
+
+  function slotCount(rom, width) {
+    return Math.floor(rom.length / width);
+  }
+
+  /* How many slots the ROM holds, and a way to read one of them. A character can be one
+     byte or two, and a two byte character can be stored either way round. */
+  function makeReader(rom, width, little, slots) {
+    if (width === 1) {
+      return function (slot) {
+        if (slot < 0 || slot >= slots) return -1;
+        return rom[slot];
+      };
     }
-    return d;
+    return function (slot) {
+      if (slot < 0 || slot >= slots) return -1;
+      var first = rom[slot * 2];
+      var second = rom[slot * 2 + 1];
+      return little ? (first | (second << 8)) : ((first << 8) | second);
+    };
   }
 
-  // Read value from data at given "character" position.
-  // data: Uint8Array. charWidth: 1 or 2. little: bool.
-  function readChar(data, index, charWidth, little) {
-    if (charWidth === 1) return data[index];
-    var a = data[index * 2];
-    var b = data[index * 2 + 1];
-    if (a === undefined || b === undefined) return -1;
-    return little ? (a | (b << 8)) : ((a << 8) | b);
-  }
-
-  function dataCharCount(data, charWidth) {
-    return Math.floor(data.length / charWidth);
-  }
-
-  // Detect search mode from keyword
-  function detectMode(codepoints, wildcardCp) {
-    var hasWildcard = false;
-    var hasUpper = false, hasLower = false;
-    for (var i = 0; i < codepoints.length; i++) {
-      if (wildcardCp && codepoints[i] === wildcardCp) hasWildcard = true;
-      if (isUpper(codepoints[i])) hasUpper = true;
-      if (isLower(codepoints[i])) hasLower = true;
+  /* A sample is only a wildcard search when the box asked for wildcards and the sample
+     either carries the wildcard character or mixes capital and small letters. A case
+     change means the codes of the sample are not the codes in the ROM, so the exact
+     values cannot be asked for; the steps still can. */
+  function wantsWildcardPath(codes, wildcardCode) {
+    var sawWildcard = false;
+    var sawCapital = false;
+    var sawSmall = false;
+    for (var i = 0; i < codes.length; i++) {
+      if (wildcardCode && codes[i] === wildcardCode) sawWildcard = true;
+      if (isCapital(codes[i])) sawCapital = true;
+      else if (isSmall(codes[i])) sawSmall = true;
     }
-    if (hasWildcard || (hasUpper && hasLower)) return 'wildcard_relative';
-    return 'simple_relative';
+    return sawWildcard || (sawCapital && sawSmall);
   }
 
-  // ---- Simple relative search (no wildcards) ----
-  function searchSimple(data, codepoints, charWidth, little, maxHits) {
-    var count = dataCharCount(data, charWidth);
-    var n = codepoints.length;
-    if (n < 2 || count < n) return [];
+  /* The skip table a delta scan moves on: how far the window may slide when its last
+     step does not line up, so that a step that does line up is not slid past. The table
+     is indexed by the step itself, kept in the range two 8 bit values can differ by. */
+  function makeSkipTable(steps) {
+    var edges = steps.length;
+    var table = new Int32Array((STEP_CEIL - STEP_FLOOR) + 1);
+    for (var i = 0; i < table.length; i++) table[i] = edges;
+    for (var k = 0; k < edges - 1; k++) table[steps[k] - STEP_FLOOR] = edges - 1 - k;
+    return table;
+  }
 
-    var diffs = computeRelativeValues(codepoints);
-    var m = diffs.length;
+  function skipDistance(table, read, start, edges) {
+    var ahead = read(start + edges);
+    var behind = read(start + edges - 1);
+    if (ahead < 0 || behind < 0) return edges;
+    var delta = ahead - behind;
+    if (delta < STEP_FLOOR || delta > STEP_CEIL) return edges;
+    var move = table[delta - STEP_FLOOR];
+    return move < 1 ? 1 : move;
+  }
 
-    // Build skip table (delta -255..255 → index 0..510)
-    var skip = new Int32Array(512);
-    for (var i = 0; i < 512; i++) skip[i] = m;
-    for (var i = 0; i < m - 1; i++) {
-      var d = diffs[i];
-      if (d < -255 || d > 255) continue;
-      skip[d + 255] = m - 1 - i;
-    }
-
-    var results = [];
-    var i = 0;
-    var limit = count - n;
-    while (i <= limit) {
-      var j = m - 1;
-      var ok = true;
-      while (j >= 0) {
-        var cur = readChar(data, i + j + 1, charWidth, little);
-        var prev = readChar(data, i + j, charWidth, little);
-        if (cur < 0 || prev < 0) { ok = false; break; }
-        var delta = cur - prev;
-        if (delta !== diffs[j]) { ok = false; break; }
-        j--;
+  /* Plain delta scan: the ROM is walked in windows the length of the sample, comparing
+     the steps inside the window with the steps of the sample. The anchor value is read
+     off the first character of the match, since only the steps are known up front. */
+  function scanPlain(read, slots, codes, limit) {
+    var span = codes.length;
+    if (span < 2 || slots < span) return [];
+    var steps = stepsOf(codes);
+    var edges = steps.length;
+    var skip = makeSkipTable(steps);
+    var hits = [];
+    var start = 0;
+    var lastStart = slots - span;
+    while (start <= lastStart) {
+      var lined = true;
+      for (var j = edges - 1; j >= 0; j--) {
+        var high = read(start + j + 1);
+        var low = read(start + j);
+        if (high < 0 || low < 0 || high - low !== steps[j]) { lined = false; break; }
       }
-      if (ok) {
-        // Match at position i
-        var anchorVal = readChar(data, i, charWidth, little);
-        // values_map: anchor char -> value
+      if (lined) {
         var values = {};
-        values[String.fromCharCode(codepoints[0])] = anchorVal;
-        results.push({ position: i, values: values });
-        i += n;
-        if (results.length >= maxHits) break;
+        values[String.fromCharCode(codes[0])] = read(start);
+        hits.push({ position: start, values: values });
+        if (hits.length >= limit) break;
+        start += span;
       } else {
-        /* Boyer-Moore shift. The skip table is built for the delta aligned with
-           the last pattern delta, so that is the one the shift has to be read
-           from. Reading it from the position that happened to mismatch is what
-           let a clean sample with a single occurrence in the rom be skipped
-           over: the scan jumped past the one window that would have matched. */
-        var cur2 = readChar(data, i + m, charWidth, little);
-        var prev2 = readChar(data, i + m - 1, charWidth, little);
-        var shift = m;
-        if (cur2 >= 0 && prev2 >= 0) {
-          var d2 = cur2 - prev2;
-          if (d2 >= -255 && d2 <= 255) {
-            shift = skip[d2 + 255];
-            if (shift < 1) shift = 1;
-          }
-        }
-        i += shift;
+        start += skipDistance(skip, read, start, edges);
       }
     }
-    return results;
+    return hits;
   }
 
-  // ---- Wildcard relative search ----
-  // Wildcard positions in keyword are ignored (any value accepted).
-  // Case change also goes here: we can't know exact value, so we
-  // match relative deltas only between literal (non-wildcard) runs.
-  function searchWildcard(data, codepoints, wildcardCp, charWidth, little, maxHits) {
-    var count = dataCharCount(data, charWidth);
-    var n = codepoints.length;
-    if (n < 2 || count < n) return [];
-
-    // Build "literal" positions (indexes in keyword) that are not wildcards.
-    var literalIdx = [];
-    for (var i = 0; i < n; i++) {
-      if (wildcardCp && codepoints[i] === wildcardCp) continue;
-      literalIdx.push(i);
+  /* Wildcard scan: the positions the sample does spell out are compared step by step;
+     the wildcard positions are skipped, and the character stored there is simply not
+     known. Two spelled out characters are needed for a step to exist at all. */
+  function scanMasked(read, slots, codes, wildcardCode, limit) {
+    var span = codes.length;
+    if (span < 2 || slots < span) return [];
+    var spelled = [];
+    for (var i = 0; i < span; i++) {
+      if (wildcardCode && codes[i] === wildcardCode) continue;
+      spelled.push(i);
     }
-    if (literalIdx.length < 2) return [];
+    if (spelled.length < 2) return [];
 
-    // Deltas between consecutive literal positions only.
-    var litDeltas = [];
-    for (var k = 1; k < literalIdx.length; k++) {
-      litDeltas.push({
-        fromIdx: literalIdx[k - 1],
-        toIdx: literalIdx[k],
-        expected: codepoints[literalIdx[k]] - codepoints[literalIdx[k - 1]],
-        span: literalIdx[k] - literalIdx[k - 1]
+    var hops = [];
+    for (var k = 1; k < spelled.length; k++) {
+      hops.push({
+        from: spelled[k - 1],
+        to: spelled[k],
+        step: codes[spelled[k]] - codes[spelled[k - 1]]
       });
     }
 
-    // Scan
-    var results = [];
-    var step = 1;
-    var limit = count - n;
-    for (var start = 0; start <= limit; start += step) {
-      var ok = true;
-      for (var d = 0; d < litDeltas.length; d++) {
-        var ld = litDeltas[d];
-        var v1 = readChar(data, start + ld.fromIdx, charWidth, little);
-        var v2 = readChar(data, start + ld.toIdx, charWidth, little);
-        if (v1 < 0 || v2 < 0) { ok = false; break; }
-        if ((v2 - v1) !== ld.expected) { ok = false; break; }
+    var hits = [];
+    var lastStart = slots - span;
+    for (var start = 0; start <= lastStart; start++) {
+      var lined = true;
+      for (var h = 0; h < hops.length; h++) {
+        var here = read(start + hops[h].from);
+        var there = read(start + hops[h].to);
+        if (here < 0 || there < 0 || there - here !== hops[h].step) { lined = false; break; }
       }
-      if (!ok) continue;
-      var anchor = readChar(data, start + literalIdx[0], charWidth, little);
-      if (anchor < 0) continue;
-      // Build values map: for each distinct literal char, derive value.
-      var first = codepoints[literalIdx[0]];
-      var values = {};
-      var seen = {};
-      for (var q = 0; q < literalIdx.length; q++) {
-        var idx = literalIdx[q];
-        var ch = codepoints[idx];
-        if (seen[ch]) continue;
-        seen[ch] = true;
-        var val = readChar(data, start + idx, charWidth, little);
-        if (val >= 0) values[String.fromCharCode(ch)] = val;
-      }
-      // Also emit A= and a= bases for display (case change)
-      var baseA = null, basea = null;
-      for (var key in values) {
-        var cp = key.charCodeAt(0);
-        if (isUpper(cp) && baseA === null) baseA = values[key] - (cp - 65);
-        if (isLower(cp) && basea === null) basea = values[key] - (cp - 97);
-      }
-      var displayValues = {};
-      if (baseA !== null) displayValues['A'] = baseA & 0xFF;
-      if (basea !== null) displayValues['a'] = basea & 0xFF;
-      if (Object.keys(displayValues).length === 0) displayValues = values;
-      results.push({ position: start, values: displayValues });
-      if (results.length >= maxHits) break;
+      if (!lined) continue;
+      if (read(start + spelled[0]) < 0) continue;
+      hits.push({ position: start, values: sampleCharacters(read, start, codes, spelled) });
+      if (hits.length >= limit) break;
     }
-    return results;
+    return hits;
   }
 
-  // ---- Value scan ----
-  // reference_values: array of numeric byte values (user provided).
-  // We derive relative deltas and match raw numeric sequence ignoring
-  // the actual anchor value.
-  function searchValueScan(data, refValues, charWidth, little, maxHits) {
-    var count = dataCharCount(data, charWidth);
-    var n = refValues.length;
-    if (n < 2 || count < n) return [];
-    var diffs = computeRelativeValues(refValues);
-    var m = diffs.length;
-    var results = [];
-    var limit = count - n;
-    for (var i = 0; i <= limit; i++) {
-      var ok = true;
-      for (var j = 0; j < m; j++) {
-        var v1 = readChar(data, i + j, charWidth, little);
-        var v2 = readChar(data, i + j + 1, charWidth, little);
-        if (v1 < 0 || v2 < 0) { ok = false; break; }
-        if ((v2 - v1) !== diffs[j]) { ok = false; break; }
-      }
-      if (ok) {
-        results.push({ position: i, values: {} });
-        if (results.length >= maxHits) break;
-      }
+  /* One value per distinct character the sample spells out, read from the match. */
+  function sampleCharacters(read, start, codes, spelled) {
+    var sampled = {};
+    var taken = {};
+    for (var q = 0; q < spelled.length; q++) {
+      var index = spelled[q];
+      var code = codes[index];
+      if (taken[code]) continue;
+      taken[code] = true;
+      var value = read(start + index);
+      if (value >= 0) sampled[String.fromCharCode(code)] = value;
     }
-    return results;
+    return sampleCharacters.shrinkToCaseBase(sampled);
   }
 
-  // ---- Preview generation ----
-  // data: Uint8Array, matchPos in char index, values_map: {char: value}
-  function generatePreview(data, matchPos, codepoints, values, charWidth, little) {
-    var count = dataCharCount(data, charWidth);
-    var kwLen = codepoints.length;
-    var kwHalf = Math.floor(kwLen / 2);
-    var winHalf = Math.floor(PREVIEW_WIDTH / 2);
-    var back = winHalf - kwHalf;
-    var start = matchPos - back;
-    if (start < 0) start = 0;
-    var end = start + PREVIEW_WIDTH;
-    if (end > count) {
-      end = count;
-      start = Math.max(0, end - PREVIEW_WIDTH);
-    }
+  /* A sample that changes case cannot say which of the two alphabets the ROM uses, so the
+     table is offered as the two bases the sample implies: A and a. The base is the value
+     the sample's letter would have if its alphabet started at zero. A sample that names
+     no letter at all keeps whatever it sampled. */
+  sampleCharacters.shrinkToCaseBase = function (sampled) {
+    var capitalBase = null;
+    var smallBase = null;
+    Object.keys(sampled).forEach(function (ch) {
+      var code = ch.charCodeAt(0);
+      if (capitalBase === null && isCapital(code)) capitalBase = sampled[ch] - (code - CAPITAL_A);
+      if (smallBase === null && isSmall(code)) smallBase = sampled[ch] - (code - SMALL_A);
+    });
+    var bases = {};
+    if (capitalBase !== null) bases['A'] = capitalBase & BYTE_MASK;
+    if (smallBase !== null) bases['a'] = smallBase & BYTE_MASK;
+    return Object.keys(bases).length > 0 ? bases : sampled;
+  };
 
-    // Build decoding map
-    var isAsciiSearch = true;
-    var decoding = {};
-    for (var key in values) {
-      var ch = key;
-      var val = values[key];
-      var cp = ch.charCodeAt(0);
-      if (isAsciiSearch && (cp === 65 || cp === 97)) {
-        for (var lo = 0; lo < 26; lo++) {
-          decoding[val + lo] = String.fromCharCode(cp + lo);
-        }
+  /* Value scan: the sample is already a list of numbers, so the same step comparison is
+     run over it, and the values of the match are not claimed (the caller supplied them). */
+  function scanNumbers(read, slots, wanted, limit) {
+    var span = wanted.length;
+    if (span < 2 || slots < span) return [];
+    var steps = stepsOf(wanted);
+    var hits = [];
+    var lastStart = slots - span;
+    for (var start = 0; start <= lastStart; start++) {
+      var lined = true;
+      for (var k = 0; k < steps.length; k++) {
+        var here = read(start + k);
+        var there = read(start + k + 1);
+        if (here < 0 || there < 0 || there - here !== steps[k]) { lined = false; break; }
+      }
+      if (!lined) continue;
+      hits.push({ position: start, values: {} });
+      if (hits.length >= limit) break;
+    }
+    return hits;
+  }
+
+  /* The characters the sample's values stand for. A letter stands for the whole alphabet
+     it belongs to, which is what turns a code back into readable text. */
+  function makeLegend(values) {
+    var legend = {};
+    Object.keys(values).forEach(function (ch) {
+      var code = ch.charCodeAt(0);
+      var value = values[ch];
+      if (code === CAPITAL_A || code === SMALL_A) {
+        for (var i = 0; i < ALPHABET; i++) legend[value + i] = String.fromCharCode(code + i);
       } else {
-        decoding[val] = ch;
+        legend[value] = ch;
       }
-    }
-
-    var out = '';
-    for (var i = start; i < end; i++) {
-      var v = readChar(data, i, charWidth, little);
-      if (v < 0) { out += '#'; continue; }
-      var dec = decoding[v];
-      if (dec !== undefined) out += dec;
-      else out += '#';
-    }
-    return out;
+    });
+    return legend;
   }
 
-  // ---- Public API ----
-  function runSearch(romBytes, options) {
-    var opts = options || {};
-    var mode = opts.mode || 'relative';
-    var keyword = String(opts.keyword || '');
-    var wildcardChar = String(opts.wildcardChar || '*');
-    var wildcardEnabled = opts.wildcardEnabled === true;
-    var charWidth = opts.byteWidth === 16 ? 2 : 1;
-    var little = opts.endianness !== 'big';
-    var maxHits = Math.max(1, Number(opts.maxResults) || 200);
+  function renderWindow(read, slots, anchor, span, values) {
+    var lead = Math.floor(WINDOW / 2) - Math.floor(span / 2);
+    var from = anchor - lead;
+    if (from < 0) from = 0;
+    var to = from + WINDOW;
+    if (to > slots) {
+      to = slots;
+      from = Math.max(0, to - WINDOW);
+    }
+    var legend = makeLegend(values);
+    var text = '';
+    for (var slot = from; slot < to; slot++) {
+      var value = read(slot);
+      if (value < 0) { text += UNKNOWN; continue; }
+      var ch = legend[value];
+      text += ch === undefined ? UNKNOWN : ch;
+    }
+    return text;
+  }
 
-    var data = romBytes instanceof Uint8Array ? romBytes : new Uint8Array(romBytes || []);
+  /* The values column: the code the game stores for each character of the sample, in the
+     width and byte order the scan ran in. */
+  function labelOf(values, width, little) {
+    var keys = Object.keys(values).sort();
+    return keys.map(function (key) {
+      var hex = (values[key] & BYTE_MASK).toString(16).toUpperCase();
+      if (hex.length < 2) hex = '0' + hex;
+      if (width === 2) hex = little ? hex + '00' : '00' + hex;
+      return key + '=' + hex;
+    }).join(' ');
+  }
 
-    var matches;
-    var codepoints = [];
+  /* The value list of a value scan. A token is read as a hexadecimal number, with or
+     without the 0x marker, the way the sample box has always taken it; a token that is
+     no number at all is dropped. */
+  function readNumbers(keyword) {
+    return keyword.split(/[\s,]+/).filter(Boolean).map(function (token) {
+      var value = parseInt(token.replace(/^0x/i, ''), 16);
+      return isNaN(value) ? parseInt(token, 10) : value;
+    }).filter(function (value) { return Number.isFinite(value); });
+  }
+
+  function nothingFound() {
+    return { results: [], previewWidth: WINDOW };
+  }
+
+  function runMonkeyMoore(romBytes, options) {
+    var settings = options || {};
+    var mode = settings.mode || 'relative';
+    var keyword = String(settings.keyword || '');
+    var wildcardChar = String(settings.wildcardChar || '*');
+    var wildcardsOn = settings.wildcardEnabled === true;
+    var width = settings.byteWidth === 16 ? 2 : 1;
+    var little = settings.endianness !== 'big';
+    var limit = Math.max(1, Number(settings.maxResults) || DEFAULT_LIMIT);
+
+    var rom = romBytes instanceof Uint8Array ? romBytes : new Uint8Array(romBytes || []);
+    var slots = slotCount(rom, width);
+    var read = makeReader(rom, width, little, slots);
+
+    var sample;
+    var hits;
     if (mode === 'value-scan') {
-      // Parse keyword as numeric list (space or comma separated)
-      var nums = keyword.split(/[\s,]+/).filter(Boolean).map(function (s) {
-        var n = parseInt(s.replace(/^0x/i, ''), 16);
-        return isNaN(n) ? parseInt(s, 10) : n;
-      }).filter(function (n) { return Number.isFinite(n); });
-      if (nums.length < 2) return { results: [], previewWidth: PREVIEW_WIDTH };
-      matches = searchValueScan(data, nums, charWidth, little, maxHits);
-      codepoints = nums;
+      var wanted = readNumbers(keyword);
+      if (wanted.length < 2) return nothingFound();
+      sample = wanted;
+      hits = scanNumbers(read, slots, wanted, limit);
     } else {
-      codepoints = keywordToCodepoints(keyword);
-      if (codepoints.length < 2) return { results: [], previewWidth: PREVIEW_WIDTH };
-      var wildcardCp = wildcardEnabled && wildcardChar.length > 0
-        ? wildcardChar.charCodeAt(0) : 0;
-      var detected = detectMode(codepoints, wildcardCp);
-      if (detected === 'wildcard_relative') {
-        matches = searchWildcard(data, codepoints, wildcardCp, charWidth, little, maxHits);
-      } else {
-        matches = searchSimple(data, codepoints, charWidth, little, maxHits);
-      }
+      var codes = codeUnits(keyword);
+      if (codes.length < 2) return nothingFound();
+      var wildcardCode = wildcardsOn && wildcardChar.length > 0 ? wildcardChar.charCodeAt(0) : 0;
+      sample = codes;
+      hits = wantsWildcardPath(codes, wildcardCode)
+        ? scanMasked(read, slots, codes, wildcardCode, limit)
+        : scanPlain(read, slots, codes, limit);
     }
 
-    // Convert to results with offset + valuesLabel + preview
-    var out = [];
-    for (var i = 0; i < matches.length; i++) {
-      var m = matches[i];
-      var offset = m.position * charWidth;
-      var preview = generatePreview(data, m.position, codepoints, m.values, charWidth, little);
-      // Values label
-      var keys = Object.keys(m.values);
-      keys.sort();
-      var valuesLabel = keys.map(function (k) {
-        var h = (m.values[k] & 0xFF).toString(16).toUpperCase();
-        if (h.length < 2) h = '0' + h;
-        /* A two byte character is shown as the code the game stores, padding and
-           all, so the label can be read against the table it becomes. */
-        if (charWidth === 2) h = little ? h + '00' : '00' + h;
-        return k + '=' + h;
-      }).join(' ');
-      out.push({
-        offset: offset,
-        values: m.values,
-        valuesLabel: valuesLabel,
-        preview: preview
+    var results = [];
+    for (var i = 0; i < hits.length; i++) {
+      results.push({
+        offset: hits[i].position * width,
+        values: hits[i].values,
+        valuesLabel: labelOf(hits[i].values, width, little),
+        preview: renderWindow(read, slots, hits[i].position, sample.length, hits[i].values)
       });
     }
-    return { results: out, previewWidth: PREVIEW_WIDTH };
+    return { results: results, previewWidth: WINDOW };
   }
 
-  K.core.runMonkeyMoore = runSearch;
+  K.core.runMonkeyMoore = runMonkeyMoore;
 
 })(window);

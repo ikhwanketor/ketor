@@ -340,9 +340,11 @@ are network calls made by the browser; the ROM is not sent.
 
 Prior work this project learned from, credited by the source itself:
 
-- **Monkey-Moore** (rjricken, GPL-3.0) - `app/assets/js/core/monkey-moore.js` describes
-  itself as a direct port of Monkey-Moore v1.1.0, and `core/relative-search.js` names
-  the same reference.
+- **Monkey-Moore** (rjricken, GPL-3.0) - the delta (relative) search technique used by
+  `app/assets/js/core/monkey-moore.js` and `core/relative-search.js` is the one
+  popularised by Monkey-Moore. Both files are independent implementations written for
+  this project from the described behaviour, not ports: no code was taken from that
+  project. Its GPL-3.0 license is credited here as the origin of the technique.
 - **GBATEK** - the GBA format documentation the codecs cite: the BIOS decompression
   formats in `core/gba-compress.js`, the VRAM layout in `core/gba-vram.js` and the
   text-mode background map in the tile activity.

@@ -260,7 +260,7 @@ suite.test('the test harness loads the shared box before the modules that use Kt
 const CORE_ROOT = path.join(SCRIPT_ROOT, 'core');
 /* The one application page: app/index.html, the name Pages serves from app/. */
 const WORKBENCH = path.join(APP, 'index.html');
-const WORKBENCH_BUILD = '150';
+const WORKBENCH_BUILD = '151';
 const WORKBENCH_CORE_FILES = ['text-codec.js', 'rom-builder.js', 'worker-text-extract.js', 'worker-build.js', 'worker-table.js'];
 /* What the ui reads out of window.Ketor.core, one name per module. */
 const CORE_NAMES = ['escapeRegex', 'createTokenizer', 'smartTextParse', 'getSmartByteLength',

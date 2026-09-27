@@ -11,8 +11,10 @@
    - Value scan (raw numerical sequences)
    - Uppercase/lowercase auto-detection
 
-   Reference: Monkey-Moore v1.1.0 by Darkl0rd
-   https://github.com/rjricken/monkey-moore
+   The delta (relative) search technique is the one popularised by
+   Monkey-Moore (Darkl0rd; https://github.com/rjricken/monkey-moore,
+   GPL-3.0). This file is an independent implementation of that
+   technique written for Ketor; no code was taken from that project.
    ============================================================ */
 
 (function (global) {
