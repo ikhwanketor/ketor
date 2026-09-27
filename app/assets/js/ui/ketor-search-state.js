@@ -811,6 +811,48 @@
     return out;
   }
 
+  /* Read one record's text out of the cartridge with the loaded table, for the records
+     the scan did not find. Returns an entry, or null when the bytes hold nothing that
+     reads like text. */
+  function decodeRecordText(recordStart, limit) {
+    var bytes = _state.romBytes;
+    var map = (_state.tableData && _state.tableData.singleByte) || {};
+    if (!bytes) return null;
+    var start = -1;
+    var text = '';
+    var end = recordStart;
+    for (var p = Number(recordStart); p < Number(limit) && p < bytes.length; p++) {
+      var b = bytes[p] & 0xFF;
+      if (b === 0x00) {
+        if (text) { end = p; break; }
+        continue;
+      }
+      var ch = map[b];
+      if (ch === undefined && b >= 0x20 && b <= 0x7E) ch = String.fromCharCode(b);
+      if (ch === undefined) {
+        if (text) { end = p; break; }
+        continue;
+      }
+      if (start < 0) start = p;
+      text += String(ch);
+    }
+    if (start < 0 || !text) return null;
+    if (end <= start) end = start + text.length;
+    var entry = {
+      id: 'ty-' + Number(recordStart),
+      startByte: start,
+      offset: start,
+      byteLength: end - start,
+      originalText: text,
+      translatedText: '',
+      comment: '',
+      textType: 'dialogue',
+      buildable: true,
+      source: 'table'
+    };
+    return readsLikeText(entry) ? entry : null;
+  }
+
   /* Does this read like a message? The same test the tables are judged with: long
      enough, and enough letters to be words rather than bytes. */
   function readsLikeText(en) {
@@ -925,18 +967,47 @@
          and cannot be its text. */
       var targets = table.entries.map(Number).filter(Number.isFinite).sort(function (a, b) { return a - b; });
       var tableKeep = [];
+      var scanHit = Object.create(null);
       for (var ti = 0; ti < targets.length; ti++) {
         var base = targets[ti];
         var nextTarget = (ti + 1 < targets.length) ? targets[ti + 1] : base + 0x400;
         var best = null;
-        for (var d = -1; d <= 4; d++) {
+        /* How far into a record its first character can sit. Measured on Aria of Sorrow:
+           of its 2,893 messages, 624 open with two code words after the record header
+           (01 00 03 01 07 02 then the text), so their first character is six bytes in -
+           outside the four this used to look at, and those messages were missing from the
+           list while the build was fine. The text also has to end before the next record
+           starts, which is what keeps a wider window from reaching into the record after
+           it. */
+        for (var d = -1; d <= 16; d++) {
           var hit = byStart[base + d];
           if (!hit) continue;
           var length = Number(hit.byteLength) || 0;
           if (base + d + length > nextTarget) continue;
           if (!best || length > (Number(best.byteLength) || 0)) best = hit;
         }
-        if (best) tableKeep.push(best);
+        if (best) {
+          tableKeep.push(best);
+          scanHit[base] = true;
+        }
+      }
+      /* The scan does not always find a record's text. On Aria of Sorrow 624 of the 2,893
+         messages are scripts: their text is preceded by control codes
+         (01 00 03 01 07 02 then "Wake up...") and the scan reported nothing at those
+         addresses, while the game's own table names every one of them. So the records the
+         scan missed are read out of the cartridge with the table that is loaded - but only
+         when the scan already found most of that table's records: a table the scan never
+         hits is not a text table, and reading it poured font data into the list (measured:
+         4,332 texts instead of 2,929 when this corroboration was missing). */
+      var scanCovered = Object.keys(scanHit).length;
+      if (table.confirmed === true && scanCovered >= Math.max(4, Math.floor(targets.length * 0.5))) {
+        for (var tj = 0; tj < targets.length; tj++) {
+          var missedBase = targets[tj];
+          if (scanHit[missedBase]) continue;
+          var missedNext = (tj + 1 < targets.length) ? targets[tj + 1] : missedBase + 0x400;
+          var made = decodeRecordText(missedBase, missedNext);
+          if (made) tableKeep.push(made);
+        }
       }
       /* A table is only as good as the records it names. A run of words that happens to
          point into font or graphic data produces records like 'Hh@x' and 'I  "P', and
