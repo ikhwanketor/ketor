@@ -549,7 +549,12 @@
   }
 
   function isPatched(offset) {
-    return _state.patches[Number(offset)] !== undefined;
+    var off = Number(offset);
+    if (_state.patches[off] !== undefined) return true;
+    /* Bytes past the end of the loaded file are not in the file at all: the patch
+       layer is what put them there, so the whole appended tail counts as changed,
+       the zeroes that only make room for a byte included. */
+    return !!_state.romBytes && off >= _state.romBytes.length && off < imageLength();
   }
 
   function setByte(offset, value) {
@@ -561,17 +566,32 @@
       _set({ status: 'This is the inserted ROM.' });
       return false;
     }
-    if (!_state.romBytes || !Number.isFinite(off) || off < 0 || off >= imageLength()) return false;
+    if (!_state.romBytes || !Number.isFinite(off) || off < 0) return false;
     if (!Number.isFinite(Number(value))) return false;
+    /* Past the end of the loaded file the image grows to hold the write: the bytes
+       between the old end and the byte that was asked for are the zeroes a seek and
+       write would leave there. Only the appended side may be asked for an offset the
+       image does not hold yet, and a byte offset is a whole number. */
+    var appends = off >= _state.romBytes.length;
+    if (appends && Math.floor(off) !== off) return false;
     var before = currentByte(off);
     if (before === val) return false;
 
-    if (off >= _state.romBytes.length) {
-      var tail = _state.appended ? _state.appended.slice() : new Uint8Array(0);
-      tail[off - _state.romBytes.length] = val;
+    if (appends) {
+      var index = off - _state.romBytes.length;
+      var tailBefore = appendedLength();
+      var tail = new Uint8Array(Math.max(tailBefore, index + 1));
+      if (_state.appended) tail.set(_state.appended);
+      tail[index] = val;
+      /* The two lengths are what undo needs: the bytes this write added are its own,
+         so undoing it has to return the image to the length it had before, or the
+         zero run that made room for the byte would stay behind as data nobody wrote. */
       _set({
         appended: tail,
-        undoStack: _state.undoStack.concat([{ offset: off, from: before, to: val }]),
+        undoStack: _state.undoStack.concat([{
+          offset: off, from: before, to: val,
+          appendedBefore: tailBefore, appendedAfter: tail.length
+        }]),
         redoStack: [],
         status: 'Patched ' + _hex(off) + ': ' + _hex2(before) + ' -> ' + _hex2(val)
       });
@@ -618,11 +638,32 @@
     return at;
   }
 
-  function _applyPatchEntry(offset, value) {
+  function _applyPatchEntry(offset, value, entry) {
     if (_state.romBytes && offset >= _state.romBytes.length) {
       // an appended byte is its own record: there is no original to compare with
-      var tail = _state.appended ? _state.appended.slice() : new Uint8Array(0);
       var index = offset - _state.romBytes.length;
+      var tail = _state.appended ? _state.appended.slice() : new Uint8Array(0);
+      if (value === null || value === undefined) {
+        /* Undo of a write that grew the image: the bytes that write added go away
+           with it, or the image would keep a zero run no write ever asked for. The
+           tail is only cut while it is still the one that write produced, so an
+           insert that replaced the appended bytes is never thrown away here. */
+        if (entry && entry.appendedAfter === tail.length && entry.appendedBefore < tail.length) {
+          var kept = entry.appendedBefore > 0 ? new Uint8Array(entry.appendedBefore) : null;
+          if (kept) kept.set(tail.subarray(0, entry.appendedBefore));
+          _set({ appended: kept });
+          return _state.patches;
+        }
+        _set({ appended: tail });
+        return _state.patches;
+      }
+      if (index >= tail.length) {
+        /* Redo of that same write: the image grows back to the offset, zero filled
+           exactly as the first write left it. */
+        var grown = new Uint8Array(index + 1);
+        grown.set(tail);
+        tail = grown;
+      }
       if (index >= 0 && index < tail.length) tail[index] = value & 0xFF;
       _set({ appended: tail });
       return _state.patches;
@@ -638,7 +679,7 @@
     if (!stack.length || !_state.romBytes) return false;
     var entry = stack[stack.length - 1];
     _set({
-      patches: _applyPatchEntry(entry.offset, entry.from),
+      patches: _applyPatchEntry(entry.offset, entry.from, entry),
       undoStack: stack.slice(0, -1),
       redoStack: _state.redoStack.concat([entry]),
       cursorOffset: entry.offset,
@@ -654,7 +695,7 @@
     if (!stack.length || !_state.romBytes) return false;
     var entry = stack[stack.length - 1];
     _set({
-      patches: _applyPatchEntry(entry.offset, entry.to),
+      patches: _applyPatchEntry(entry.offset, entry.to, entry),
       redoStack: stack.slice(0, -1),
       undoStack: _state.undoStack.concat([entry]),
       cursorOffset: entry.offset,
