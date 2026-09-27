@@ -80,11 +80,19 @@
     mapFlipH: false,
     mapFlipV: false,
     zoom: 2,
-    /* The toolbar controls are ordinary buttons and a checkbox: no global keyboard
-       handler lives in this activity, so the offset and stride boxes stay free to
-       type in. Ctrl+C/V follows later for copy/paste of a region and is active only
-       while the canvas has the focus. */
+    /* The toolbar controls are ordinary buttons, a checkbox and three boxes: no global
+       keyboard handler lives in this activity, and the one on the tab root steps aside
+       while a box has the focus, so the offset and stride fields stay free to type in.
+       Ctrl+C/V follows later for copy/paste of a region and is active only while the
+       canvas has the focus. */
     grid: true,
+    /* Where the sheet is read from, how many bits a pixel is and how far the next tile
+       of the sheet sits. offsetText holds what is in the offset box, so the box never
+       jumps under the cursor: only text that parses is committed to offset. */
+    offset: 0,
+    offsetText: null,
+    depth: 4,
+    stride: 32,
     tiles: 128,
     candidates: [],
     scanning: false,
@@ -160,9 +168,64 @@
     return (h && h.patches) || {};
   }
 
+  /* ---------- the base, the depth and the step of the sheet ---------- */
+
+  /* One tile of a sheet takes one byte per pixel column of its depth: 1bpp is 8 bytes,
+     2bpp 16, 4bpp 32, 8bpp 64. Those are the sizes the format table uses, so a sheet
+     read at its own depth steps exactly as it did before these boxes existed. */
+  var DEPTHS = [1, 2, 4, 8];
+  function tileBytesForDepth(depth) {
+    var d = Number(depth);
+    return (DEPTHS.indexOf(d) >= 0 ? d : 4) * 8;
+  }
+  function depthForFormat(formatId) {
+    var C = K.core;
+    var size = (C && typeof C.tileSize === 'function') ? C.tileSize(formatId) : 32;
+    var d = Math.round(Number(size) / 8);
+    return DEPTHS.indexOf(d) >= 0 ? d : 4;
+  }
+  /* 1..64, the range the stride box promises. Anything else is "no stride given". */
+  function clampStride(v) {
+    var n = Math.round(Number(v));
+    if (!Number.isFinite(n) || n < 1) return null;
+    return Math.max(1, Math.min(64, n));
+  }
+  /* Bytes from one tile of the sheet to the next. The stride box wins while it holds a
+     number; an empty box lets the depth decide, which is the step this file took before
+     the box existed (tileIndex * tileSize). */
+  function tilePitch() {
+    var s = clampStride(_state.stride);
+    return s === null ? tileBytesForDepth(_state.depth) : s;
+  }
+  /* The depth and the stride that belong to a format, so picking one never leaves the
+     sheet stepping at another format's tile size. */
+  function formatPatch(formatId) {
+    var d = depthForFormat(formatId);
+    return { depth: d, stride: tileBytesForDepth(d) };
+  }
+  /* A sheet base is an address inside the ROM: everything past the last byte becomes
+     that last byte rather than a window that reads nothing. */
+  function clampOffset(v, len) {
+    var n = Math.max(0, Math.round(Number(v) || 0));
+    if (!(Number(len) > 0)) return 0;
+    return Math.min(n, Math.round(Number(len)) - 1);
+  }
+  /* Free typing: spaces and a 0x prefix are fine, and text that is not a hex number yet
+     - "0x" halfway through a keystroke - gives null instead of NaN. */
+  function parseSheetOffset(text) {
+    var raw = String(text == null ? '' : text).replace(/\s+/g, '');
+    if (!raw) return null;
+    var digits = raw.replace(/^0x/i, '');
+    if (!/^[0-9a-fA-F]+$/.test(digits)) return null;
+    var v = parseInt(digits, 16);
+    return Number.isFinite(v) ? v : null;
+  }
+
   function windowStart() {
-    var r = Number(_state.region);
-    return Number.isFinite(r) ? r : 0;
+    var r = _state.region;
+    if (r !== null && r !== undefined && Number.isFinite(Number(r))) return Number(r);
+    var o = Number(_state.offset);
+    return Number.isFinite(o) ? o : 0;
   }
 
   /* The visible tiles with the current patches applied. Without this the canvas
@@ -185,7 +248,9 @@
     var src = romBytes();
     if (!src || !C || typeof C.tileSize !== 'function') return null;
     var start = windowStart();
-    var size = C.tileSize(_state.format) * _state.tiles;
+    /* Room for as many tiles as the sheet shows at the step the depth and the stride
+       ask for, which is the format's own tile size until either of them changes. */
+    var size = tilePitch() * _state.tiles;
     var end = Math.min(src.length, start + size);
     if (!(end > start)) return null;
     var out = src.slice(start, end);
@@ -201,8 +266,10 @@
     return { start: start, bytes: out, key: start + ':' + out.length + ':' + keyParts.join(',') };
   }
 
+  /* Where tile n starts inside the window: the step the depth and the stride ask for,
+     the format's tile size while both keep their defaults. */
   function tileWindowOffset(tileIndex, C) {
-    return Number(tileIndex) * C.tileSize(_state.format);
+    return Number(tileIndex) * tilePitch();
   }
 
   function readTile(tileIndex) {
@@ -1296,6 +1363,9 @@
       var C = K.core;
       var fmt = props.format;
       var size = C.tileSize(fmt);
+      // the step between two tiles is padded or tightened by the toolbar; the tile
+      // itself is still as many bytes as its format reads
+      var step = Number(props.pitch) > 0 ? Number(props.pitch) : size;
       var z = props.zoom;
       var perRow = Math.max(1, Math.floor(props.width / (8 * z)));
       var rows = Math.ceil(props.tiles / perRow);
@@ -1310,7 +1380,7 @@
         // tile in the buffer are two different numbers
         var source = props.order ? props.order[t] : t;
         if (source === null || source === undefined) continue;
-        var off = source * size;
+        var off = source * step;
         if (off < 0 || off + size > props.bytes.length) continue;
         var px = C.decodeTile(props.bytes, off, fmt);
         var tx = (t % perRow) * 8 * z;
@@ -1521,8 +1591,9 @@
     var cursorTile = -1, cursorByte = 0;
     if (hex && win && K.core) {
       var size = K.core.tileSize(st.format);
+      var step = tilePitch();
       var rel = Number(hex.cursorOffset) - win.start;
-      if (rel >= 0 && rel < st.tiles * size) { cursorTile = Math.floor(rel / size); cursorByte = rel % size; }
+      if (rel >= 0 && rel < st.tiles * step) { cursorTile = Math.floor(rel / step); cursorByte = rel - cursorTile * step; }
     }
 
     /* ---- map view handlers ---- */
@@ -1701,7 +1772,50 @@
     }
 
 
+    /* Typing in a box belongs to that box: every shortcut below is for the canvas, and
+       without this the offset field would lose its A-F hex letters, its Backspace and
+       its Ctrl+C/V to the tool keys. */
+    function typingInField(target) {
+      var tag = target && target.tagName ? String(target.tagName).toUpperCase() : '';
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+    }
+
+    /* The offset box: what was typed stays in the box (offsetText) and only text that
+       parses is committed, clamped into the ROM. A detected region steps aside once a
+       new sheet base is typed, otherwise the box would look dead. */
+    function typeOffset(text) {
+      var typed = String(text == null ? '' : text);
+      var v = parseSheetOffset(typed);
+      var patch = { offsetText: typed };
+      if (v !== null) {
+        var bytes = romBytes();
+        var at = clampOffset(v, bytes ? bytes.length : 0);
+        patch.offset = at;
+        if (_state.region !== null && _state.region !== undefined && Number(_state.region) !== at) patch.region = null;
+        /* A compressed copy holds the decompressed bytes, so it steps aside too, unless
+           it has pixels waiting to be written back: those are never dropped. */
+        var gs = _state.graphicSource;
+        if (gs) {
+          if (gs.dirty === true) patch.status = 'Offset 0x' + hex6(at) + ' noted; the open compressed copy still holds pixels waiting to be written back.';
+          else patch.graphicSource = null;
+        }
+      }
+      _set(patch);
+    }
+
+    function typeStride(text) {
+      // an empty box is not an error: the depth decides the step again
+      _set({ stride: clampStride(text) });
+    }
+
+    function pickDepth(depth) {
+      var d = Number(depth);
+      var step = tileBytesForDepth(d);
+      _set({ depth: d, stride: step, status: 'Tile depth ' + d + 'bpp: the sheet steps ' + step + ' byte(s) a tile.' });
+    }
+
     function onKey(ev) {
+      if (typingInField(ev.target)) return;
       var k = ev.key;
       if (/^[0-9]$/.test(k)) { _set({ colour: Number(k) }); return; }
       if (k === '[') { _set({ colour: (st.colour + 15) % 16 }); ev.preventDefault(); return; }
@@ -1747,6 +1861,8 @@
     }
 
     var TB = 'kt-btn small';
+    /* One look for the three boxes, so the row reads as one set of controls. */
+    var boxStyle = { fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' };
     return e('div', {
       ref: wrapRef, tabIndex: 0, onKeyDown: onKey,
       style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, outline: 'none' }
@@ -1775,6 +1891,37 @@
             onChange: function (ev) { _set({ grid: !!ev.target.checked }); }
           }),
           'Grid'),
+        /* The sheet base, the depth and the step. They are plain boxes: every keystroke
+           reaches them, the half typed text is kept in the store, and only text that
+           parses is committed to the state the canvas reads. */
+        e('label', { style: { display: 'flex', alignItems: 'center', gap: 4 }, title: 'Byte offset in the ROM the sheet is read from. Hex: 0x and spaces are fine, and a value past the end of the ROM stops at its last byte.' },
+          e('span', { style: { opacity: 0.7 } }, 'Offset'),
+          e('input', {
+            type: 'text', spellCheck: false, placeholder: 'hex',
+            value: st.offsetText === null || st.offsetText === undefined ? hex6(st.offset) : st.offsetText,
+            onFocus: function (ev) { ev.target.select(); },
+            onChange: function (ev) { typeOffset(ev.target.value); },
+            style: Object.assign({ width: 72 }, boxStyle)
+          }),
+          e('span', { style: { fontFamily: MONO, opacity: 0.85 }, title: 'The offset that is committed to the store' }, '0x' + hex6(st.offset))
+        ),
+        e('label', { style: { display: 'flex', alignItems: 'center', gap: 4 }, title: 'Bytes from one tile of the sheet to the next, 1..64. An empty box lets the depth decide.' },
+          e('span', { style: { opacity: 0.7 } }, 'Stride'),
+          e('input', {
+            type: 'number', min: 1, max: 64, step: 1, spellCheck: false,
+            value: st.stride === null || st.stride === undefined ? '' : st.stride,
+            onChange: function (ev) { typeStride(ev.target.value); },
+            style: Object.assign({ width: 54 }, boxStyle)
+          })
+        ),
+        e('label', { style: { display: 'flex', alignItems: 'center', gap: 4 }, title: 'Bits a pixel takes on this sheet: it sets how many bytes one tile steps by (4bpp 32, 8bpp 64) and brings the stride to that number.' },
+          e('span', { style: { opacity: 0.7 } }, 'Depth'),
+          e('select', {
+            className: 'kt-select', value: String(Number(st.depth) || 4),
+            onChange: function (ev) { pickDepth(ev.target.value); },
+            style: { fontSize: 11 }
+          }, DEPTHS.map(function (d) { return e('option', { key: 'd' + d, value: String(d) }, d + 'bpp'); }))
+        ),
         e('span', { style: { opacity: 0.7 }, title: 'Which view of the sheet this tab draws' }, 'view: ' + st.view)
       ),
       e('div', { style: { flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderBottom: '1px solid var(--kt-widget-border-default)', background: 'var(--kt-sidebar-bg)', fontSize: 11, flexWrap: 'nowrap' } },
@@ -1836,7 +1983,7 @@
           : win ? e(TileCanvas, {
           bytes: win.bytes,
           windowKey: windowKey,
-          format: st.format, zoom: st.zoom, tiles: st.tiles,
+          format: st.format, zoom: st.zoom, tiles: st.tiles, pitch: tilePitch(),
           selected: selected, selPixel: sel, palette: st.palette,
           order: fontOrder, labels: fontLabels, orderKey: orderKey,
           cursorTile: cursorTile, cursorByte: cursorByte,
@@ -2333,7 +2480,12 @@
         'Format',
         e('select', {
           className: 'kt-select', value: st.format,
-          onChange: function (ev) { _set({ format: ev.target.value, region: null, candidates: [], graphicSource: null }); },
+          onChange: function (ev) {
+            /* A format carries its own tile size - a Game Boy 2bpp tile is 16 bytes, a
+               GBA 8bpp tile 64 - so the depth and the stride follow the pick. */
+            var format = ev.target.value;
+            _set(Object.assign({ format: format, region: null, candidates: [], graphicSource: null }, formatPatch(format)));
+          },
           style: { fontSize: 11 }
         }, formatIds.map(function (id) {
           return e('option', { key: id, value: id }, formats[id].label);
@@ -2419,13 +2571,16 @@
       try { ident = K.core.identifyRom(detail.data, detail.name || ''); } catch (err) { ident = null; }
     }
     var prof = consoleProfile();
-    _set({
+    var format = prof.defaultFormat || _state.format;
+    _set(Object.assign({
       romIdentity: ident,
       graphicSource: null,
       candidates: [],
       region: null,
-      format: prof.defaultFormat || _state.format
-    });
+      format: format,
+      // the sheet base has to land inside the ROM that just arrived
+      offset: clampOffset(_state.offset, detail.data ? detail.data.length : 0)
+    }, formatPatch(format)));
     /* The screens this ROM was already given, which is what makes the second visit
        exact instead of proposed. */
     var known = savedScreens();
@@ -2454,7 +2609,7 @@
   K.tile = {
     getState: getState, subscribe: subscribe, useTile: useTile,
     detect: detect, setPixel: setPixel, setRegion: function (o) { _set({ region: Number(o) }); },
-    setFormat: function (f) { _set({ format: String(f) }); }, colourAt: colourCss,
+    setFormat: function (f) { var format = String(f); _set(Object.assign({ format: format }, formatPatch(format))); }, colourAt: colourCss,
     setColour: function (v) { _set({ colour: Number(v) }); }, readTile: readTile,
     regionWindow: regionWindow, tileAbsoluteOffset: tileAbsoluteOffset,
     loadPalette: loadPalette, readPaletteAt: readPaletteAt, findPalette: findPalette, paletteScore: paletteScore,
