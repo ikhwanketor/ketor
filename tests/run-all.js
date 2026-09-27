@@ -23,9 +23,10 @@ const tileSelection = require('./tile-selection.test');
 const tileImage = require('./tile-image.test');
 const tilePng = require('./tile-png.test');
 const tileStatusbar = require('./tile-statusbar.test');
+const tilePalette256 = require('./tile-palette256.test');
 const hexAppend = require('./hex-append.test');
 
-const suites = [insertPolicy.suite, pointerDetector.suite, translatePanel.suite, gameProfile.suite, saveState.suite, fontMap.suite, tableWidth.suite, extractFiller.suite, extractionRecords.suite, gbaProfile.suite, headerlessRecord.suite, readableFilter.suite, debuggerTab.suite, armDisasm.suite, tileWriteback.suite, tileClipboard.suite, tileSelection.suite, tileImage.suite, tilePng.suite, tileStatusbar.suite, hexAppend.suite];
+const suites = [insertPolicy.suite, pointerDetector.suite, translatePanel.suite, gameProfile.suite, saveState.suite, fontMap.suite, tableWidth.suite, extractFiller.suite, extractionRecords.suite, gbaProfile.suite, headerlessRecord.suite, readableFilter.suite, debuggerTab.suite, armDisasm.suite, tileWriteback.suite, tileClipboard.suite, tileSelection.suite, tileImage.suite, tilePng.suite, tileStatusbar.suite, tilePalette256.suite, hexAppend.suite];
 const filter = process.argv[2] ? String(process.argv[2]) : '';
 const chosen = filter ? suites.filter(function (s) { return s.name.indexOf(filter) >= 0; }) : suites;
 

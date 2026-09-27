@@ -32,7 +32,13 @@
   var uE = R.useEffect;
   var uR = R.useRef;
   var MONO = 'var(--kt-font-mono)';
+  /* A palette is as wide as the format it is read for: sixteen BGR555 words (32 bytes) for
+     the 1bpp/2bpp/4bpp layouts and 256 (512 bytes) for an 8bpp one. Which formats are 8bpp is
+     read from the codec's own table (tileFormat().colors), so this file keeps no second list
+     of them; PALETTE_COLOURS stays the sixteen colour block a map palette bank and the
+     default width mean. */
   var PALETTE_COLOURS = 16;
+  var PALETTE_COLOURS_MAX = 256;
 
   /* Which console the loaded ROM is, so the format list, the map layout and the
      compression schemes come from its profile instead of from a guess. */
@@ -139,9 +145,34 @@
 
   /* ---------- colour ---------- */
 
-  // Plain ramp, used until a palette is read from the ROM: black, white, two greys.
+  /* How many entries the palette of the sheet on screen may hold: 256 when the format is an
+     8bpp one (the codec's table says which: its colour count is 256), sixteen for every
+     other format - including the 2bpp and 1bpp layouts, whose four or two colours are still
+     read out of a sixteen entry block, exactly as before. The depth box can ask for 8bpp on
+     its own, and an unknown format id stays at sixteen. */
+  function paletteColourCount(format) {
+    var C = K.core;
+    var id = (format === undefined || format === null || format === '') ? _state.format : format;
+    var wide = false;
+    if (C && typeof C.tileFormat === 'function') {
+      var f = C.tileFormat(id);
+      wide = !!(f && Number(f.colors) >= PALETTE_COLOURS_MAX);
+    }
+    if (!wide && Number(_state.depth) === 8) wide = true;
+    return wide ? PALETTE_COLOURS_MAX : PALETTE_COLOURS;
+  }
+
+  /* Plain ramp, used until a palette is read from the ROM: black, white, two greys. Above
+     index 15 - an 8bpp sheet with no palette loaded - the ramp keeps climbing instead of
+     collapsing onto colour 15, so those pixels stay tellable apart while the palette is
+     still being looked for. Indices 0-15 are exactly what they always were. */
   function rampColour(index) {
-    var v = Math.max(0, Math.min(15, Number(index) || 0));
+    var i = Math.max(0, Number(index) || 0);
+    if (i > 15) {
+      var g8 = Math.min(255, i);
+      return { r: g8, g: g8, b: Math.round(g8 * 0.85) };
+    }
+    var v = Math.min(15, i);
     var g = Math.round(v * 17);
     return { r: g, g: g, b: Math.round(g * 0.85) };
   }
@@ -950,12 +981,19 @@
 
   /* ---------- palette ---------- */
 
-  function readPaletteAt(offset) {
+  /* Reads the palette at an offset as BGR555. The count defaults to what the sheet's format
+     holds - 256 words (512 bytes) for an 8bpp format, 16 words (32 bytes) for the rest - so
+     an 8bpp sheet gets the whole palette instead of its first sixteen entries. An explicit
+     count is honoured, clamped into the range a palette can be. */
+  function readPaletteAt(offset, count) {
     var bytes = romBytes();
     var off = Number(offset);
-    if (!bytes || !Number.isFinite(off) || off < 0 || off + PALETTE_COLOURS * 2 > bytes.length) return null;
+    var n = (count === undefined || count === null) ? paletteColourCount() : Math.round(Number(count));
+    if (!Number.isFinite(n) || n < 1) n = PALETTE_COLOURS;
+    if (n > PALETTE_COLOURS_MAX) n = PALETTE_COLOURS_MAX;
+    if (!bytes || !Number.isFinite(off) || off < 0 || off + n * 2 > bytes.length) return null;
     var pal = [];
-    for (var i = 0; i < PALETTE_COLOURS; i++) pal.push(fromBgr555(bytes[off + i * 2], bytes[off + i * 2 + 1]));
+    for (var i = 0; i < n; i++) pal.push(fromBgr555(bytes[off + i * 2], bytes[off + i * 2 + 1]));
     return pal;
   }
 
@@ -967,7 +1005,7 @@
       palette: pal,
       paletteOffset: off,
       paletteName: name == null ? '' : String(name),
-      status: 'Palette: 16 colours read from 0x' + hex6(off) + ' (BGR555).'
+      status: 'Palette: ' + pal.length + ' colours read from 0x' + hex6(off) + ' (BGR555).'
     });
     return pal;
   }
@@ -984,10 +1022,16 @@
      Palettes the game stores compressed, and the copy in palette RAM, are not
      reachable this way. That is what the offset field and the paste box are
      for. */
-  function paletteScore(bytes, off) {
+  function paletteScore(bytes, off, entries) {
+    /* How many words the candidate is scored as: sixteen by default, 256 when the sheet is
+       8bpp. It is a parameter so the score of a 4bpp candidate is exactly the number it
+       always was. */
+    var n = (entries === undefined || entries === null) ? PALETTE_COLOURS : Math.round(Number(entries));
+    if (!Number.isFinite(n) || n < 2) n = PALETTE_COLOURS;
+    if (n > PALETTE_COLOURS_MAX) n = PALETTE_COLOURS_MAX;
     var distinct = {}, count = 0, alpha = 0, sumR = 0, sumG = 0, sumB = 0;
     var minR = 32, maxR = -1, minG = 32, maxG = -1, minB = 32, maxB = -1;
-    for (var i = 0; i < PALETTE_COLOURS; i++) {
+    for (var i = 0; i < n; i++) {
       var v = (bytes[off + i * 2] & 0xFF) | ((bytes[off + i * 2 + 1] & 0xFF) << 8);
       if (v & 0x8000) alpha++;
       if (!distinct[v]) { distinct[v] = true; count++; }
@@ -1002,30 +1046,32 @@
     var luma = (first.r * 0.299 + first.g * 0.587 + first.b * 0.114) / 255;
     var wide = ((maxR - minR) + (maxG - minG) + (maxB - minB)) / 93;
     // A real palette is not a grey ramp: the channels have to disagree somewhere.
-    var avgR = sumR / PALETTE_COLOURS, avgG = sumG / PALETTE_COLOURS, avgB = sumB / PALETTE_COLOURS;
+    var avgR = sumR / n, avgG = sumG / n, avgB = sumB / n;
     var greyish = (Math.abs(avgR - avgG) + Math.abs(avgG - avgB) + Math.abs(avgR - avgB)) / 93;
-    var score = (count / PALETTE_COLOURS) * 0.2 + wide * 0.25 + (1 - luma) * 0.35 + Math.min(1, greyish * 3) * 0.2;
+    var score = (count / n) * 0.2 + wide * 0.25 + (1 - luma) * 0.35 + Math.min(1, greyish * 3) * 0.2;
     return { offset: off, score: score, colours: count, luma: luma };
   }
 
-  /* Best effort search for an uncompressed 16 colour palette. Palettes that the
-     ROM stores compressed (LZ77) cannot be found this way and the GBA keeps the
-     palette it is using in palette RAM, so the candidate list is a starting
-     point: click through it, or type an offset, or paste 32 bytes from the
-     emulator. */
+  /* Best effort search for an uncompressed palette. The width is the sheet's own: sixteen
+     words near a 4bpp sheet, 256 near an 8bpp one. Palettes that the ROM stores compressed
+     (LZ77) cannot be found this way and the GBA keeps the palette it is using in palette
+     RAM, so the candidate list is a starting point: click through it, or type an offset, or
+     paste 32 bytes (512 for 8bpp) from the emulator. */
   function findPalette() {
     var bytes = romBytes();
     if (!bytes) { _set({ status: 'Load a ROM first.' }); return null; }
+    var entries = paletteColourCount();
+    var block = entries * 2;
     var centre = windowStart();
     var span = 0x40000;
     var from = Math.max(0, centre - span);
-    var to = Math.min(bytes.length - 32, centre + span);
+    var to = Math.min(bytes.length - block, centre + span);
     var found = [];
     for (var off = from; off <= to; off += 2) {
-      var s = paletteScore(bytes, off);
+      var s = paletteScore(bytes, off, entries);
       if (s) found.push(s);
     }
-    if (!found.length) { _set({ status: 'No uncompressed 16 colour palette found near 0x' + hex6(centre) + '.' }); return null; }
+    if (!found.length) { _set({ status: 'No uncompressed ' + entries + ' colour palette found near 0x' + hex6(centre) + '.' }); return null; }
     found.sort(function (a, b) { return b.score - a.score; });
     var top = found.slice(0, 8);
     _set({ paletteCandidates: top });
@@ -1059,13 +1105,16 @@
       _set({ status: 'No palette offset: this palette was not read from the ROM. Load a palette from the ROM first.' });
       return false;
     }
-    if (i < 0 || i >= PALETTE_COLOURS) return false;
+    /* The range follows the sheet: index 200 is a real entry of an 8bpp palette and an
+       index a 4bpp sheet does not have. The two bytes of entry i sit at the palette offset
+       plus i*2, so 200 writes the 401st and 402nd byte of a 512 byte palette. */
+    if (i < 0 || i >= paletteColourCount()) return false;
     var v = toBgr555(rgb);
     var lo = v & 0xFF, hi = (v >> 8) & 0xFF;
     var wrote = 0;
     if ((bytes[off + i * 2] & 0xFF) !== lo && K.hex.setByte(off + i * 2, lo)) wrote++;
     if ((bytes[off + i * 2 + 1] & 0xFF) !== hi && K.hex.setByte(off + i * 2 + 1, hi)) wrote++;
-    var pal = (_state.palette || []).slice();
+    var pal = (paletteWidened(_state.palette, paletteColourCount()) || []).slice();
     pal[i] = fromBgr555(lo, hi);
     _set({ palette: pal, status: 'Palette colour ' + i + ' = ' + colourHex(pal[i]) + ' written to 0x' + hex6(off + i * 2) + (wrote ? '' : ' (unchanged)') + '.' });
     return wrote > 0;
@@ -1083,9 +1132,12 @@
   function parsePaletteText(text, name) {
     var raw = String(text == null ? '' : text);
     var lines = raw.replace(/\r/g, '').split('\n').map(function (l) { return l.trim(); }).filter(function (l) { return l.length > 0; });
+    /* As many entries as the sheet's format holds, so a palette exported from an emulator
+       is not cut to sixteen when an 8bpp sheet is the one on screen. */
+    var want = paletteColourCount();
     var colours = [];
     if (lines.length && /^JASC-PAL$/i.test(lines[0])) {
-      for (var i = 3; i < lines.length && colours.length < PALETTE_COLOURS; i++) {
+      for (var i = 3; i < lines.length && colours.length < want; i++) {
         var p = lines[i].split(/\s+/);
         if (p.length < 3) continue;
         var r = parseInt(p[0], 10), g = parseInt(p[1], 10), b = parseInt(p[2], 10);
@@ -1096,7 +1148,7 @@
     if (!colours.length) {
       var hexOnly = raw.replace(/0x/gi, '').replace(/[^0-9a-fA-F]/g, '');
       if (hexOnly.length >= 96) {
-        for (var j = 0; j + 4 <= hexOnly.length && colours.length < PALETTE_COLOURS; j += 4) {
+        for (var j = 0; j + 4 <= hexOnly.length && colours.length < want; j += 4) {
           var lo = parseInt(hexOnly.substr(j, 2), 16), hi = parseInt(hexOnly.substr(j + 2, 2), 16);
           colours.push(fromBgr555(lo, hi));
         }
@@ -1104,7 +1156,7 @@
     }
     if (!colours.length) {
       lines.forEach(function (l) {
-        if (colours.length >= PALETTE_COLOURS) return;
+        if (colours.length >= want) return;
         var p = l.split(/[\s,]+/);
         if (p.length < 3) return;
         var r = parseInt(p[0], 10), g = parseInt(p[1], 10), b = parseInt(p[2], 10);
@@ -1113,15 +1165,15 @@
       });
     }
     if (!colours.length) { _set({ status: 'Palette text not understood: expected JASC-PAL, r g b lines, or 32 bytes of BGR555 hex.' }); return null; }
-    while (colours.length < PALETTE_COLOURS) colours.push({ r: 0, g: 0, b: 0 });
+    while (colours.length < want) colours.push({ r: 0, g: 0, b: 0 });
     _set({
-      palette: colours.slice(0, PALETTE_COLOURS),
+      palette: colours.slice(0, want),
       /* The text is not the ROM. Keeping the offset of the palette that was loaded before
          would let the colour picker write its two bytes into that old address, so an import
          drops it: the palette is 'imported' until loadPalette() reads a real one again. */
       paletteOffset: null,
       paletteName: name ? String(name) : 'imported',
-      status: 'Palette loaded from text (' + Math.min(colours.length, PALETTE_COLOURS) + ' colours).'
+      status: 'Palette loaded from text (' + Math.min(colours.length, want) + ' colours).'
     });
     return colours;
   }
@@ -1166,16 +1218,32 @@
     URL.revokeObjectURL(url);
   }
 
+  /* A palette of the width the sheet asks for: what the editor holds, widened from the ROM
+     at the same offset when the format wants more entries than were read - sixteen colours
+     loaded at 4bpp, then the same file read as 8bpp. Entries the editor already holds win,
+     so a colour that was edited or drawn is not replaced by the byte the ROM still has. */
+  function paletteWidened(pal, count) {
+    if (pal && pal.length >= count) return pal;
+    var off = paletteRomOffset();
+    var rom = off === null ? null : readPaletteAt(off, count);
+    if (!rom) return pal;
+    if (pal) for (var i = 0; i < pal.length && i < count; i++) rom[i] = pal[i];
+    return rom;
+  }
+
   /* The colours an image is painted with and read back into: the palette the editor is
-     showing, or the sixteen the palette offset names. No palette means no import - see
-     importTilesPng - because every colour would otherwise land on index 0. */
+     showing, at the width of the sheet's format - 256 entries for 8bpp, so an index above
+     15 is painted with its own colour instead of falling back to the ramp - or the palette
+     the offset names. No palette means no import - see importTilesPng - because every
+     colour would otherwise land on index 0. */
   function imagePalette() {
-    if (_state.palette && _state.palette.length) return _state.palette;
+    var count = paletteColourCount();
+    if (_state.palette && _state.palette.length) return paletteWidened(_state.palette, count);
     /* No offset means no palette at all: Number(null) is 0, and reading sixteen colours
        out of the first bytes of the ROM is not a palette anyone asked for. */
     if (_state.paletteOffset === null || _state.paletteOffset === undefined) return null;
     var off = Number(_state.paletteOffset);
-    return Number.isFinite(off) ? readPaletteAt(off) : null;
+    return Number.isFinite(off) ? readPaletteAt(off, count) : null;
   }
 
   /* The first count tiles of a window, packed one after another so tilesToRgba reads tile
@@ -2030,8 +2098,11 @@
   ];
 
   /* One swatch per colour. The index is a parameter of this function, so each
-     button closes over its own index instead of the loop variable. */
-  function swatchButton(props, i) {
+     button closes over its own index instead of the loop variable. A cell of 18 pixels
+     or more has room for the index printed on it; a smaller one keeps the colour and
+     leaves the index to the tooltip. */
+  function swatchButton(props, i, cell) {
+    var size = Number(cell) > 0 ? Number(cell) : 22;
     var c = props.palette && props.palette[i] ? props.palette[i] : rampColour(i);
     var active = Number(props.colour) === i;
     return e('button', {
@@ -2040,18 +2111,31 @@
       title: 'Colour ' + i + ' ' + colourHex(c) + ' (key: ' + (i < 10 ? i : '-') + ')',
       onClick: function () { props.onPick(i); },
       style: {
-        width: 22, height: 18, padding: 0, cursor: 'pointer',
+        width: size, height: size < 22 ? 14 : 18, padding: 0, cursor: 'pointer',
         background: 'rgb(' + c.r + ',' + c.g + ',' + c.b + ')',
         border: active ? '2px solid var(--kt-focus-border, #4daafc)' : '1px solid var(--kt-widget-border-default, #3c3c3c)',
         borderRadius: 2
       }
-    }, e('span', { style: { fontSize: 9, color: (c.r + c.g + c.b) > 380 ? '#000' : '#fff' } }, String(i)));
+    }, size < 18 ? null : e('span', { style: { fontSize: 9, color: (c.r + c.g + c.b) > 380 ? '#000' : '#fff' } }, String(i)));
   }
 
+  /* The strip under the canvas: sixteen swatches for a 1/2/4bpp sheet, a 16x16 grid for the
+     256 of an 8bpp one. The wide grid is drawn in smaller cells and capped in height so the
+     strip stays a strip instead of pushing the canvas out of the tab; a scroll shows the
+     rest. The count comes from the format, not from a fixed sixteen. */
   function PaletteSwatches(props) {
+    var count = paletteColourCount(props.format);
+    var wide = count > PALETTE_COLOURS;
+    var cell = wide ? 16 : 22;
     var cells = [];
-    for (var i = 0; i < PALETTE_COLOURS; i++) cells.push(swatchButton(props, i));
-    return e('div', { style: Object.assign({ display: 'grid', gridTemplateColumns: 'repeat(8, 22px)', gap: 2 }, props.style || {}) }, cells);
+    for (var i = 0; i < count; i++) cells.push(swatchButton(props, i, cell));
+    var style = Object.assign(
+      { display: 'grid', gridTemplateColumns: 'repeat(' + (wide ? 16 : 8) + ', ' + cell + 'px)', gap: 2 },
+      wide ? { maxHeight: 114, overflowY: 'auto' } : null,
+      props.style || {}
+    );
+    if (wide) style.gridTemplateColumns = 'repeat(16, ' + cell + 'px)';
+    return e('div', { style: style }, cells);
   }
 
   function TileTab() {
@@ -2980,7 +3064,7 @@
       ) : null,
 
       e('div', { style: head }, 'Palette'),
-      e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'BGR555, 16 colours. An edit is written to the ROM as a patch.'),
+      e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'BGR555: 16 colours, 256 when the sheet is 8bpp. An edit is written to the ROM as a patch.'),
       e('div', { style: rowStyle },
         e('input', {
           style: inputStyle, value: palSt[0], spellCheck: false, placeholder: 'palette offset',
@@ -2990,7 +3074,7 @@
         e('button', { type: 'button', className: 'kt-btn small', onClick: commitPalette, disabled: !hex || !hex.romBytes }, 'Load')
       ),
       e('div', { style: { display: 'flex', gap: 4 } },
-        e('button', { type: 'button', className: 'kt-btn small secondary', style: { flex: '1 1 auto' }, disabled: !hex || !hex.romBytes, onClick: findPalette, title: 'Search around the region for an uncompressed 16 colour palette' }, 'Find'),
+        e('button', { type: 'button', className: 'kt-btn small secondary', style: { flex: '1 1 auto' }, disabled: !hex || !hex.romBytes, onClick: findPalette, title: 'Search around the region for an uncompressed palette of this format (16 colours, or 256 for 8bpp)' }, 'Find'),
         e('button', { type: 'button', className: 'kt-btn small secondary', disabled: !st.palette, onClick: exportPalette }, 'Export .pal'),
         e('button', { type: 'button', className: 'kt-btn small secondary', onClick: importPaletteDialog }, 'Import')
       ),
@@ -3024,7 +3108,7 @@
       e('textarea', {
         value: pasteSt[0],
         onChange: function (ev) { pasteSt[1](ev.target.value); },
-        placeholder: '20 21 22 ... tile bytes, or 32 bytes of BGR555 for a palette',
+        placeholder: '20 21 22 ... tile bytes, or 32 bytes of BGR555 for a palette (512 for 8bpp)',
         spellCheck: false,
         style: { minHeight: 54, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: 4, resize: 'vertical' }
       }),
@@ -3241,6 +3325,10 @@
     decodeMapTile: decodeMapTile, entryTile: entryTile, entryFlipH: entryFlipH, entryFlipV: entryFlipV,
     entryBank: entryBank, setView: function (v) { _set({ view: String(v) }); },
     setMap: function (o) { _set(o || {}); },
-    PALETTE_COLOURS: PALETTE_COLOURS
+    /* The width of the palette the sheet on screen may hold, so a caller does not have to
+       know that an 8bpp format carries 256 entries and a 4bpp one sixteen. */
+    paletteColours: paletteColourCount,
+    PALETTE_COLOURS: PALETTE_COLOURS,
+    PALETTE_COLOURS_MAX: PALETTE_COLOURS_MAX
   };
 })(window);
