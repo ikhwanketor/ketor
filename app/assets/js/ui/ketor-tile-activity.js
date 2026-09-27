@@ -2917,7 +2917,6 @@
             style: { fontSize: 11 }
           }, DEPTHS.map(function (d) { return e('option', { key: 'd' + d, value: String(d) }, d + 'bpp'); }))
         ),
-        e('span', { style: { opacity: 0.7 }, title: 'Which view of the sheet this tab draws' }, 'view: ' + st.view)
       ),
       e('div', { style: { flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', borderBottom: '1px solid var(--kt-widget-border-default)', background: 'var(--kt-sidebar-bg)', fontSize: 11, flexWrap: 'nowrap' } },
         TOOLS.map(function (t) {
@@ -3556,21 +3555,6 @@
             + (c.verified ? '  \u2022 pointed at from 0x' + hex6(c.refAt) : ''));
         })
       ) : null,
-      st.graphicSource ? e('div', {
-        style: { display: 'flex', flexDirection: 'column', gap: 3, padding: '4px 6px', border: '1px solid var(--kt-widget-border-default)', borderRadius: 3 }
-      },
-        e('div', { style: { fontFamily: MONO } }, 'Compressed: ' + st.graphicSource.label + ' at 0x' + hex6(st.graphicSource.offset)),
-        e('div', { style: { opacity: 0.7 } }, st.graphicSource.size + ' bytes decompressed'
-          + (st.graphicSource.dataOffset ? ', tiles start ' + st.graphicSource.dataOffset + ' byte(s) in' : '')
-          + '. Painting a compressed graphic comes back once rewriting the stream is in.'),
-        e('div', { style: { opacity: 0.7 } }, st.graphicSource.compressedSize
-          ? (st.graphicSource.compressedSize + ' of ' + st.graphicSource.budget + ' byte(s) used' + (st.graphicSource.dirty ? ', waiting to write back' : ', written'))
-          : 'not written back yet'),
-        e('div', { style: { display: 'flex', gap: 4 } },
-          e('button', { type: 'button', className: 'kt-btn small', onClick: function () { writeBackCompressed(); } }, 'Write back now'),
-          e('button', { type: 'button', className: 'kt-btn small secondary', onClick: clearSource }, 'Read the ROM again')
-        )
-      ) : null,
       e('div', { style: { height: 1, background: 'var(--kt-widget-border-default)', margin: '2px 0' } }),
       e('div', { style: { fontWeight: 600 } }, 'Region'),
       e('div', { style: rowStyle },
@@ -3581,8 +3565,7 @@
         }),
         e('button', { type: 'button', className: 'kt-btn small', onClick: commitRegion }, 'Go')
       ),
-      e('div', { style: { opacity: 0.7, lineHeight: 1.45 } }, 'Palette, map, text and hex controls live in the inspector on the right of the canvas.'),
-      e('div', { style: { opacity: 0.7, lineHeight: 1.45 } }, st.status || 'Detect a region, then click a tile and paint pixels. Every pixel is written as a hex patch.')
+      e('div', { style: { opacity: 0.7, lineHeight: 1.45 } }, 'Palette, map, text and hex controls live in the inspector on the right of the canvas.')
     );
   }
 
