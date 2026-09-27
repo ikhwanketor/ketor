@@ -45,7 +45,8 @@ function makeReactStub() {
   };
 }
 
-function loadWorkbench() {
+function loadWorkbench(options) {
+  const opts = options || {};
   const win = {
     React: makeReactStub(),
     addEventListener: function () {}, removeEventListener: function () {},
@@ -94,6 +95,11 @@ function loadWorkbench() {
     core: {}
   };
 
+  /* A suite that counts what the modules register on the window has to see the window
+     before the first module is loaded, and one that loads a module itself asks for the
+     tile module to be left out so the two loads can be compared. */
+  if (typeof opts.beforeLoad === 'function') opts.beforeLoad(win);
+
   const load = (file) => vm.runInNewContext(fs.readFileSync(file, 'utf8'), win, { filename: file });
   load(path.join(JS, 'core.js'));
   vm.runInNewContext('window.__probe = { createTextExtractorWorker: createTextExtractorWorker, createBuildWorker: createBuildWorker, createTableWorker: createTableWorker };', win);
@@ -123,7 +129,7 @@ function loadWorkbench() {
   load(path.join(UI, 'ketor-debugger-tab.js'));
   /* The tile editor writes a pixel back into the rom through the hex patch layer,
      so the suite about that write loads the module the preview page loads. */
-  load(path.join(UI, 'ketor-tile-activity.js'));
+  if (opts.loadTile !== false) load(path.join(UI, 'ketor-tile-activity.js'));
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

@@ -66,6 +66,11 @@
     paletteName: '',
     paletteCandidates: [],
     colour: 1,
+    /* The copied region, kept as data rather than as text: { w, h, cols, pixels } with
+       the pixels in reading order and cols the length of one row. The paste writes those
+       pixels back through setPixel, so a copied tile lands in the hex patch layer like a
+       painted one, and a later batch can widen the box without parsing anything. */
+    clipboard: null,
     view: 'tiles',
     mapScreenBase: null,
     mapCharBase: null,
@@ -83,8 +88,9 @@
     /* The toolbar controls are ordinary buttons, a checkbox and three boxes: no global
        keyboard handler lives in this activity, and the one on the tab root steps aside
        while a box has the focus, so the offset and stride fields stay free to type in.
-       Ctrl+C/V follows later for copy/paste of a region and is active only while the
-       canvas has the focus. */
+       Ctrl+C/V copies and pastes a region of the sheet and is handled by that same root
+       handler, never by a listener on the document, so a field keeps its own clipboard
+       keystrokes. */
     grid: true,
     /* Where the sheet is read from, how many bits a pixel is and how far the next tile
        of the sheet sits. offsetText holds what is in the offset box, so the box never
@@ -340,6 +346,63 @@
   function pixelSpanForByte(format, index) {
     if (!K.core.byteToPixels || !K.core.tileFormat) return null;
     return K.core.byteToPixels(K.core.tileFormat(format), index, 8);
+  }
+
+  /* ---------- clipboard: a box of pixels, copied and pasted through setPixel ---------- */
+
+  /* The region this editor copies is one tile box of 8x8 pixels. There is no dragged box
+     to take a larger one from: the canvas names one selected tile and the Hex Editor names
+     one cursor, so the tile itself is the simplest box that is always there. The clipboard
+     is a structure in the store, not a text blob - { w, h, cols, pixels } with the pixels
+     in reading order and cols the length of a row - so the paste, the two toolbar buttons
+     and a later multi tile box all read one shape. */
+  /* Which tile a copy or a paste works on: the one named, else the tile the Hex Editor
+     cursor sits on (the two views point at one place), else the first tile of the visible
+     window, which is always drawn. */
+  function regionTileIndex(tileIndex) {
+    var named = tileIndex === null || tileIndex === undefined ? NaN : Number(tileIndex);
+    if (Number.isFinite(named) && named >= 0) return Math.floor(named);
+    var win = regionWindow();
+    var h = K.hex && K.hex.getState ? K.hex.getState() : null;
+    if (!win || !h) return 0;
+    var rel = Number(h.cursorOffset) - win.start;
+    if (!Number.isFinite(rel) || rel < 0 || rel >= _state.tiles * tilePitch()) return 0;
+    return Math.floor(rel / tilePitch());
+  }
+
+  /* A copy reads a tile into the clipboard and writes nothing: copying is not an edit, so
+     the patch layer and the loaded file stay exactly as they were. */
+  function copyRegion(tileIndex) {
+    var tile = regionTileIndex(tileIndex);
+    var px = readTile(tile);
+    if (!px) { _set({ status: 'Nothing to copy: open a tile region first.' }); return false; }
+    var pixels = [];
+    for (var y = 0; y < 8; y++) for (var x = 0; x < 8; x++) pixels.push(px[y][x]);
+    _set({
+      clipboard: { w: 8, h: 8, cols: 8, tile: tile, pixels: pixels },
+      status: 'Tile ' + tile + ' copied as an 8x8 region (' + pixels.length + ' pixels).'
+    });
+    return true;
+  }
+
+  /* The paste writes every pixel back through setPixel, the one path a byte takes, so the
+     pasted pixels become hex patches and take part in Undo, Clear and Export. A box wider
+     or taller than the tile it lands on is cut at the tile edge. */
+  function pasteRegion(tileIndex) {
+    var clip = _state.clipboard;
+    if (!clip || !clip.pixels || !clip.pixels.length) { _set({ status: 'Copy a tile first.' }); return false; }
+    var tile = regionTileIndex(tileIndex);
+    var w = Math.min(8, Number(clip.w) || 0);
+    var hh = Math.min(8, Number(clip.h) || 0);
+    var cols = Number(clip.cols) || w;
+    var wrote = 0;
+    for (var y = 0; y < hh; y++) {
+      for (var x = 0; x < w; x++) {
+        if (setPixel(tile, x, y, clip.pixels[y * cols + x])) wrote++;
+      }
+    }
+    _set({ status: 'Pasted the copied region into tile ' + tile + ': ' + wrote + ' pixel(s) changed.' });
+    return wrote > 0;
   }
 
   /* ---------- detection ---------- */
@@ -1542,7 +1605,6 @@
     function setMapCursor(v) { _set({ mapCursor: Math.max(-1, Number(v) || 0) }); }
     var dragRef = uR(null);
     var panRef = uR(null);
-    var clipRef = uR(null);
     var wrapRef = uR(null);
     var bodyRef = uR(null);
     var widthSt = uS(800); var width = widthSt[0];
@@ -1759,25 +1821,24 @@
       if (p) { selectTile(p.tile); pickColour(p.tile, p.x, p.y); }
     }
 
-    function copyTile() {
-      var px = selected >= 0 ? readTile(selected) : null;
-      if (!px) return;
-      clipRef.current = px;
-      _set({ status: 'Tile ' + selected + ' copied.' });
-    }
-    function pasteTile() {
-      var clip = clipRef.current;
-      if (!clip || selected < 0) { _set({ status: 'Copy a tile first.' }); return; }
-      for (var yy = 0; yy < 8; yy++) for (var xx = 0; xx < 8; xx++) setPixel(selected, xx, yy, clip[yy][xx]);
-    }
+    /* The Copy and Paste buttons in the toolbar and the Ctrl+C/V branch of onKey call
+       exactly these two functions. The tile selected on the canvas wins; with nothing
+       selected the module falls back to the tile the Hex Editor cursor sits on - the one
+       the canvas draws the cursor on - and then to the first tile of the window. */
+    function copyTile() { return copyRegion(selected >= 0 ? selected : null); }
+    function pasteTile() { return pasteRegion(selected >= 0 ? selected : null); }
 
 
     /* Typing in a box belongs to that box: every shortcut below is for the canvas, and
        without this the offset field would lose its A-F hex letters, its Backspace and
        its Ctrl+C/V to the tool keys. */
     function typingInField(target) {
-      var tag = target && target.tagName ? String(target.tagName).toUpperCase() : '';
-      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+      if (!target) return false;
+      var tag = target.tagName ? String(target.tagName).toUpperCase() : '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+      /* A rich text surface outside a form has no tag to name it, so the browser flag is
+         asked instead: typing in one belongs to it just as much. */
+      return target.isContentEditable === true;
     }
 
     /* The offset box: what was typed stays in the box (offsetText) and only text that
@@ -1817,6 +1878,16 @@
     function onKey(ev) {
       if (typingInField(ev.target)) return;
       var k = ev.key;
+      /* Copy and paste a region: Ctrl+C and Ctrl+V, or Cmd on a Mac. This root handler is
+         the only one the activity has - no listener is added to the document or to the
+         window - and the guard above keeps the keystroke inside a text field, where
+         Ctrl+C/V belongs to the field. It runs before the plain tool keys, because Ctrl+V
+         must paste and not pick the Select tool. */
+      if (ev.ctrlKey || ev.metaKey) {
+        var combo = String(k).toUpperCase();
+        if (combo === 'C') { copyTile(); ev.preventDefault(); return; }
+        if (combo === 'V') { pasteTile(); ev.preventDefault(); return; }
+      }
       if (/^[0-9]$/.test(k)) { _set({ colour: Number(k) }); return; }
       if (k === '[') { _set({ colour: (st.colour + 15) % 16 }); ev.preventDefault(); return; }
       if (k === ']') { _set({ colour: (st.colour + 1) % 16 }); ev.preventDefault(); return; }
@@ -1844,8 +1915,6 @@
       }
       if (k === 'Escape') { setSel(null); return; }
       if ((ev.ctrlKey || ev.metaKey) && upper === 'Z') { if (ev.shiftKey) K.hex.redo(); else K.hex.undo(); ev.preventDefault(); return; }
-      if ((ev.ctrlKey || ev.metaKey) && upper === 'C') { copyTile(); ev.preventDefault(); return; }
-      if ((ev.ctrlKey || ev.metaKey) && upper === 'V') { pasteTile(); ev.preventDefault(); return; }
       var step = 0, perRow = Math.max(1, Math.floor((width - 16) / (8 * st.zoom)));
       if (k === 'ArrowLeft') step = -1;
       else if (k === 'ArrowRight') step = 1;
@@ -1869,8 +1938,8 @@
     },
       /* Zoom, grid and the view label, the controls the canvas is read with. They are
          plain buttons and a checkbox, so nothing here takes a keystroke away from the
-         offset and stride inputs. Ctrl+C/V joins this row later for copy/paste of a
-         region and only while the canvas itself has the focus. */
+         offset and stride inputs. Copy and Paste sit in the tool row below for anyone who
+         does not use Ctrl+C/V, and both call the same two functions the shortcut does. */
       e('div', {
         style: { display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px', borderBottom: '1px solid var(--kt-widget-border-default)', flexWrap: 'wrap' }
       },
@@ -1934,8 +2003,16 @@
           }, t.label);
         }),
         e('span', { style: { opacity: 0.25 } }, '|'),
-        e('button', { type: 'button', className: TB + ' secondary', disabled: selected < 0, onClick: copyTile }, 'Copy'),
-        e('button', { type: 'button', className: TB + ' secondary', disabled: selected < 0, onClick: pasteTile }, 'Paste'),
+        e('button', {
+          type: 'button', className: TB + ' secondary', disabled: !win,
+          title: 'Copy the selected tile as an 8x8 region (Ctrl+C while the canvas has the focus)',
+          onClick: copyTile
+        }, 'Copy'),
+        e('button', {
+          type: 'button', className: TB + ' secondary', disabled: !win || !st.clipboard,
+          title: 'Paste the copied region into the selected tile (Ctrl+V while the canvas has the focus)',
+          onClick: pasteTile
+        }, 'Paste'),
         e('button', {
           type: 'button', className: TB + (st.inspector === false ? ' secondary' : ''),
           title: 'Show or hide the inspector: palette, paste box and the state of a compressed graphic',
@@ -2611,6 +2688,7 @@
     detect: detect, setPixel: setPixel, setRegion: function (o) { _set({ region: Number(o) }); },
     setFormat: function (f) { var format = String(f); _set(Object.assign({ format: format }, formatPatch(format))); }, colourAt: colourCss,
     setColour: function (v) { _set({ colour: Number(v) }); }, readTile: readTile,
+    copyRegion: copyRegion, pasteRegion: pasteRegion,
     regionWindow: regionWindow, tileAbsoluteOffset: tileAbsoluteOffset,
     loadPalette: loadPalette, readPaletteAt: readPaletteAt, findPalette: findPalette, paletteScore: paletteScore,
     writePaletteColour: writePaletteColour,
