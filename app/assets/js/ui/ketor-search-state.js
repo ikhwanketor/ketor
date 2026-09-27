@@ -903,6 +903,15 @@
       if (!byStart[s]) byStart[s] = en;
     });
 
+    /* Every scanned text once, in offset order, so a table's records can be walked with
+       one cursor instead of a search per record. */
+    var startsInOrder = [];
+    entries.forEach(function (en) {
+      var s = Number(en && en.startByte);
+      if (Number.isFinite(s) && byStart[s] === en) startsInOrder.push(s);
+    });
+    startsInOrder.sort(function (a, b) { return a - b; });
+
     var keep = [];
     var taken = Object.create(null);
     found.forEach(function (table) {
@@ -939,25 +948,72 @@
          and cannot be its text. */
       var targets = table.entries.map(Number).filter(Number.isFinite).sort(function (a, b) { return a - b; });
       var tableKeep = [];
+      var tableSamples = [];
+      /* The byte this table calls the end of a record - 0x0A in Castlevania's table, 0x00
+         when a table declares none. It is what bounds a record here. */
+      var endByte = 0x00;
+      (function () {
+        var td = _state.tableData || {};
+        var maps = [td.singleByte || {}, td.multiByte || {}];
+        for (var mi = 0; mi < maps.length; mi++) {
+          var keys = Object.keys(maps[mi]);
+          var done = false;
+          for (var ki = 0; ki < keys.length; ki++) {
+            var raw = maps[mi][keys[ki]];
+            var value = String(raw === undefined || raw === null ? '' : raw).toUpperCase();
+            if (value !== '[END]' && value !== '[NULL]') continue;
+            var hex = String(keys[ki]).replace(/\s+/g, '');
+            if (hex.length >= 2) { endByte = parseInt(hex.substring(0, 2), 16); done = true; break; }
+          }
+          if (done) break;
+        }
+      })();
+      var cursor = 0;   /* one walk per table: another table's records may sit anywhere */
       for (var ti = 0; ti < targets.length; ti++) {
         var base = targets[ti];
         var nextTarget = (ti + 1 < targets.length) ? targets[ti + 1] : base + 0x400;
-        var best = null;
-        for (var d = -1; d <= 4; d++) {
-          var hit = byStart[base + d];
-          if (!hit) continue;
-          var length = Number(hit.byteLength) || 0;
-          if (base + d + length > nextTarget) continue;
-          if (!best || length > (Number(best.byteLength) || 0)) best = hit;
+        /* A record runs from the address the table names to its own end code - not to the
+           next address the table names, which is what a walk to the next entry did when it
+           pulled the whole image into the list. 0x100 is the outer bound for a table that
+           declares no end code at all. */
+        var spanEnd = Math.min(nextTarget, base + 0x100);
+        /* The record ends at its end code, but the search for that code starts where the
+           record's text starts: a Kingdom Hearts record opens with a header that holds a
+           00 byte (07 00), and stopping there ended the span before the text began, which
+           left the records empty. */
+        var firstTextStart = -1;
+        while (cursor + (firstTextStart < 0 ? 0 : 0) < startsInOrder.length && firstTextStart < 0) {
+          if (startsInOrder[cursor] >= base) firstTextStart = startsInOrder[cursor];
+          else cursor++;
         }
-        if (best) tableKeep.push(best);
+        if (firstTextStart >= 0 && firstTextStart < spanEnd) {
+          for (var ep = firstTextStart; ep < spanEnd; ep++) {
+            if (_state.romBytes && (_state.romBytes[ep] & 0xFF) === endByte) { spanEnd = ep + 1; break; }
+          }
+        }
+        /* Every text inside the record is kept. The user's Aria of Sorrow intro is one
+           record holding several lines, and keeping only the text nearest the address
+           indexed the first line and dropped the rest - their report, in one line. */
+        while (cursor < startsInOrder.length && startsInOrder[cursor] < base) cursor++;
+        var insideCount = 0;
+        while (cursor < startsInOrder.length && startsInOrder[cursor] < spanEnd) {
+          var inside = byStart[startsInOrder[cursor]];
+          cursor++;
+          if (!inside) continue;
+          tableKeep.push(inside);
+          /* The first text of a record is what the table is judged by; the lines after it
+             belong to the same record and stay whether or not they read like a sentence on
+             their own. */
+          if (insideCount === 0) tableSamples.push(inside);
+          insideCount++;
+        }
       }
       /* A table is only as good as the records it names. A run of words that happens to
          point into font or graphic data produces records like 'Hh@x' and 'I  "P', and
          those are not messages; what separates the two is that most records of a real
          table read like text. */
-      var readable = tableKeep.filter(readsLikeText).length;
-      if (tableKeep.length === 0 || readable / tableKeep.length < 0.6) { droppedUnreadable++; return; }
+      var readable = tableSamples.filter(readsLikeText).length;
+      if (tableSamples.length === 0 || readable / tableSamples.length < 0.6) { droppedUnreadable++; return; }
       tableKeep.forEach(function (en) {
         var at = Number(en.startByte);
         if (!taken[at]) { taken[at] = true; keep.push(en); }
