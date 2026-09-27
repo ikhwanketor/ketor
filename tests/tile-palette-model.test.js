@@ -109,13 +109,27 @@ function jsFilesUnder(dir) {
   return out;
 }
 
-/* The palette sentence the inspector draws, and the swatch strip the tab draws. React is a
-   stub in this harness, so a component can be called with its props directly, the way
+/* The palette sentence the rail draws, and the swatch strip the tab draws. React is a stub
+   in this harness, so a component can be called with its props directly, the way
    tile-palette256 reads the strip. treeStrings() hands back every label, title and child the
-   rendered tree holds, in tree order. */
+   rendered tree holds, in tree order; the sentence sits inside a box of the rail the tab
+   draws itself (batch 174), so the components on the way to it are drawn first. */
+function drawnStrings(env, node) {
+  const draw = function (n) {
+    if (Array.isArray(n)) return n.map(draw);
+    if (!n || typeof n !== 'object' || !n.props) return n;
+    if (typeof n.type === 'function') return draw(n.type(n.props));
+    const props = Object.assign({}, n.props);
+    if (props.children !== undefined) props.children = draw(props.children);
+    return { type: n.type, props: props };
+  };
+  return env.treeStrings(draw(node));
+}
 function paletteLabel(env) {
-  const strings = env.treeStrings(env.K.ui.rightPanelProviders.tile({ activity: 'tile' }));
-  return strings.filter(function (s) { return s.indexOf('colours') >= 0 || s.indexOf('shades') >= 0; })[0] || '';
+  const strings = drawnStrings(env, env.K.ui.tabProviders.tile());
+  /* The sentence starts with the count the model declares; the toolbar of the tab has
+     tooltips that mention colours too, so the shape of the label is what is matched here. */
+  return strings.filter(function (s) { return /^\d+ (colours|shades)/.test(s); })[0] || '';
 }
 
 function swatchStrip(env) {

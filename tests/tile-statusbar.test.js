@@ -1,5 +1,5 @@
-/* The tile status bar, the right hand panel the workbench hosts for the activity, and
-   the palette import that must not write to the offset of an older palette.
+/* The tile status bar, the rail the tab draws on its own right, and the palette import that
+   must not write to the offset of an older palette.
 
    The status line is one string: K.tile.statusLine() reads the window base, the format,
    the depth and the stride, the tiles, the patches that land inside that window, the
@@ -65,6 +65,20 @@ function press(handler, key, target) {
   return ev;
 }
 
+/* Every string the tree says, with each component called with its props the way React would:
+   the rail and its boxes are components of their own, and treeStrings() alone stops at them. */
+function drawnStrings(env, node) {
+  const draw = function (n) {
+    if (Array.isArray(n)) return n.map(draw);
+    if (!n || typeof n !== 'object' || !n.props) return n;
+    if (typeof n.type === 'function') return draw(n.type(n.props));
+    const props = Object.assign({}, n.props);
+    if (props.children !== undefined) props.children = draw(props.children);
+    return { type: n.type, props: props };
+  };
+  return env.treeStrings(draw(node));
+}
+
 suite.test('the status line names the window, the format, the step, the tiles and the patches', function (t) {
   const env = openSheet();
   const K = env.K;
@@ -98,7 +112,7 @@ suite.test('the patch count follows the window and the picked tile and pixel are
   t.assert(picked.indexOf('sel 5@2,3') >= 0, 'and the pixel box that is selected, got: ' + picked);
 });
 
-suite.test('the tab renders the status line and leaves the inspector to the right panel', function (t) {
+suite.test('the tab renders the status line and draws the inspector in its own rail', function (t) {
   const env = openSheet();
   const K = env.K;
 
@@ -108,14 +122,16 @@ suite.test('the tab renders the status line and leaves the inspector to the righ
   ['0x000100', 'gba-4bpp', 'tiles ', 'patch '].forEach(function (piece) {
     t.assert(text.indexOf(piece) >= 0, 'the rendered tab should hold "' + piece + '"');
   });
-  t.assertEqual(text.indexOf('Paste hex from an emulator'), -1,
-    'the tab must not draw the inspector inline as well: it belongs to the right panel');
 
-  t.assertEqual(typeof K.ui.rightPanelProviders.tile, 'function', 'the tile activity should register a right panel provider');
-  t.assert(K.ui.rightPanelProviders.tile, 'the registry should hold the component');
-  const panelText = env.treeStrings(K.ui.rightPanelProviders.tile({ activity: 'tile' })).join('\n');
-  t.assert(panelText.indexOf('Paste hex from an emulator') >= 0, 'the provider is where the inspector renders, got: ' + panelText.slice(0, 200));
-  t.assert(panelText.indexOf('Palette') >= 0, 'with the palette controls on it');
+  /* The inspector is the rail the tab draws itself (batch 174): the activity registers no
+     right hand panel any more, so the rail is the only place these controls are drawn. They
+     sit one component deeper than treeStrings() reaches, hence drawnStrings(). */
+  t.assertEqual(K.ui.rightPanelProviders.tile, undefined,
+    'the tile activity must not register a right panel any more: the inspector is in the tab');
+  const railText = drawnStrings(env, K.ui.tabProviders.tile()).join('\n');
+  t.assert(railText.indexOf('Paste hex from an emulator') >= 0,
+    'the tab draws the paste box itself, got: ' + railText.slice(0, 300));
+  t.assert(railText.indexOf('Palette') >= 0, 'with the palette controls on it');
 });
 
 suite.test('Ctrl+C in a text field keeps its own copy and leaves the tab clipboard alone', function (t) {

@@ -33,19 +33,75 @@
   var uS = R.useState;
   var uE = R.useEffect;
   var uR = R.useRef;
-  /* One group of the inspector, the shape every other activity panel is built from
-     (ketor-translate-sidebar.js, ketor-hex-sidebar.js, ketor-table-sidebar.js,
-     ketor-search-sidebar.js): a .kt-sidebar-section with a header and a padded body, so the
-     right hand panel of this activity reads like the sidebar of the others. */
+  /* One box of the rail this tab draws on its right, the shape the other activities build
+     their right hand column from (KtBox in ketor-table-state.js, drawn by ketor-hex-tab.js,
+     ketor-search-tab.js and ketor-table-tab.js): the .kt-ui-box frame, an uppercase title and
+     a chevron that opens and closes the body.
+     The markup is written here rather than taken from K.ui.KtBox because this module is
+     loaded before ketor-table-state.js (workbench-preview.html: this file on line 261, that
+     one on 264), so K.ui.KtBox does not exist yet while this module runs; the class names,
+     the sizes and the colours are the ones KtBox uses.
+     A closed box keeps its body in the tree, hidden with display:none. KtBox drops a closed
+     body from the tree instead, and the test harness renders a collapsed KtBox with an empty
+     state, so a box drawn that way could not be read back at all - keeping the body is also
+     what lets the browser inspector show a group that is only one click away.
+     props.collapsed === true starts the box closed: the rail opens with the two groups a
+     drawing session always needs and keeps the occasional ones - the map scan, the screen
+     hunt, the palette hunt, the compressed graphic and the emulator paste - behind a click
+     (batch 174). */
   function Section(props) {
-    return e('div', { className: 'kt-sidebar-section' },
-      e('div', { className: 'kt-sidebar-section-header' }, props.title),
+    var collapsedSt = uS(props.collapsed === true);
+    var collapsed = collapsedSt[0];
+    var setCollapsed = collapsedSt[1];
+    return e('div', {
+      className: 'kt-ui-box' + (collapsed ? ' kt-ui-box-collapsed' : ''),
+      /* flex 0 0 auto: a box keeps its own height and the rail scrolls past it, instead of
+         the boxes being squashed into the height of the tab (the hex tab sizes its Layers
+         box the same way). */
+      style: Object.assign({
+        flex: '0 0 auto',
+        display: 'flex', flexDirection: 'column', minHeight: 0,
+        border: '1px solid var(--kt-widget-border-default)',
+        borderRadius: 3, background: 'var(--kt-sidebar-bg)',
+        overflow: 'hidden'
+      }, props.style || {})
+    },
       e('div', {
-        className: 'kt-sidebar-section-body',
-        style: Object.assign({ padding: '6px 12px 12px 12px' }, props.bodyStyle || {})
+        style: {
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '6px 8px', flex: '0 0 auto',
+          borderBottom: collapsed ? 'none' : '1px solid var(--kt-widget-border-default)',
+          background: 'var(--kt-sidebar-bg)'
+        }
       },
-        props.children
-      )
+        e('button', {
+          type: 'button',
+          onClick: function () { setCollapsed(!collapsed); },
+          title: (collapsed ? 'Show ' : 'Hide ') + String(props.title || ''),
+          'aria-expanded': collapsed ? 'false' : 'true',
+          style: {
+            width: 18, height: 18, padding: 0,
+            background: 'transparent', border: 'none',
+            color: 'var(--kt-sidebar-fg)', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            borderRadius: 2
+          }
+        }, (K.ui && typeof K.ui.icon === 'function')
+          ? K.ui.icon(collapsed ? 'chevron-right' : 'chevron-down', { size: 12 })
+          : (collapsed ? '\u25B8' : '\u25BE')),
+        e('div', {
+          style: {
+            flex: 1, minWidth: 0, fontSize: 11,
+            textTransform: 'uppercase', letterSpacing: '0.05em',
+            opacity: 0.7, whiteSpace: 'nowrap',
+            overflow: 'hidden', textOverflow: 'ellipsis'
+          }
+        }, props.title || '')
+      ),
+      e('div', {
+        className: 'kt-ui-box-body',
+        style: Object.assign({ display: collapsed ? 'none' : 'block', padding: 8, minHeight: 0 }, props.bodyStyle || {})
+      }, props.children)
     );
   }
   var MONO = 'var(--kt-font-mono)';
@@ -2473,8 +2529,8 @@
     var tileSt = uS(-1); var selected = tileSt[0]; var setSelected = tileSt[1];
     var selSt = uS(null); var sel = selSt[0]; var setSel = selSt[1];
 
-    // the map cursor is in the store, not in this component: the inspector writes text
-    // at that cell, so both have to see the same one
+    // the map cursor is in the store, not in this component: the rail writes text at that
+    // cell, so both have to see the same one
     var mapCursor = Number.isFinite(Number(st.mapCursor)) ? Number(st.mapCursor) : -1;
     function setMapCursor(v) { _set({ mapCursor: Math.max(-1, Number(v) || 0) }); }
     var dragRef = uR(null);
@@ -2482,12 +2538,15 @@
        one tile it started on, while a range has to follow the pointer across tiles. */
     var rangeRef = uR(null);
     var panRef = uR(null);
-    var wrapRef = uR(null);
+    /* The column the sheet is drawn in: measured for the row width and scrolled by the map
+       drag. Measuring this column rather than the tab root is what keeps the canvas, the
+       click mapping and the Select tool counting the same row now that the rail takes 234
+       pixels on the right (batch 174). */
     var bodyRef = uR(null);
     var widthSt = uS(800); var width = widthSt[0];
 
     uE(function () {
-      function measure() { if (wrapRef.current) widthSt[1](wrapRef.current.clientWidth || 800); }
+      function measure() { if (bodyRef.current) widthSt[1](bodyRef.current.clientWidth || 800); }
       measure();
       global.addEventListener('resize', measure);
       return function () { return global.removeEventListener('resize', measure); };
@@ -2859,7 +2918,7 @@
     /* One look for the three boxes, so the row reads as one set of controls. */
     var boxStyle = { fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' };
     return e('div', {
-      ref: wrapRef, tabIndex: 0, onKeyDown: onKey,
+      tabIndex: 0, onKeyDown: onKey,
       style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, outline: 'none' }
     },
       /* Zoom, grid and the view label, the controls the canvas is read with. They are
@@ -3002,10 +3061,25 @@
           width: Math.max(200, width - 16),
           onClick: onDown, onMove: onMove, onUp: onUp, onContext: onContext
         }) : e('div', { style: { opacity: 0.7 } }, 'No region selected. Detect tiles or type a region offset in the sidebar.')
+      ),
+      /* The rail of this activity, drawn by the tab: the same right hand column the hex,
+         table and search tabs draw inside themselves (ketor-hex-tab.js: a fixed 234 pixels,
+         a left border and the sidebar background), holding the boxes of the inspector. The
+         tab is the only place the inspector is drawn, so the palette and the paste box
+         cannot show up twice. The rail scrolls, because this activity has more boxes than
+         the hex editor has. */
+      e('div', {
+        style: {
+          flex: '0 0 234px', minWidth: 0,
+          display: 'flex', flexDirection: 'column',
+          padding: 8,
+          borderLeft: '1px solid var(--kt-widget-border-default)',
+          background: 'var(--kt-sidebar-bg)',
+          overflow: 'auto'
+        }
+      },
+        e(TileInspector, null)
       )
-      /* The inspector is not drawn here: it is the right hand panel of this activity,
-         registered at the end of the file and rendered by the workbench beside the work.
-         Drawing it in the tab as well would show the palette and the paste box twice. */
       ),
       e('div', { style: { flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '5px 10px', borderTop: '1px solid var(--kt-widget-border-default)', background: 'var(--kt-statusbar-bg)', color: 'var(--kt-statusbar-fg)', fontSize: 11 } },
         e('span', null, 'Colour'),
@@ -3036,13 +3110,11 @@
     );
   }
 
-  /* The inspector holds what supports the drawing but is not needed while drawing:
-     the palette, the paste box and the state of a compressed graphic. It sits to the
-     right of the canvas so the left sidebar stays short enough to scan. */
-  /* The map controls, moved out of the left sidebar. Setting a screen base and
-     detecting a map are occasional things: they belong beside the canvas, not in the
-     column you scan while drawing. */
-  function MapInspector() {
+  /* The map and the text tool, the two steps a screen edit starts with. The map group - the
+     scan for a screen base and the candidates it finds - starts closed, because finding the
+     screen is a one off step; the text group stays open, because writing on the screen is
+     what the beginner came for. */
+  function MapTextInspector() {
     var st = useTile();
     var hex = K.hex ? K.hex.useHex() : null;
     var mapScreenSt = uS(st.mapScreenBase === null ? '' : hex6(st.mapScreenBase));
@@ -3136,7 +3208,7 @@
     var rowStyle = { display: 'flex', gap: 4, alignItems: 'center' };
     var inputStyle = { flex: '1 1 auto', fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' };
     return e('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
-      e(Section, { title: 'Map' },
+      e(Section, { title: 'Map', collapsed: true },
         e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'One entry per cell: tile number in bits 0-9, flips in 10-11, palette bank in 12-15. Click places the current tile, Ctrl+click picks it, Alt+click swaps it, Shift+click fills, middle drag scrolls.'),
         e('button', {
           type: 'button', className: 'kt-btn',
@@ -3229,64 +3301,6 @@
         )
       ),
 
-      e(Section, { title: 'Screens' },
-        e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'Pairs each map candidate with the character blocks the detection named, and keeps the ones that actually draw a full screen.'),
-        e('button', {
-          type: 'button', className: 'kt-btn',
-          disabled: !hex || !hex.romBytes,
-          onClick: findScreens,
-          title: 'A map can only name the tiles of one character block, so a pairing that leaves the screen full of holes is wrong'
-        }, 'Find screens'),
-        st.screens && st.screens.length ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-          st.screens.slice(0, 6).map(function (s) {
-            return e('button', {
-              key: 'scr' + s.mapOffset + '-' + s.charBase,
-              type: 'button',
-              className: 'kt-btn small' + (st.mapScreenBase === s.mapOffset && charBase() === s.charBase ? '' : ' secondary'),
-              style: { fontFamily: MONO, justifyContent: 'flex-start' },
-              title: 'Load this map and this character block into the map view',
-              onClick: function () {
-                _set({
-                  mapScreenBase: s.mapOffset, mapCharBase: s.charBase, view: 'map',
-                  status: 'Screen: map 0x' + hex6(s.mapOffset) + ' drawn with character block 0x' + hex6(s.charBase)
-                    + ' (' + Math.round(s.coverage * 100) + '% of cells, ' + s.distinct + ' tiles).'
-                });
-              }
-            }, 'map ' + hex6(s.mapOffset) + ' + chr ' + hex6(s.charBase) + '  ' + Math.round(s.coverage * 100) + '%  ' + s.distinct + ' tiles');
-          })
-        ) : null
-      ),
-
-      e(Section, { title: 'Palettes for this screen' },
-        e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'A palette cannot be worked out from a ROM alone: hundreds of thousands of offsets near a character block score the same. These are the ones the ROM points at and the ones sitting beside the tiles, so click through them with the screen in front of you. The one that looks right is remembered with the screen.'),
-        e('button', {
-          type: 'button', className: 'kt-btn',
-          disabled: !hex || !hex.romBytes || !K.core.paletteCandidates,
-          onClick: function () {
-            var res = K.core.paletteCandidates(romBytes(), {
-              near: charBase(), span: 0x40000, referenced: true, system: consoleProfile().id, max: 10
-            });
-            _set({
-              palettes: res.top,
-              status: 'Palettes: ' + res.pointed + ' the ROM points at, ' + res.total + ' candidate(s) in total, showing ' + res.top.length + '.'
-            });
-          },
-          title: 'The ROM is asked which palettes it names, and the tiles are asked which palettes sit beside them'
-        }, 'Find palettes'),
-        (st.palettes && st.palettes.length) ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
-          st.palettes.map(function (p) {
-            return e('button', {
-              key: 'pal' + p.offset,
-              type: 'button',
-              className: 'kt-btn small' + (st.paletteOffset === p.offset ? '' : ' secondary'),
-              style: { fontFamily: MONO, justifyContent: 'flex-start' },
-              title: 'Load these 16 colours',
-              onClick: function () { loadPalette(p.offset, ''); }
-            }, '0x' + hex6(p.offset) + '  ' + p.score.toFixed(2) + '  ' + p.reason);
-          })
-        ) : null
-      ),
-
       e(Section, { title: 'Write text on this screen' },
         e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'The table gives the code of each character and the font base gives the tile that holds code 0, so this writes the tile numbers a screen needs. A newline starts the next row.'),
         e('textarea', {
@@ -3345,6 +3359,84 @@
     );
   }
 
+  /* The two groups a screen hunt ends with: the map and character pairings the detection
+     found, and the palettes it proposes for the screen that is open. Both belong to the
+     second half of the workflow, so both start closed. */
+  function ScreenInspector() {
+    var st = useTile();
+    var hex = K.hex ? K.hex.useHex() : null;
+    return e('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+      e(Section, { title: 'Screens', collapsed: true },
+        e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'Pairs each map candidate with the character blocks the detection named, and keeps the ones that actually draw a full screen.'),
+        e('button', {
+          type: 'button', className: 'kt-btn',
+          disabled: !hex || !hex.romBytes,
+          onClick: findScreens,
+          title: 'A map can only name the tiles of one character block, so a pairing that leaves the screen full of holes is wrong'
+        }, 'Find screens'),
+        st.screens && st.screens.length ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+          st.screens.slice(0, 6).map(function (s) {
+            return e('button', {
+              key: 'scr' + s.mapOffset + '-' + s.charBase,
+              type: 'button',
+              className: 'kt-btn small' + (st.mapScreenBase === s.mapOffset && charBase() === s.charBase ? '' : ' secondary'),
+              style: { fontFamily: MONO, justifyContent: 'flex-start' },
+              title: 'Load this map and this character block into the map view',
+              onClick: function () {
+                _set({
+                  mapScreenBase: s.mapOffset, mapCharBase: s.charBase, view: 'map',
+                  status: 'Screen: map 0x' + hex6(s.mapOffset) + ' drawn with character block 0x' + hex6(s.charBase)
+                    + ' (' + Math.round(s.coverage * 100) + '% of cells, ' + s.distinct + ' tiles).'
+                });
+              }
+            }, 'map ' + hex6(s.mapOffset) + ' + chr ' + hex6(s.charBase) + '  ' + Math.round(s.coverage * 100) + '%  ' + s.distinct + ' tiles');
+          })
+        ) : null
+      ),
+
+      e(Section, { title: 'Palettes for this screen', collapsed: true },
+        e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, 'A palette cannot be worked out from a ROM alone: hundreds of thousands of offsets near a character block score the same. These are the ones the ROM points at and the ones sitting beside the tiles, so click through them with the screen in front of you. The one that looks right is remembered with the screen.'),
+        e('button', {
+          type: 'button', className: 'kt-btn',
+          disabled: !hex || !hex.romBytes || !K.core.paletteCandidates,
+          onClick: function () {
+            var res = K.core.paletteCandidates(romBytes(), {
+              near: charBase(), span: 0x40000, referenced: true, system: consoleProfile().id, max: 10
+            });
+            _set({
+              palettes: res.top,
+              status: 'Palettes: ' + res.pointed + ' the ROM points at, ' + res.total + ' candidate(s) in total, showing ' + res.top.length + '.'
+            });
+          },
+          title: 'The ROM is asked which palettes it names, and the tiles are asked which palettes sit beside them'
+        }, 'Find palettes'),
+        (st.palettes && st.palettes.length) ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
+          st.palettes.map(function (p) {
+            return e('button', {
+              key: 'pal' + p.offset,
+              type: 'button',
+              className: 'kt-btn small' + (st.paletteOffset === p.offset ? '' : ' secondary'),
+              style: { fontFamily: MONO, justifyContent: 'flex-start' },
+              title: 'Load these 16 colours',
+              onClick: function () { loadPalette(p.offset, ''); }
+            }, '0x' + hex6(p.offset) + '  ' + p.score.toFixed(2) + '  ' + p.reason);
+          })
+        ) : null
+      )
+    );
+  }
+
+  /* The rail: what supports the drawing but is not needed while drawing, in the order a
+     session uses it - the map and the text tool, the palette, then the screen hunt, the
+     compressed graphic and the emulator paste. It is the same right hand column the hex,
+     table and search tabs draw inside themselves (ketor-hex-tab.js: flex 0 0 234px, a left
+     border and the sidebar background), and this tab draws it, so the workbench registers no
+     right hand panel for the tile activity any more and a second column cannot appear.
+     Each group is a .kt-ui-box. The two a drawing session always needs - Palette and Write
+     text on this screen - are open; Map, Screens, Palettes for this screen, Compressed
+     graphic and Paste hex from an emulator start closed and open with one click on their
+     chevron. Every control, handler, tooltip, placeholder and disabled state of the old
+     inspector is kept: only the order and the folding are new (batch 174). */
   function TileInspector() {
     var st = useTile();
     var hex = K.hex ? K.hex.useHex() : null;
@@ -3388,24 +3480,8 @@
 
     var rowStyle = { display: 'flex', gap: 4, alignItems: 'center' };
     var inputStyle = { flex: '1 1 auto', fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' };
-    return e('div', {
-      /* The right panel host (.kt-right-panel-body) brings the column, its border and its
-         background: the inspector fills it with one Section per group, and each section
-         brings the padding and the scrolling a sidebar section has. */
-      style: { flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }
-    },
-      st.graphicSource ? e(Section, { title: 'Compressed graphic' },
-          e('div', { style: { fontFamily: MONO } }, st.graphicSource.label + ' at 0x' + hex6(st.graphicSource.offset)),
-          e('div', { style: { opacity: 0.7 } }, st.graphicSource.size + ' bytes decompressed'
-            + (st.graphicSource.dataOffset ? ', tiles start ' + st.graphicSource.dataOffset + ' byte(s) in' : '') + '.'),
-          e('div', { style: { opacity: 0.7 } }, st.graphicSource.compressedSize
-            ? (st.graphicSource.compressedSize + ' of ' + st.graphicSource.budget + ' byte(s) used' + (st.graphicSource.dirty ? ', waiting to write back' : ', written'))
-            : 'not written back yet'),
-          e('div', { style: { display: 'flex', gap: 4 } },
-            e('button', { type: 'button', className: 'kt-btn small', onClick: function () { writeBackCompressed(); } }, 'Write back'),
-            e('button', { type: 'button', className: 'kt-btn small secondary', onClick: clearSource }, 'Read ROM')
-          )
-        ) : null,
+    return e('div', { style: { display: 'flex', flexDirection: 'column', gap: 8 } },
+      e(MapTextInspector, null),
 
       e(Section, { title: 'Palette' },
         e('div', { style: { opacity: 0.7, lineHeight: 1.4 } }, paletteModelText()),
@@ -3443,7 +3519,22 @@
         }, 'Colour ' + st.colour) : null
       ),
 
-      e(Section, { title: 'Paste hex from an emulator' },
+      e(ScreenInspector, null),
+
+      st.graphicSource ? e(Section, { title: 'Compressed graphic', collapsed: true },
+          e('div', { style: { fontFamily: MONO } }, st.graphicSource.label + ' at 0x' + hex6(st.graphicSource.offset)),
+          e('div', { style: { opacity: 0.7 } }, st.graphicSource.size + ' bytes decompressed'
+            + (st.graphicSource.dataOffset ? ', tiles start ' + st.graphicSource.dataOffset + ' byte(s) in' : '') + '.'),
+          e('div', { style: { opacity: 0.7 } }, st.graphicSource.compressedSize
+            ? (st.graphicSource.compressedSize + ' of ' + st.graphicSource.budget + ' byte(s) used' + (st.graphicSource.dirty ? ', waiting to write back' : ', written'))
+            : 'not written back yet'),
+          e('div', { style: { display: 'flex', gap: 4 } },
+            e('button', { type: 'button', className: 'kt-btn small', onClick: function () { writeBackCompressed(); } }, 'Write back'),
+            e('button', { type: 'button', className: 'kt-btn small secondary', onClick: clearSource }, 'Read ROM')
+          )
+        ) : null,
+
+      e(Section, { title: 'Paste hex from an emulator', collapsed: true },
         e('textarea', {
           value: pasteSt[0],
           onChange: function (ev) { pasteSt[1](ev.target.value); },
@@ -3461,8 +3552,7 @@
           e('button', { type: 'button', className: 'kt-btn small secondary', onClick: copyHexText }, 'Copy tile 0'),
           e('button', { type: 'button', className: 'kt-btn small secondary', onClick: function () { pasteSt[1](''); } }, 'Clear')
         )
-      ),
-      e(MapInspector, null)
+      )
     );
   }
 
@@ -3553,7 +3643,7 @@
         }),
         e('button', { type: 'button', className: 'kt-btn small', onClick: commitRegion }, 'Go')
       ),
-      e('div', { style: { opacity: 0.7, lineHeight: 1.45 } }, 'Palette, map, text and hex controls live in the inspector on the right of the canvas.')
+      e('div', { style: { opacity: 0.7, lineHeight: 1.45 } }, 'Palette, map, text and hex controls live in the boxes on the right of the canvas.')
     );
   }
 
@@ -3602,12 +3692,11 @@
 
   K.ui.registerTabProvider('tile', TileTab);
   K.ui.registerSidebarProvider('tile', TileSidebar);
-  /* The inspector is this activity's right hand panel. The workbench asks for a provider
-     per activity and renders it in its own column beside the work (ketor-workbench.js,
-     RightPanelWrapper: the panel is open by default, drags by its handle and collapses to
-     a strip), so the tab does not draw the inspector inline any more - one component, one
-     place, and the palette and paste box cannot show up twice. */
-  K.ui.registerRightPanelProvider('tile', TileInspector, { title: 'Tile inspector' });
+  /* No right hand panel is registered for this activity (batch 174): the inspector is the
+     rail TileTab draws inside the tab, the way the hex, table and search tabs draw theirs.
+     ketor-workbench.js renders no panel and no show button for an activity without a
+     provider (--kt-rightpanel-width becomes 0px), so removing the registration cannot leave
+     an empty fourth column behind. */
   K.tile = {
     getState: getState, subscribe: subscribe, useTile: useTile,
     detect: detect, setPixel: setPixel, setRegion: function (o) { _set({ region: Number(o) }); },
