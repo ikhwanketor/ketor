@@ -153,6 +153,7 @@
           e('input', {
             type: 'text',
             className: 'kt-input',
+            title: 'Type an offset you already know, then Enter or Go jumps the cursor there; Search is for bytes you have to hunt for',
             placeholder: gotoBase === 'dec' ? '4096' : '0x1000',
             value: gotoValue,
             onChange: function (ev) { setGotoValue(ev.target.value); },
@@ -162,6 +163,7 @@
           }),
           e('select', {
             className: 'kt-select',
+            title: 'Chooses how the typed offset is read: Hex for 0x1A2B3C, Dec for a plain decimal number',
             value: gotoBase,
             onChange: function (ev) { setGotoBase(ev.target.value); },
             style: { width: 62, fontSize: 11 },
@@ -173,6 +175,7 @@
         ),
         e('button', {
           type: 'button', className: 'kt-btn small',
+          title: 'Jump to the typed offset and flash it in the grid; needs a ROM and a valid address',
           style: { width: '100%', marginTop: 6 },
           onClick: onGoto,
           disabled: !hasRom
@@ -182,6 +185,7 @@
       e(Section, { title: 'Search' },
         e('select', {
           className: 'kt-select',
+          title: 'What the search box looks for: raw hex bytes, or text encoded with the applied table that Text mode needs',
           value: t.searchMode,
           onChange: function (ev) { K.hex.setSearchMode(ev.target.value); },
           style: { width: '100%', fontSize: 11, marginBottom: 6 },
@@ -193,6 +197,7 @@
         e('input', {
           type: 'text',
           className: 'kt-input',
+          title: 'The bytes or the text to look for; Enter runs the search across the whole ROM',
           placeholder: t.searchMode === 'text' ? 'PRESS START' : '4E 45 53',
           value: t.searchQuery,
           onChange: function (ev) { K.hex.setSearchQuery(ev.target.value); },
@@ -206,6 +211,7 @@
         }),
         e('button', {
           type: 'button', className: 'kt-btn small',
+          title: 'Scan a loaded ROM for every match and jump to the first; Goto is for offsets you already know',
           style: { width: '100%' },
           onClick: onSearch,
           disabled: !hasRom || !String(t.searchQuery || '').trim()
@@ -218,11 +224,13 @@
           e('button', {
             type: 'button', className: 'kt-btn small',
             style: { flex: 1 },
+            title: 'Step to the previous match, wrapping from the first hit round to the last',
             onClick: onPrev, disabled: !resultCount
           }, 'Prev'),
           e('button', {
             type: 'button', className: 'kt-btn small',
             style: { flex: 1 },
+            title: 'Step to the next match, wrapping from the last hit round to the first',
             onClick: onNext, disabled: !resultCount
           }, 'Next')
         ),
@@ -256,6 +264,7 @@
         e('input', {
           type: 'text',
           className: 'kt-input',
+          title: 'Optional name to store with the bookmark; leave it empty and the offset itself becomes the label',
           placeholder: 'Label (optional)',
           value: bookmarkLabel,
           onChange: function (ev) { setBookmarkLabel(ev.target.value); },
@@ -266,6 +275,7 @@
         e('button', {
           type: 'button', className: 'kt-btn small',
           style: { width: '100%' },
+          title: 'Save the byte under the cursor in the list below so you can jump back to it later',
           onClick: onAddBookmark,
           disabled: !hasRom
         }, 'Add Bookmark at Cursor'),
@@ -372,6 +382,7 @@
 
         (t.bookmarks || []).length > 0 ? e('button', {
           type: 'button', className: 'kt-btn small',
+          title: 'Remove every bookmark on this ROM at once; a list you built up is lost and cannot be brought back',
           style: { width: '100%', marginTop: 6 },
           onClick: function () { K.hex.clearBookmarks(); }
         }, 'Clear Bookmarks') : null

@@ -291,12 +291,18 @@
 
   function LayerLegend(props) {
     var items = [
-      { key: 'sections', label: 'Section (gutter)', bg: 'rgba(86,156,214,0.45)' },
-      { key: 'changed', label: 'Changed byte', bg: C.changedBg },
-      { key: 'groups', label: 'Group text', bg: C.groupBg },
-      { key: 'controlCodes', label: 'Control code', bg: C.controlBg },
-      { key: 'bookmarks', label: 'Bookmark', bg: C.bookmarkBg },
-      { key: 'searchHits', label: 'Search hit', bg: C.hitBg }
+      { key: 'sections', label: 'Section (gutter)', bg: 'rgba(86,156,214,0.45)',
+        tip: 'Paint the offset gutter per ROM section, alternating the tint so a boundary is easy to spot while scrolling' },
+      { key: 'changed', label: 'Changed byte', bg: C.changedBg,
+        tip: 'Tint bytes this project has edited, so your changes stand out from the rest of the ROM' },
+      { key: 'groups', label: 'Group text', bg: C.groupBg,
+        tip: 'Tint the byte range of every extracted text group, so you can see what a translation already covers' },
+      { key: 'controlCodes', label: 'Control code', bg: C.controlBg,
+        tip: 'Tint bytes the table reads as control codes, so line breaks and tags do not look like plain text' },
+      { key: 'bookmarks', label: 'Bookmark', bg: C.bookmarkBg,
+        tip: 'Tint bookmarked bytes and draw the bookmark colour as a rule so saved offsets stand out' },
+      { key: 'searchHits', label: 'Search hit', bg: C.hitBg,
+        tip: 'Tint every match of the last search, with the current match painted stronger than the rest' }
     ];
 
     return e('div', null,
@@ -311,6 +317,7 @@
           },
             e('input', {
               type: 'checkbox',
+              title: it.tip,
               checked: props.layers[it.key] === true,
               onChange: function () { props.onToggle(it.key); }
             }),
@@ -851,6 +858,7 @@
             'Bytes/row',
             e('select', {
               className: 'kt-select',
+              title: 'How many bytes share one row of the grid; 16 lines up with most tables and is the default',
               value: perRow,
               onChange: function (ev) { K.hex.setBytesPerRow(parseInt(ev.target.value, 10)); },
               style: { width: 58, fontSize: 11 }
@@ -868,6 +876,7 @@
             'View',
             e('select', {
               className: 'kt-select',
+              title: 'Show the ASCII column beside the hex bytes, or hex only for a denser grid when the ROM has no text',
               value: t.viewMode,
               onChange: function (ev) { K.hex.setViewMode(ev.target.value); },
               style: { width: 96, fontSize: 11 }

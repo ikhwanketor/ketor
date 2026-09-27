@@ -667,24 +667,6 @@ const ALLOWLIST = {
     "ketor-search-tab.js|button|Add to Group (|kt-btn|-": "\"Add to Group (\" button — no tooltip yet; batch 187",
   },
 
-  /* ---- hex: 14 gaps; batch 188 adds the tooltips and deletes every entry below ---- */
-  hex: {
-    "ketor-hex-sidebar.js|input|placeholder=gotoBase === 'dec' ? '4096' : '0x1000'|kt-input|-": "Goto Offset: input (placeholder=gotoBase === 'dec' ? '4096' : '0x1000') — no tooltip yet; batch 188",
-    "ketor-hex-sidebar.js|select|value=gotoBase|kt-select|-": "Goto Offset: select (value=gotoBase) — no tooltip yet; batch 188",
-    "ketor-hex-sidebar.js|button|Go|kt-btn small|-": "Goto Offset: \"Go\" button — no tooltip yet; batch 188",
-    "ketor-hex-sidebar.js|select|value=t.searchMode|kt-select|-": "Search: select (value=t.searchMode) — no tooltip yet; batch 188",
-    "ketor-hex-sidebar.js|input|placeholder=t.searchMode === 'text' ? 'PRESS START' : '4E 45 53'|kt-input|-": "Search: input (placeholder=t.searchMode === 'text' ? 'PRESS START' : '4E 45 53') — no tooltip yet; batch 188",
-    "ketor-hex-sidebar.js|button|Searching...|kt-btn small|-": "Search: \"Searching...\" button — no tooltip yet; batch 188",
-    "ketor-hex-sidebar.js|button|Prev|kt-btn small|-": "Search: \"Prev\" button — no tooltip yet; batch 188",
-    "ketor-hex-sidebar.js|button|Next|kt-btn small|-": "Search: \"Next\" button — no tooltip yet; batch 188",
-    "ketor-hex-sidebar.js|input|placeholder=Label (optional)|kt-input|-": "input (placeholder=Label (optional)) — no tooltip yet; batch 188",
-    "ketor-hex-sidebar.js|button|Add Bookmark at Cursor|kt-btn small|-": "\"Add Bookmark at Cursor\" button — no tooltip yet; batch 188",
-    "ketor-hex-sidebar.js|button|Clear Bookmarks|kt-btn small|-": "\"Clear Bookmarks\" button — no tooltip yet; batch 188",
-    "ketor-hex-tab.js|input|checked=props.layers[it.key] === true|-|-": "input (checked=props.layers[it.key] === true) — no tooltip yet; batch 188",
-    "ketor-hex-tab.js|select|value=perRow|kt-select|-": "select (value=perRow) — no tooltip yet; batch 188",
-    "ketor-hex-tab.js|select|value=t.viewMode|kt-select|-": "select (value=t.viewMode) — no tooltip yet; batch 188",
-  },
-
   /* ---- translate: 12 gaps; batch 189 adds the tooltips and deletes every entry below ---- */
   translate: {
     "ketor-translate-sidebar.js|Action|label=Open Search Text|-|-": "action button \"Open Search Text\" — no tooltip yet; batch 189",
@@ -701,8 +683,9 @@ const ALLOWLIST = {
     "ketor-translate-tab.js|select|value=freeMode ? 'free' : 'custom'|kt-select|-": "select (value=freeMode ? 'free' : 'custom') — no tooltip yet; batch 189",
   },
 
-  /* ---- font, groups, chrome, dialog, patch, about and panel: closed by batch 184; the
-     tooltips are in place and their entries were deleted, so the list can only shrink ---- */
+  /* ---- font, groups, chrome, dialog, patch, about and panel: closed by batch 184; hex:
+     closed by batch 185. The tooltips are in place and their entries were deleted, so the
+     list can only shrink ---- */
 };
 
 /* Every entry of every area, keyed by the audit signature, with the area and the reason
