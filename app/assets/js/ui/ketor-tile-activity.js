@@ -70,6 +70,13 @@
        pixels back through setPixel, so a copied tile lands in the hex patch layer like a
        painted one, and a later batch can widen the box without parsing anything. */
     clipboard: null,
+    /* The tile range the Select tool drags out: { tile, w, h } in tiles, with tile the
+       anchor the block starts at and w the tiles one clipboard row holds. The anchor is a
+       tile index and not a column, because which tiles share a screen row depends on how
+       wide the viewport is; a copy reads the w*h tiles that follow the anchor in reading
+       order, which is the order the paste writes them back in. No selection is null, so
+       the editor copies exactly the one tile it always did. */
+    selection: null,
     view: 'tiles',
     mapScreenBase: null,
     mapCharBase: null,
@@ -461,38 +468,107 @@
     return Math.floor(rel / tilePitch());
   }
 
-  /* A copy reads a tile into the clipboard and writes nothing: copying is not an edit, so
-     the patch layer and the loaded file stay exactly as they were. */
+  /* The tile range the Select tool drags out is { tile, w, h } in tiles, and this is where
+     it is made safe to copy and to draw: the anchor has to be a tile of the sheet and w and
+     h at least one tile each, never more tiles than the sheet holds. Anything that is not a
+     range - null, an object without a usable anchor - is no selection at all, and no
+     selection is the single tile box the editor had before ranges existed. */
+  function normalizeSelection(sel) {
+    if (!sel || typeof sel !== 'object') return null;
+    var tile = Math.floor(Number(sel.tile));
+    if (!Number.isFinite(tile) || tile < 0) return null;
+    var most = Math.max(1, Math.round(Number(_state.tiles) || 1));
+    var w = Math.floor(Number(sel.w));
+    var h = Math.floor(Number(sel.h));
+    if (!Number.isFinite(w) || w < 1) w = 1;
+    if (!Number.isFinite(h) || h < 1) h = 1;
+    return { tile: tile, w: Math.min(most, w), h: Math.min(most, h) };
+  }
+
+  /* The one way a selection enters the store: the Select tool hands its two corners here
+     and a caller that names a range hands the range itself. clearSelection() is the same
+     call with nothing, which is what Escape does. A copy, the marker on the canvas and the
+     status line all read this one value, so they cannot show different ranges. */
+  function setSelection(sel) { _set({ selection: normalizeSelection(sel) }); }
+  function clearSelection() { setSelection(null); }
+
+  /* A copy reads a region into the clipboard and writes nothing: copying is not an edit, so
+     the patch layer and the loaded file stay exactly as they were. The region is the one
+     tile the caller named - the selected tile, else the tile the Hex Editor cursor sits on -
+     or, with a selection in the store, the whole range it names: the w*h tiles that follow
+     its anchor, w of them to a clipboard row, which is the order the paste writes them back
+     in. A tile of the range the window does not hold stays blank and is counted in the
+     status, so a range half off the sheet still copies the tiles that are there. */
   function copyRegion(tileIndex) {
-    var tile = regionTileIndex(tileIndex);
-    var px = readTile(tile);
-    if (!px) { _set({ status: 'Nothing to copy: open a tile region first.' }); return false; }
-    var pixels = [];
-    for (var y = 0; y < 8; y++) for (var x = 0; x < 8; x++) pixels.push(px[y][x]);
+    var sel = normalizeSelection(_state.selection);
+    var anchor = sel ? sel.tile : regionTileIndex(tileIndex);
+    var ws = sel ? sel.w : 1;
+    var hs = sel ? sel.h : 1;
+    var pixels = [], missing = 0, read = {};
+    var w = 8 * ws, h = 8 * hs;
+    /* The pixels go into the clipboard the way the paste reads them back: row by row over
+       the whole block, with the tile a pixel belongs to worked out from its column. Reading
+       one tile after another instead would put the second tile of a row under the first in
+       the clipboard and a paste would scatter the block. */
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        var src = anchor + Math.floor(y / 8) * ws + Math.floor(x / 8);
+        var px = read[src];
+        if (px === undefined) {
+          px = readTile(src) || null;
+          read[src] = px;
+          if (!px) missing++;
+        }
+        pixels.push(px ? px[y % 8][x % 8] : 0);
+      }
+    }
+    if (missing >= ws * hs) { _set({ status: 'Nothing to copy: open a tile region first.' }); return false; }
     _set({
-      clipboard: { w: 8, h: 8, cols: 8, tile: tile, pixels: pixels },
-      status: 'Tile ' + tile + ' copied as an 8x8 region (' + pixels.length + ' pixels).'
+      clipboard: { w: w, h: h, cols: w, tile: anchor, pixels: pixels },
+      status: (ws === 1 && hs === 1)
+        ? 'Tile ' + anchor + ' copied as an 8x8 region (' + pixels.length + ' pixels).'
+        : 'Tiles ' + anchor + '..' + (anchor + ws * hs - 1) + ' copied as a ' + w + 'x' + h + ' region (' + pixels.length + ' pixels)'
+          + (missing ? ', ' + missing + ' tile(s) outside the window are blank.' : '.')
     });
     return true;
   }
 
   /* The paste writes every pixel back through setPixel, the one path a byte takes, so the
-     pasted pixels become hex patches and take part in Undo, Clear and Export. A box wider
-     or taller than the tile it lands on is cut at the tile edge. */
+     pasted pixels become hex patches and take part in Undo, Clear and Export. A region of
+     more than one tile is mapped tile by tile: the clipboard pixel (x,y) belongs to the tile
+     floor(y/8) rows and floor(x/8) columns away from the destination - one clipboard row is
+     cols/8 tiles wide - and lands at the pixel (x%8,y%8) inside it. The 8x8 case is the same
+     arithmetic and writes the same bytes in the same order as the tile box always did. A
+     destination tile that is not wholly inside the window is cut instead of half written,
+     and the status says how many were: on a sheet that ends mid tile the last byte of it
+     never moves. */
   function pasteRegion(tileIndex) {
     var clip = _state.clipboard;
     if (!clip || !clip.pixels || !clip.pixels.length) { _set({ status: 'Copy a tile first.' }); return false; }
     var tile = regionTileIndex(tileIndex);
-    var w = Math.min(8, Number(clip.w) || 0);
-    var hh = Math.min(8, Number(clip.h) || 0);
-    var cols = Number(clip.cols) || w;
-    var wrote = 0;
+    var w = Math.max(0, Math.floor(Number(clip.w) || 0));
+    var hh = Math.max(0, Math.floor(Number(clip.h) || 0));
+    var cols = Math.floor(Number(clip.cols) || 0) || w;
+    var perRow = Math.max(1, Math.floor(cols / 8));
+    var fit = {};
+    var cut = 0, wrote = 0;
     for (var y = 0; y < hh; y++) {
       for (var x = 0; x < w; x++) {
-        if (setPixel(tile, x, y, clip.pixels[y * cols + x])) wrote++;
+        var dest = tile + Math.floor(y / 8) * perRow + Math.floor(x / 8);
+        var open = fit[dest];
+        if (open === undefined) {
+          open = readTile(dest) !== null;
+          fit[dest] = open;
+          if (!open) cut++;
+        }
+        if (!open) continue;
+        if (setPixel(dest, x % 8, y % 8, clip.pixels[y * cols + x])) wrote++;
       }
     }
-    _set({ status: 'Pasted the copied region into tile ' + tile + ': ' + wrote + ' pixel(s) changed.' });
+    _set({
+      status: 'Pasted the copied region into tile ' + tile + ': ' + wrote + ' pixel(s) changed'
+        + (cut ? '; ' + cut + ' tile(s) outside the window were cut.' : '.')
+    });
     return wrote > 0;
   }
 
@@ -1839,6 +1915,32 @@
         ctx.lineWidth = 1;
         ctx.strokeRect(sx + 0.5, sy + 0.5, 8 * z - 1, 8 * z - 1);
       }
+      /* The range the Select tool dragged out, drawn as the tiles a copy takes: the run of
+         w*h tiles that follows the anchor, cut into screen rows where the sheet wraps at
+         perRow, so a range that runs past the right edge shows the row of tiles it really
+         is and never one rectangle over the gap between the rows. The dash is what tells a
+         range from the solid box of the picked tile. */
+      if (props.selection) {
+        var range = props.selection;
+        var anchor = Math.floor(Number(range.tile));
+        var rw = Math.max(1, Math.floor(Number(range.w) || 1));
+        var rh = Math.max(1, Math.floor(Number(range.h) || 1));
+        if (Number.isFinite(anchor) && anchor >= 0) {
+          ctx.strokeStyle = '#3fb950';
+          ctx.lineWidth = 1;
+          ctx.setLineDash([4, 2]);
+          for (var si = 0; si < rw * rh;) {
+            var slot = anchor + si;
+            if (slot >= props.tiles) break;
+            var scol = slot % perRow;
+            var srow = Math.floor(slot / perRow);
+            var run = Math.min(rw * rh - si, perRow - scol);
+            ctx.strokeRect(scol * 8 * z + 0.5, srow * 8 * z + 0.5, run * 8 * z - 1, 8 * z - 1);
+            si += run;
+          }
+          ctx.setLineDash([]);
+        }
+      }
       if (props.selPixel) {
         var ptx = ((props.selPixel.tile % perRow) * 8 + props.selPixel.x) * z;
         var pty = (Math.floor(props.selPixel.tile / perRow) * 8 + props.selPixel.y) * z;
@@ -1861,7 +1963,7 @@
         }
       }
       if (props.onDrawn) props.onDrawn(drawn);
-    }, [props.windowKey, props.format, props.zoom, props.tiles, props.selected, props.selPixel, props.cursorTile, props.cursorByte, props.palette, props.width, props.orderKey]);
+    }, [props.windowKey, props.format, props.zoom, props.tiles, props.selected, props.selection, props.selPixel, props.cursorTile, props.cursorByte, props.palette, props.width, props.orderKey]);
     return e('canvas', {
       ref: ref,
       onMouseDown: props.onClick,
@@ -1964,6 +2066,9 @@
     var mapCursor = Number.isFinite(Number(st.mapCursor)) ? Number(st.mapCursor) : -1;
     function setMapCursor(v) { _set({ mapCursor: Math.max(-1, Number(v) || 0) }); }
     var dragRef = uR(null);
+    /* The Select tool's drag lives apart from dragRef: a pencil or a line stays inside the
+       one tile it started on, while a range has to follow the pointer across tiles. */
+    var rangeRef = uR(null);
     var panRef = uR(null);
     var wrapRef = uR(null);
     var bodyRef = uR(null);
@@ -2146,6 +2251,23 @@
       setSel({ tile: tile, x: 0, y: 0 });
     }
 
+    /* The Select tool drags a range out of the sheet: the anchor is the tile the mouse went
+       down on and every move grows the block towards the tile under the pointer. The two
+       corners are the slots the canvas drew, and the block they make is counted along the
+       run between them, one row of the clipboard as wide as a screen row is (perRow), so a
+       drag along one row is a w x 1 block and a drag past the end of a row keeps going on
+       the next one instead of jumping back. Only the tile the run starts on is stored, so
+       the range survives a window that is resized under it. */
+    function growSelection(anchorSlot, slot) {
+      var perRow = Math.max(1, Math.floor((width - 16) / (8 * (Number(st.zoom) || 1))));
+      var from = Math.min(anchorSlot, slot);
+      var count = Math.abs(slot - anchorSlot) + 1;
+      var real = fontOrder ? fontOrder[from] : from;
+      if (real === null || real === undefined) return;
+      var w = Math.min(count, perRow);
+      setSelection({ tile: real, w: w, h: Math.ceil(count / w) });
+    }
+
     function onDown(ev) {
       var canvas = ev.currentTarget;
       var p = pixelAt(ev, canvas);
@@ -2153,13 +2275,26 @@
       var right = ev.button === 2 || ev.ctrlKey === false && false;
       selectTile(p.tile);
       if (right || tool === 'pick') { pickColour(p.tile, p.x, p.y); return; }
-      if (tool === 'select') { setSel({ tile: p.tile, x: p.x, y: p.y }); return; }
+      if (tool === 'select') {
+        setSel({ tile: p.tile, x: p.x, y: p.y });
+        /* Down starts a new range at this tile: one tile until the pointer reaches another
+           one, which is what onMove grows, and the anchor the marker and the copy read. */
+        rangeRef.current = { slot: p.slot };
+        setSelection({ tile: p.tile, w: 1, h: 1 });
+        return;
+      }
       if (tool === 'bucket') { bucket(p.tile, p.x, p.y, st.colour); return; }
       dragRef.current = { tile: p.tile, x0: p.x, y0: p.y };
       setSel({ tile: p.tile, x: p.x, y: p.y });
       if (tool === 'pencil') setPixel(p.tile, p.x, p.y, st.colour);
     }
     function onMove(ev) {
+      var range = rangeRef.current;
+      if (range) {
+        var q = pixelAt(ev, ev.currentTarget);
+        if (q) growSelection(range.slot, q.slot);
+        return;
+      }
       var d = dragRef.current;
       if (!d) return;
       var p = pixelAt(ev, ev.currentTarget);
@@ -2168,6 +2303,7 @@
       else setSel({ tile: d.tile, x: p.x, y: p.y });
     }
     function onUp(ev) {
+      rangeRef.current = null;
       var d = dragRef.current;
       dragRef.current = null;
       if (!d || tool !== 'line') return;
@@ -2273,7 +2409,7 @@
         if (selected >= 0) for (var y = 0; y < 8; y++) for (var x = 0; x < 8; x++) setPixel(selected, x, y, 0);
         ev.preventDefault(); return;
       }
-      if (k === 'Escape') { setSel(null); return; }
+      if (k === 'Escape') { setSel(null); clearSelection(); return; }
       if ((ev.ctrlKey || ev.metaKey) && upper === 'Z') { if (ev.shiftKey) K.hex.redo(); else K.hex.undo(); ev.preventDefault(); return; }
       var step = 0, perRow = Math.max(1, Math.floor((width - 16) / (8 * st.zoom)));
       if (k === 'ArrowLeft') step = -1;
@@ -2365,12 +2501,12 @@
         e('span', { style: { opacity: 0.25 } }, '|'),
         e('button', {
           type: 'button', className: TB + ' secondary', disabled: !win,
-          title: 'Copy the selected tile as an 8x8 region (Ctrl+C while the canvas has the focus)',
+          title: 'Copy the selected tile, or the whole range the Select tool dragged out, as one region (Ctrl+C while the canvas has the focus)',
           onClick: copyTile
         }, 'Copy'),
         e('button', {
           type: 'button', className: TB + ' secondary', disabled: !win || !st.clipboard,
-          title: 'Paste the copied region into the selected tile (Ctrl+V while the canvas has the focus)',
+          title: 'Paste the copied region into the selected tile, tile by tile (Ctrl+V while the canvas has the focus)',
           onClick: pasteTile
         }, 'Paste'),
         /* The sheet as a file: out as a PNG (palette colours, no canvas) and back in from
@@ -2431,7 +2567,7 @@
           bytes: win.bytes,
           windowKey: windowKey,
           format: st.format, zoom: st.zoom, tiles: st.tiles, pitch: tilePitch(),
-          selected: selected, selPixel: sel, palette: st.palette,
+          selected: selected, selPixel: sel, selection: st.selection, palette: st.palette,
           order: fontOrder, labels: fontLabels, orderKey: orderKey,
           cursorTile: cursorTile, cursorByte: cursorByte,
           width: Math.max(200, width - 16),
@@ -3076,6 +3212,7 @@
     setFormat: function (f) { var format = String(f); _set(Object.assign({ format: format }, formatPatch(format))); }, colourAt: colourCss,
     setColour: function (v) { _set({ colour: Number(v) }); }, readTile: readTile,
     copyRegion: copyRegion, pasteRegion: pasteRegion,
+    setSelection: setSelection, clearSelection: clearSelection,
     regionWindow: regionWindow, tileAbsoluteOffset: tileAbsoluteOffset, statusLine: statusLine,
     loadPalette: loadPalette, readPaletteAt: readPaletteAt, findPalette: findPalette, paletteScore: paletteScore,
     writePaletteColour: writePaletteColour,
