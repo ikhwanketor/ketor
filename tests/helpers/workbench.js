@@ -123,9 +123,11 @@ function loadWorkbench(options) {
   load(path.join(CORE, 'tile-codec.js'));
   load(path.join(CORE, 'save-state.js'));
   load(path.join(CORE, 'font-map.js'));
-  /* The debugger tab reads the display registers out of the rom, so the register
-     scanner and the tab itself are loaded the way the preview page loads them. */
+  /* The debugger tab reads the display registers out of the rom and the instructions
+     out of the same bytes, so the register scanner, the disassembler and the tab
+     itself are loaded the way the preview page loads them. */
   load(path.join(CORE, 'gba-registers.js'));
+  load(path.join(CORE, 'arm-disasm.js'));
   /* The debugger tab adds no global keyboard listener of its own. A suite that counts what
      the modules register asks for it to be left out of one run, so "new listener" can be
      told from the ones every run installs. */

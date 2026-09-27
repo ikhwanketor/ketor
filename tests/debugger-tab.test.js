@@ -11,7 +11,13 @@
    the Hex Editor's changed-byte colour and the hex cursor drawn where it falls. The
    gates below pin that reader - the row's 16 values against the file byte for byte, the
    patch marker, the clamp on a negative offset, half typed offset text, the save-state
-   block list, and the promise that the panel added no keyboard listener to the window. */
+   block list, and the promise that the panel added no keyboard listener to the window.
+
+   Batch 159 added the listing and the breakpoint list: the same bytes go to
+   K.core.disassemble, an odd address is read as Thumb the ARMv4T way, and a breakpoint
+   is a note on a list that is drawn on the memory row and the instruction row it falls
+   in. Nothing runs, so nothing is stopped; the gates below pin the listing, the mark,
+   the entry candidates and the promise that the note brought no key handler with it. */
 
 'use strict';
 const { loadWorkbench } = require('./helpers/workbench');
@@ -65,6 +71,32 @@ function romWithBytePattern() {
   const fixture = buildSyntheticRom({ records: 8 });
   for (let i = 0; i < 16; i++) fixture.rom[0x100 + i] = 0x10 + i;
   return fixture;
+}
+
+/* A rom with a small Thumb function at 0x300, behind the fixture's own fill pattern:
+   push {lr}, movs r0, #1, ldr r0, [pc, #4], bx lr. The odd pointer 0x301 is how a BX
+   target would address it, and the 0xAA fill in front is the boundary the entry scan
+   can see. Nothing else in the fixture holds a 0xB5xx or a 0x4770 halfword. */
+function romWithThumbCode() {
+  const fixture = buildSyntheticRom({ records: 8 });
+  [0xB500, 0x2001, 0x4801, 0x4770].forEach(function (hw, i) {
+    fixture.rom[0x300 + i * 2] = hw & 0xFF;
+    fixture.rom[0x300 + i * 2 + 1] = (hw >> 8) & 0xFF;
+  });
+  return fixture;
+}
+
+/* Every node the tab marked with a breakpoint, in render order. */
+function nodesWithBreakpoint(node, out) {
+  const list = out || [];
+  if (!node || typeof node !== 'object') return list;
+  if (Array.isArray(node)) {
+    node.forEach(function (item) { nodesWithBreakpoint(item, list); });
+    return list;
+  }
+  if (node.props && node.props['data-breakpoint']) list.push(node);
+  nodesWithBreakpoint(node.props && node.props.children, list);
+  return list;
 }
 
 function gbaState() {
@@ -471,6 +503,129 @@ suite.test('with no save state the picker is skipped, and one it cannot read is 
   t.assertDeepEqual(K.debugger.saveStateBlocks(), [], 'and nothing is offered');
   text = env.treeStrings(render(env)).join('\n');
   t.assert(text.indexOf('0x000000') >= 0, 'the ROM window still renders');
+});
+
+suite.test('the disassembly panel lists the instructions the bytes would be', function (t) {
+  const fixture = romWithThumbCode();
+  const env = loadRom(fixture);
+  const K = env.K;
+  K.hex.gotoOffset(0x100);
+
+  t.assertEqual(K.debugger.disassemblerReady(), true, 'the disassembler should be loaded in this build');
+  K.debugger.typeDisasmOffset('0x301');
+  const view = K.debugger.disassembleView();
+  t.assertEqual(view.thumb, true, 'an odd address is a Thumb pointer, so the listing is Thumb');
+  t.assertEqual(view.start, 0x300, 'and it starts at the halfword the pointer names');
+  t.assertDeepEqual(view.rows.slice(0, 4).map(function (r) { return r.mnemonic; }),
+    ['push', 'movs', 'ldr', 'bx'], 'the four instructions written into the fixture are the four it decodes');
+  t.assertEqual(view.rows[0].bytes.map(hex2).join(' '), '00 B5', 'a Thumb row carries its two bytes');
+
+  const tree = render(env);
+  const text = env.treeStrings(tree).join('\n');
+  t.assert(text.indexOf('Disassembly') >= 0, 'the tab should carry a Disassembly panel, got: ' + text.slice(0, 300));
+  t.assert(text.indexOf('movs') >= 0, 'and name a real mnemonic, got: ' + text.slice(0, 800));
+  t.assert(text.indexOf('bx lr') >= 0, 'such as the return the function ends with');
+  t.assert(text.indexOf('0x000300') >= 0, 'with the address of the first row');
+  t.assert(text.indexOf('00 B5') >= 0, 'and the bytes it read, in file order, got: ' + text.slice(0, 800));
+  t.assert(text.indexOf('nothing runs: these are bytes in the file') >= 0,
+    'the panel should say that nothing runs here');
+
+  /* One instruction to a row: address, bytes, then the instruction they would be. */
+  const row = findNode(tree, function (n) { return n.props && n.props.title === '0x000300  push {lr}'; });
+  t.assert(row, 'the first row should be rendered with its address and its text');
+  t.assertDeepEqual(childStrings(row), ['0x000300', '00 B5', 'push {lr}'],
+    'the row is the address, the bytes and the instruction');
+
+  /* The other half of the same rule: an even address is read as ARM. */
+  K.debugger.typeDisasmOffset('0x300');
+  t.assertEqual(K.debugger.disassembleView().thumb, false, 'an even address is read as ARM');
+  const armText = env.treeStrings(render(env)).join('\n');
+  t.assert(armText.indexOf('Disassembly') >= 0, 'the panel is still there');
+  t.assert(armText.indexOf('movs') < 0, 'and the Thumb mnemonics are gone');
+});
+
+suite.test('a breakpoint is a note on a list, drawn where its address falls', function (t) {
+  const fixture = romWithThumbCode();
+  const env = loadRom(fixture);
+  const K = env.K;
+  K.hex.gotoOffset(0x100);
+  K.debugger.typeDisasmOffset('0x301');
+
+  /* Two notes: a read on a byte of the memory window, an exec inside the listing. */
+  K.debugger.typeBreakpointAddress('0x100');
+  K.debugger.setBreakpointType('read');
+  t.assertDeepEqual(K.debugger.addBreakpointFromBox(), { address: 0x100, type: 'read' },
+    'the address box and the type picker add the note they describe');
+  K.debugger.typeBreakpointAddress('0x302');
+  K.debugger.setBreakpointType('exec');
+  t.assertEqual(K.debugger.addBreakpointFromBox().type, 'exec', 'and a note of another kind');
+  t.assertDeepEqual(K.debugger.breakpoints(), [{ address: 0x100, type: 'read' }, { address: 0x302, type: 'exec' }],
+    'the list holds both, in address order');
+  t.assertEqual(K.debugger.breakpointsInRange(0x300, 0x304).join(','), 'exec',
+    'the range one instruction covers finds its note');
+  t.assertEqual(K.debugger.breakpointTypesAt(0x100).join(','), 'read', 'and an address finds its own kinds');
+
+  const tree = render(env);
+  const text = env.treeStrings(tree).join('\n');
+  t.assert(text.indexOf('Breakpoints') >= 0, 'the tab should offer the breakpoint list');
+  t.assert(text.indexOf('0x000302') >= 0, 'and name the address that was added');
+  t.assert(text.indexOf('not a trap') >= 0, 'and say that a note here stops nothing');
+  t.assert(text.indexOf('1 row(s) marked with a breakpoint') >= 0,
+    'the memory panel counts the row it marked, got: ' + text.slice(0, 800));
+  t.assert(text.indexOf('1 row(s) with a breakpoint') >= 0, 'and the listing counts its own');
+
+  const marks = nodesWithBreakpoint(tree);
+  t.assertDeepEqual(marks.map(function (n) { return n.props['data-breakpoint'] + '@' + n.props.title.slice(0, 8); }),
+    ['read@0x000100', 'exec@0x000302'], 'the memory row and the instruction row carry the marks');
+
+  /* The Add button is the same path, and a note already on the list is not added twice. */
+  const addButton = findNode(tree, function (n) { return n.type === 'button' && childStrings(n).indexOf('Add') >= 0; });
+  t.assert(addButton, 'the panel should offer an Add button');
+  addButton.props.onClick();
+  t.assertEqual(K.debugger.breakpoints().length, 2, 'adding the address already listed changes nothing');
+
+  /* Typing that is not an address yet adds nothing, and no NaN reaches the screen. */
+  K.debugger.typeBreakpointAddress('zz');
+  t.assertEqual(K.debugger.addBreakpointFromBox(), null, 'text that is not a number is refused');
+  t.assertEqual(K.debugger.breakpoints().length, 2, 'and nothing was added');
+  t.assert(K.debugger.getDisasm().status.indexOf('not an address yet') >= 0,
+    'with a reason, got: ' + K.debugger.getDisasm().status);
+  t.assert(env.treeStrings(render(env)).join('\n').indexOf('NaN') < 0, 'and no NaN reaches the screen');
+
+  t.assertEqual(K.debugger.removeBreakpoint(0x100, 'read'), 1, 'the read note can be removed');
+  t.assertEqual(K.debugger.breakpoints().length, 1, 'and the exec note stays');
+  t.assertDeepEqual(nodesWithBreakpoint(render(env)).map(function (n) { return n.props['data-breakpoint']; }), ['exec'],
+    'the memory row is unmarked again while the instruction row keeps its mark');
+  t.assertEqual(K.debugger.clearBreakpoints(), 1, 'Clear empties what is left');
+  t.assertDeepEqual(K.debugger.breakpoints(), [], 'so the list is empty');
+  t.assertDeepEqual(nodesWithBreakpoint(render(env)), [], 'and no row is marked');
+});
+
+suite.test('a thumb entry candidate is offered with the evidence that found it', function (t) {
+  const fixture = romWithThumbCode();
+  const env = loadRom(fixture);
+  const K = env.K;
+  K.hex.gotoOffset(0x100);
+  K.debugger.typeDisasmOffset('0x100');
+
+  const entries = K.debugger.disassembleView().entries;
+  t.assertEqual(entries.length, 1, 'the fixture holds one prologue behind a fill pattern, got: ' + JSON.stringify(entries));
+  t.assertEqual(entries[0].at, 0x300, 'at the offset the function sits at');
+  t.assertEqual(entries[0].kind, 'push-lr', 'found by the push that saves lr');
+  t.assertEqual(entries[0].evidence, 'padding in front of it', 'with the fill pattern that made it a boundary');
+  t.assertEqual(entries[0].text, 'push {lr}', 'and it carries the halfword it was found from');
+
+  const tree = render(env);
+  const text = env.treeStrings(tree).join('\n');
+  t.assert(text.indexOf('Thumb entry candidates') >= 0, 'the panel lists the candidates');
+  t.assert(text.indexOf('push-lr') >= 0, 'with the shape that found them');
+  const button = findNode(tree, function (n) { return n.type === 'button' && childStrings(n).indexOf('Disassemble') >= 0; });
+  t.assert(button, 'each candidate offers to be disassembled');
+  button.props.onClick();
+  t.assertEqual(K.debugger.getDisasm().offset, 0x301, 'the button hands over the odd pointer a BX target would carry');
+  t.assertEqual(K.debugger.disassembleView().thumb, true, 'so the listing is Thumb');
+  t.assertEqual(K.debugger.disassembleView().start, 0x300, 'and it starts at the prologue');
+  t.assert(env.treeStrings(render(env)).join('\n').indexOf('push {lr}') >= 0, 'which is now on screen');
 });
 
 module.exports = { suite: suite };

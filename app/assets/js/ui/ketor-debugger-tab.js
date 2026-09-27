@@ -34,6 +34,18 @@
    (tabIndex 0), never on the document or the window, so a keystroke
    in a text box stays in that box; Ctrl+C/V copy and paste hex text
    only while that grid has the focus.
+
+   Batch 159 adds the listing and the breakpoint list. The bytes of
+   the window are handed to K.core.disassemble, which names the
+   instruction each two or four bytes would be, and the mode comes
+   from the low bit of the address the ARMv4T way: an odd pointer
+   means Thumb. A breakpoint is a note on a list, not a trap --
+   nothing here runs, so nothing is ever stopped. Exec names a code
+   address, read and write name a data address, both are marked in
+   the memory and the disassembly rows, and the panel says so in as
+   many words. Neither one brought a key handler with it: the list is
+   edited through its own boxes and buttons, so this tab still owns
+   no global shortcut.
    ============================================================ */
 
 (function (global) {
@@ -618,11 +630,20 @@
     return style;
   }
 
-  function memoryRow(row, cursor, cursorShown) {
+  function memoryRow(row, cursor, cursorShown, marks) {
+    var marked = !!(marks && marks.length);
     return e('div', {
       key: 'r' + row.start,
       title: row.text,
-      style: { display: 'flex', alignItems: 'baseline', gap: 10, whiteSpace: 'pre', fontFamily: MONO }
+      /* A breakpoint address inside this row is drawn on the row, not on one cell:
+         the row is the unit the window scrolls in. It is a note in a list, so the
+         marker says which kinds were listed and nothing more. */
+      'data-breakpoint': marked ? marks.join(',') : undefined,
+      style: {
+        display: 'flex', alignItems: 'baseline', gap: 10, whiteSpace: 'pre', fontFamily: MONO,
+        background: marked ? BP_TINT : 'transparent',
+        boxShadow: marked ? 'inset 3px 0 0 0 ' + BP_COLOR : undefined
+      }
     },
       e('span', { style: { flex: '0 0 62px', opacity: 0.75 } }, row.address),
       e('span', null,
@@ -651,6 +672,10 @@
       row.cells.forEach(function (cell) { if (cell.patched) patchedCount++; });
     });
     var cursorShown = !!(view && source && source.cursor && view.cursor >= start && view.cursor <= last);
+    var markedRows = 0;
+    rows.forEach(function (row) {
+      if (breakpointsInRange(row.start, row.start + ROW_BYTES).length) markedRows++;
+    });
     var cursorNote = '';
     if (view) {
       if (!source.cursor) cursorNote = 'hex cursor ' + hexAddress(view.cursor) + ' is a ROM address, not drawn on a state block';
@@ -729,7 +754,9 @@
         }
       },
         rows.length
-          ? rows.map(function (row) { return memoryRow(row, view.cursor, cursorShown); })
+          ? rows.map(function (row) {
+              return memoryRow(row, view.cursor, cursorShown, breakpointsInRange(row.start, row.start + ROW_BYTES));
+            })
           : e('div', { style: { opacity: 0.7 } }, 'No byte to show here: the memory window is past the end of this source.')
       ),
       e('div', {
@@ -741,11 +768,501 @@
         e('span', null, view ? hexAddress(start) + '-' + hexAddress(last) + ' of ' + hexAddress(Math.max(0, len - 1)) : 'no data'),
         e('span', null, ROW_BYTES + ' bytes per row'),
         e('span', null, patchedCount + ' patched byte(s) in view'),
+        e('span', null, markedRows + ' row(s) marked with a breakpoint'),
         e('span', null, cursorNote || 'no hex cursor'),
         e('span', { title: 'Ctrl+C copies the visible rows as hex text and Ctrl+V writes hex text back, while the grid has the focus' }, 'Ctrl+C/V on the grid')
       ),
       memState.status
         ? e('div', { style: { padding: '2px 6px', fontSize: 10, opacity: 0.75 } }, memState.status)
+        : null
+    );
+  }
+
+  /* ============================================================
+     Disassembly and the breakpoint list (Batch 159)
+     ------------------------------------------------------------
+     The listing is read, never run. The bytes come from the same source the memory
+     window reads -- K.hex's view for the ROM, or one block of a save state -- the
+     mode comes from the low bit of the address the way ARMv4T means it, and
+     K.core.disassemble turns the window into rows of { at, bytes, size, mnemonic,
+     text }. The mode can be forced when that guess is wrong, and the panel says
+     which one it used.
+
+     A breakpoint in this tab is a note on a list. There is no CPU here to stop, so
+     the note neither pauses an instruction nor watches a memory access: it names an
+     address, says whether the user means exec, read or write, and is drawn on the
+     memory row and the disassembly row it falls in. The list lives in this module's
+     state, like the memory window, and is edited through an address box, a type
+     picker and two buttons -- no key handler was added anywhere for it.
+     ============================================================ */
+
+  var DIS_ROWS = 12;
+  var DIS_MAX_ROWS = MAX_ROWS;
+  var ENTRY_LIMIT = 8;
+  var BP_TYPES = ['exec', 'read', 'write'];
+  /* The colour VS Code paints a breakpoint, so a mark reads as one at a glance. */
+  var BP_COLOR = '#e51400';
+  var BP_TINT = 'rgba(229, 20, 0, 0.16)';
+  var DIS_MODES = [
+    { id: 'auto', label: 'Auto (low bit)' },
+    { id: 'arm', label: 'ARM' },
+    { id: 'thumb', label: 'Thumb' }
+  ];
+
+  var _dis = {
+    /* null means "where the hex cursor sits", the rule the memory window follows. */
+    offset: null,
+    offsetText: null,
+    lines: DIS_ROWS,
+    linesText: null,
+    mode: 'auto',
+    addressText: '',
+    type: 'exec',
+    breakpoints: [],
+    status: ''
+  };
+  var _disListeners = new Set();
+
+  function _disSet(patch) {
+    var changed = false, next = _dis;
+    Object.keys(patch).forEach(function (k) {
+      if (_dis[k] !== patch[k]) {
+        if (!changed) { next = Object.assign({}, _dis); changed = true; }
+        next[k] = patch[k];
+      }
+    });
+    if (changed) { _dis = next; _disListeners.forEach(function (fn) { try { fn(); } catch (_) { } }); }
+  }
+  function getDisasm() { return _dis; }
+  function subscribeDisasm(fn) {
+    if (typeof fn !== 'function') return function () { };
+    _disListeners.add(fn);
+    return function () { _disListeners.delete(fn); };
+  }
+  function useDisasm() { return R.useSyncExternalStore(subscribeDisasm, getDisasm, getDisasm); }
+
+  /* ---------- the breakpoint list ---------- */
+
+  function normalizeBreakpointType(type) {
+    var t = String(type == null ? '' : type).toLowerCase();
+    return BP_TYPES.indexOf(t) >= 0 ? t : null;
+  }
+
+  /* A copy, so a caller cannot reach into the store and edit the list in place. */
+  function breakpoints() {
+    return _dis.breakpoints.map(function (bp) { return { address: bp.address, type: bp.type }; });
+  }
+
+  function breakpointTypesAt(address) {
+    var at = Math.floor(Number(address));
+    if (!isFinite(at)) return [];
+    var out = [];
+    _dis.breakpoints.forEach(function (bp) { if (bp.address === at) out.push(bp.type); });
+    return out;
+  }
+
+  /* The kinds listed anywhere in [start, end), which is what a memory row and a
+     disassembly row are: an address range. */
+  function breakpointsInRange(start, end) {
+    var from = Math.floor(Number(start)), to = Math.floor(Number(end));
+    var out = [];
+    _dis.breakpoints.forEach(function (bp) {
+      if (bp.address >= from && bp.address < to) out.push(bp.type);
+    });
+    return out;
+  }
+
+  function sortBreakpoints(list) {
+    return list.slice().sort(function (a, b) {
+      if (a.address !== b.address) return a.address - b.address;
+      return BP_TYPES.indexOf(a.type) - BP_TYPES.indexOf(b.type);
+    });
+  }
+
+  function addBreakpoint(address, type) {
+    var at = Math.floor(Number(address));
+    if (!isFinite(at) || at < 0) {
+      _disSet({ status: 'A breakpoint needs an address: type one, in hex.' });
+      return null;
+    }
+    var kind = normalizeBreakpointType(type);
+    if (!kind) {
+      _disSet({ status: 'A breakpoint is an exec, read or write note.' });
+      return null;
+    }
+    var existing = null;
+    _dis.breakpoints.forEach(function (bp) { if (bp.address === at && bp.type === kind) existing = bp; });
+    if (existing) {
+      _disSet({ status: hexAddress(at) + ' already carries a ' + kind + ' breakpoint.' });
+      return { address: existing.address, type: existing.type };
+    }
+    var entry = { address: at, type: kind };
+    _disSet({
+      breakpoints: sortBreakpoints(_dis.breakpoints.concat([entry])),
+      status: kind + ' breakpoint noted at ' + hexAddress(at) + '. Nothing runs, so nothing is stopped by it.'
+    });
+    return entry;
+  }
+
+  function removeBreakpoint(address, type) {
+    var at = Math.floor(Number(address));
+    if (!isFinite(at)) return 0;
+    var kind = type === undefined || type === null ? null : normalizeBreakpointType(type);
+    var before = _dis.breakpoints.length;
+    var kept = _dis.breakpoints.filter(function (bp) {
+      if (bp.address !== at) return true;
+      return kind !== null && bp.type !== kind;
+    });
+    if (kept.length === before) {
+      _disSet({ status: 'No breakpoint at ' + hexAddress(at) + ' to remove.' });
+      return 0;
+    }
+    _disSet({
+      breakpoints: kept,
+      status: 'Removed ' + (before - kept.length) + ' breakpoint note(s) at ' + hexAddress(at) + '.'
+    });
+    return before - kept.length;
+  }
+
+  function clearBreakpoints() {
+    if (!_dis.breakpoints.length) {
+      _disSet({ status: 'The breakpoint list is already empty.' });
+      return 0;
+    }
+    var n = _dis.breakpoints.length;
+    _disSet({ breakpoints: [], status: 'Cleared ' + n + ' breakpoint note(s).' });
+    return n;
+  }
+
+  function typeBreakpointAddress(text) {
+    _disSet({ addressText: String(text == null ? '' : text) });
+  }
+
+  function setBreakpointType(type) {
+    var kind = normalizeBreakpointType(type);
+    _disSet({
+      type: kind || 'exec',
+      status: kind ? 'Breakpoint type: ' + kind + '.' : 'A breakpoint is an exec, read or write note.'
+    });
+  }
+
+  function addBreakpointFromBox() {
+    var value = parseOffsetText(_dis.addressText);
+    if (value === null) {
+      _disSet({ status: 'That is not an address yet: type it in hex, as 0x200 or 200.' });
+      return null;
+    }
+    return addBreakpoint(value, _dis.type);
+  }
+
+  /* ---------- the listing ---------- */
+
+  function disassemblerReady() {
+    return !!(K.core && typeof K.core.disassemble === 'function' && typeof K.core.isThumbAddress === 'function');
+  }
+
+  function autoThumb(at) {
+    return !!(K.core && K.core.isThumbAddress && K.core.isThumbAddress(at));
+  }
+
+  /* "auto" reads the low bit; an explicit mode is the user saying that guess is
+     wrong, which is the only reason the picker is there. */
+  function thumbFor(at) {
+    if (_dis.mode === 'thumb') return true;
+    if (_dis.mode === 'arm') return false;
+    return autoThumb(at);
+  }
+
+  var _entryCache = { bytes: null, list: null };
+
+  /* The entry scan is cached on the buffer it read, so a re-render is not a second
+     sweep of a whole cartridge; the scan itself stops at its own limit. */
+  function entryCandidates(source) {
+    if (!source || !K.core || typeof K.core.thumbEntryPoints !== 'function') return [];
+    if (_entryCache.bytes === source.bytes && _entryCache.list) return _entryCache.list;
+    var list = [];
+    try { list = K.core.thumbEntryPoints(source.bytes, { limit: ENTRY_LIMIT }) || []; } catch (_) { list = []; }
+    _entryCache = { bytes: source.bytes, list: list };
+    return list;
+  }
+
+  /* What the listing is showing: the source, the mode that was used, the rows, and
+     the breakpoints that fall on each row. */
+  function currentDisasm() {
+    if (!disassemblerReady()) return null;
+    var source = memorySource(_mem);
+    if (!source) return null;
+    var len = source.bytes.length;
+    var h = hexStore();
+    var rawCursor = h ? Number(h.cursorOffset) : 0;
+    var cursor = Number.isFinite(rawCursor) && rawCursor >= 0 ? Math.floor(rawCursor) : 0;
+    var requested = _dis.offset === null ? cursor : _dis.offset;
+    var at = clampMemoryOffset(requested, len);
+    var thumb = thumbFor(at);
+    var rows = K.core.disassemble(source.bytes, { at: at, thumb: thumb, count: _dis.lines });
+    rows.forEach(function (row) {
+      row.breakpoints = breakpointsInRange(row.at, row.at + row.size);
+    });
+    var last = rows.length ? rows[rows.length - 1] : null;
+    return {
+      source: source, len: len, requested: at, thumb: thumb, mode: _dis.mode,
+      start: rows.length ? rows[0].at : null,
+      end: last ? last.at + last.size - 1 : null,
+      rows: rows,
+      entries: entryCandidates(source)
+    };
+  }
+
+  function typeDisasmOffset(text) {
+    var typed = String(text == null ? '' : text);
+    var patch = { offsetText: typed };
+    var value = parseOffsetText(typed);
+    if (value !== null) {
+      var view = currentDisasm();
+      patch.offset = clampMemoryOffset(value, view ? view.len : 0);
+      patch.status = 'Disassembly at ' + hexAddress(patch.offset) + '.';
+    }
+    _disSet(patch);
+  }
+
+  function typeDisasmLines(text) {
+    var typed = String(text == null ? '' : text);
+    var patch = { linesText: typed };
+    var n = clampRows(typed);
+    if (n !== null) patch.lines = Math.min(DIS_MAX_ROWS, n);
+    _disSet(patch);
+  }
+
+  function setDisasmMode(mode) {
+    var id = String(mode == null ? '' : mode);
+    var known = DIS_MODES.filter(function (m) { return m.id === id; }).length > 0;
+    _disSet({ mode: known ? id : 'auto', status: known ? 'Disassembly mode: ' + id + '.' : '' });
+  }
+
+  /* Jump the listing to an address. An entry candidate is handed over as (at | 1),
+     the odd pointer a Thumb BX takes, so the low bit says Thumb by itself. */
+  function disassembleAt(address) {
+    var at = Math.floor(Number(address));
+    if (!isFinite(at) || at < 0) {
+      _disSet({ status: 'That is not an address to disassemble from.' });
+      return null;
+    }
+    var view = currentDisasm();
+    var off = clampMemoryOffset(at, view ? view.len : 0);
+    _disSet({
+      offset: off, offsetText: hexAddress(off),
+      status: 'Disassembly at ' + hexAddress(off)
+        + (autoThumb(off) ? ': odd, so Thumb unless the mode says otherwise.' : ': even, so ARM unless the mode says otherwise.')
+    });
+    return off;
+  }
+
+  /* ---------- the panel ---------- */
+
+  function disasmRow(row) {
+    var marks = row.breakpoints || [];
+    var marked = marks.length > 0;
+    return e('div', {
+      key: 'd' + row.at,
+      title: hexAddress(row.at) + '  ' + row.text + (marked ? '  [' + marks.join(', ') + ' breakpoint]' : ''),
+      'data-breakpoint': marked ? marks.join(',') : undefined,
+      style: {
+        display: 'flex', gap: 10, whiteSpace: 'pre',
+        background: marked ? BP_TINT : 'transparent',
+        boxShadow: marked ? 'inset 3px 0 0 0 ' + BP_COLOR : undefined
+      }
+    },
+      e('span', { style: { flex: '0 0 62px', opacity: 0.75 } }, hexAddress(row.at)),
+      e('span', { style: { flex: '0 0 84px', opacity: 0.9 } }, row.bytes.map(hexByte).join(' ')),
+      e('span', null, row.text),
+      marked ? e('span', { style: { marginLeft: 'auto', color: BP_COLOR, fontWeight: 700 } }, '\u25cf ' + marks.join('/')) : null
+    );
+  }
+
+  function breakpointRow(bp, len) {
+    var outside = len > 0 && bp.address >= len;
+    var meaning = bp.type === 'exec' ? 'a code address'
+      : (bp.type === 'read' ? 'a data address that is read' : 'a data address that is written');
+    return e('div', {
+      key: bp.type + ':' + bp.address,
+      style: {
+        display: 'flex', alignItems: 'center', gap: 10, padding: '3px 6px',
+        borderTop: '1px solid var(--kt-widget-border-default)'
+      }
+    },
+      e('span', { style: { fontFamily: MONO, flex: '0 0 66px' } }, hexAddress(bp.address)),
+      e('span', { style: { flex: '0 0 46px', color: BP_COLOR, fontWeight: 700 } }, bp.type),
+      e('span', { style: { flex: '1 1 auto', opacity: 0.75 } },
+        meaning + (outside ? ' | past the end of this source' : '') + ' | a note only: nothing runs'),
+      e('button', {
+        type: 'button', className: 'kt-btn small secondary',
+        title: 'Remove this breakpoint from the list',
+        onClick: function () { removeBreakpoint(bp.address, bp.type); }
+      }, 'Remove')
+    );
+  }
+
+  function entryRow(entry) {
+    return e('div', {
+      key: 'e' + entry.at,
+      style: {
+        display: 'flex', alignItems: 'center', gap: 10, padding: '3px 6px',
+        borderTop: '1px solid var(--kt-widget-border-default)'
+      }
+    },
+      e('span', { style: { fontFamily: MONO, flex: '0 0 66px' } }, hexAddress(entry.at)),
+      e('span', { style: { flex: '1 1 auto' } }, entry.text + '  (' + entry.kind + ', ' + entry.evidence + ')'),
+      e('button', {
+        type: 'button', className: 'kt-btn small secondary',
+        title: 'Disassemble from this candidate as Thumb: the pointer handed over is odd, the way a BX target is',
+        onClick: function () { disassembleAt(entry.at + 1); }
+      }, 'Disassemble')
+    );
+  }
+
+  function disasmPanel(disState, view, ready) {
+    var boxStyle = {
+      fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)',
+      color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)',
+      borderRadius: 2, padding: '1px 4px'
+    };
+    if (!ready) {
+      return e('div', {
+        style: {
+          border: '1px solid var(--kt-widget-border-default)', borderRadius: 3,
+          padding: '6px 8px', opacity: 0.8
+        }
+      }, 'The disassembler is not loaded in this build: K.core.disassemble is missing, so the bytes are only shown as memory.');
+    }
+    var rows = view ? view.rows : [];
+    var len = view ? view.len : 0;
+    var listed = disState.breakpoints;
+    var modeLabel = view ? (view.thumb ? 'Thumb' : 'ARM')
+      : (disState.mode === 'thumb' ? 'Thumb' : (disState.mode === 'arm' ? 'ARM' : 'Auto'));
+    var autoNote = view && disState.mode === 'auto'
+      ? ' (from ' + (view.thumb ? 'an odd' : 'an even') + ' address)' : '';
+    var markedRows = rows.filter(function (row) { return (row.breakpoints || []).length > 0; }).length;
+
+    return e('div', { style: { border: '1px solid var(--kt-widget-border-default)', borderRadius: 3 } },
+      e('div', {
+        style: {
+          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '4px 6px',
+          borderBottom: '1px solid var(--kt-widget-border-default)', background: 'var(--kt-sidebar-bg)'
+        }
+      },
+        e('label', { style: { display: 'flex', alignItems: 'center', gap: 4 }, title: 'Auto reads the low bit of the address, the ARMv4T rule; ARM and Thumb force the set when that guess is wrong' },
+          e('span', { style: { opacity: 0.7 } }, 'Mode'),
+          e('select', {
+            value: disState.mode,
+            onChange: function (ev) { setDisasmMode(ev.target.value); },
+            style: boxStyle
+          }, DIS_MODES.map(function (m) { return e('option', { key: m.id, value: m.id }, m.label); }))
+        ),
+        e('label', { style: { display: 'flex', alignItems: 'center', gap: 4 }, title: 'Byte offset the listing starts at. Hex: 0x and spaces are fine. An odd address is a Thumb pointer, the way ARMv4T means it.' },
+          e('span', { style: { opacity: 0.7 } }, 'Offset'),
+          e('input', {
+            type: 'text', spellCheck: false, placeholder: 'hex',
+            title: 'Byte offset the listing starts at. Hex: 0x and spaces are fine. An odd address is a Thumb pointer, the way ARMv4T means it.',
+            value: disState.offsetText === null || disState.offsetText === undefined
+              ? hexAddress(view ? view.requested : 0) : disState.offsetText,
+            onFocus: function (ev) { ev.target.select(); },
+            onChange: function (ev) { typeDisasmOffset(ev.target.value); },
+            style: Object.assign({ width: 76 }, boxStyle)
+          })
+        ),
+        e('label', { style: { display: 'flex', alignItems: 'center', gap: 4 }, title: 'Instructions on screen, 1..64' },
+          e('span', { style: { opacity: 0.7 } }, 'Lines'),
+          e('input', {
+            type: 'text', spellCheck: false,
+            title: 'Instructions on screen, 1..64',
+            value: disState.linesText === null || disState.linesText === undefined ? String(disState.lines) : disState.linesText,
+            onChange: function (ev) { typeDisasmLines(ev.target.value); },
+            style: Object.assign({ width: 40 }, boxStyle)
+          })
+        ),
+        e('span', { style: { marginLeft: 'auto', fontFamily: MONO, opacity: 0.75 } },
+          (view ? modeLabel + autoNote + ' at ' + hexAddress(view.requested) : 'no data')
+          + (view && view.source ? ' | ' + view.source.label : ''))
+      ),
+      e('div', {
+        style: {
+          maxHeight: 260, overflow: 'auto', padding: '4px 6px',
+          background: 'var(--kt-editor-bg, #1e1e1e)', fontSize: 11, lineHeight: '15px'
+        }
+      },
+        rows.length
+          ? rows.map(disasmRow)
+          : e('div', { style: { opacity: 0.7 } },
+              'No instruction to show here: the listing starts past the end of this source, or no byte is loaded.')
+      ),
+      e('div', {
+        style: {
+          display: 'flex', gap: 10, flexWrap: 'wrap', padding: '3px 6px',
+          borderTop: '1px solid var(--kt-widget-border-default)', fontFamily: MONO, fontSize: 10, opacity: 0.8
+        }
+      },
+        e('span', null, view && view.start !== null
+          ? hexAddress(view.start) + '-' + hexAddress(view.end) + ' of ' + hexAddress(Math.max(0, len - 1))
+          : 'no data'),
+        e('span', null, modeLabel),
+        e('span', null, rows.length + ' instruction(s)'),
+        e('span', null, markedRows + ' row(s) with a breakpoint'),
+        e('span', { title: 'No emulator, no CPU: the rows are the instructions the bytes would be, not instructions that ran' },
+          'nothing runs: these are bytes in the file')
+      ),
+      e('div', {
+        style: {
+          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '4px 6px',
+          borderTop: '1px solid var(--kt-widget-border-default)', background: 'var(--kt-sidebar-bg)'
+        }
+      },
+        e('span', { style: { fontWeight: 600 } }, 'Breakpoints'),
+        e('input', {
+          type: 'text', spellCheck: false, placeholder: 'hex',
+          title: 'Breakpoint address in hex: 0x200 or 200. An odd address is a Thumb pointer.',
+          value: disState.addressText,
+          onChange: function (ev) { typeBreakpointAddress(ev.target.value); },
+          style: Object.assign({ width: 76 }, boxStyle)
+        }),
+        e('select', {
+          value: disState.type,
+          title: 'What the note means: exec names a code address, read and write name a data address',
+          onChange: function (ev) { setBreakpointType(ev.target.value); },
+          style: boxStyle
+        }, BP_TYPES.map(function (t) { return e('option', { key: t, value: t }, t); })),
+        e('button', {
+          type: 'button', className: 'kt-btn small',
+          title: 'Add this address to the static breakpoint list',
+          onClick: function () { addBreakpointFromBox(); }
+        }, 'Add'),
+        e('button', {
+          type: 'button', className: 'kt-btn small secondary',
+          disabled: !listed.length,
+          title: 'Remove every breakpoint from the list',
+          onClick: function () { clearBreakpoints(); }
+        }, 'Clear'),
+        e('span', { style: { marginLeft: 'auto', opacity: 0.7 } }, listed.length + ' note(s)')
+      ),
+      e('div', { style: { padding: '0 6px 4px', fontSize: 10, opacity: 0.7, lineHeight: 1.5 } },
+        'A breakpoint here is a note in this tab, not a trap. Nothing in this workbench runs the ROM, '
+        + 'so no instruction is halted and no memory access is watched: exec names a code address, read and '
+        + 'write name a data address (RAM in a save state), and the mark is only drawn where the address falls.'),
+      listed.length
+        ? e('div', null, listed.map(function (bp) { return breakpointRow(bp, len); }))
+        : e('div', { style: { padding: '2px 6px', opacity: 0.6, fontStyle: 'italic' } },
+            'No breakpoint yet: type an address, pick exec, read or write, and press Add.'),
+      disState.status
+        ? e('div', { style: { padding: '2px 6px', fontSize: 10, opacity: 0.75 } }, disState.status)
+        : null,
+      view && view.entries.length
+        ? e('div', null,
+            e('div', { style: { fontWeight: 600, padding: '4px 6px 0' } }, 'Thumb entry candidates'),
+            e('div', { style: { padding: '0 6px', fontSize: 10, opacity: 0.7, lineHeight: 1.5 } },
+              'Found by shape alone: a push that saves lr, or a bx lr, with a fill pattern in front of it. '
+              + 'A literal pool can hold the same halfword, so a candidate is a guess offered with the evidence '
+              + 'that produced it, not a symbol.'),
+            view.entries.map(entryRow)
+          )
         : null
     );
   }
@@ -759,6 +1276,7 @@
        the workbench reads, so a ROM shows up here the moment it is loaded. */
     var hexState = K.hex && K.hex.useHex ? K.hex.useHex() : null;
     var memState = useMemory();
+    var disState = useDisasm();
     var st = uS(DEFAULT_WINDOW);
     var scanWindow = st[0];
     var setScanWindow = st[1];
@@ -803,7 +1321,7 @@
         }
       },
         e('span', { style: { fontWeight: 600 } }, 'Debugger'),
-        e('span', { style: { opacity: 0.7 } }, 'static register read, nothing runs'),
+        e('span', { style: { opacity: 0.7 } }, 'static read: registers, memory, listing; nothing runs'),
         e('span', { style: { fontFamily: MONO, opacity: 0.85 } },
           (hexState && hexState.romName ? hexState.romName + ' | ' : '')
           + (bytes && bytes.length ? bytes.length + ' bytes' : 'no ROM')
@@ -842,6 +1360,8 @@
                 : 'No ROM is loaded: the register scan needs the file. A save state, when one is handed in, is readable on its own.')),
         e('div', { style: { fontWeight: 600 } }, 'Memory'),
         memoryPanel(memState, view),
+        e('div', { style: { fontWeight: 600 } }, 'Disassembly'),
+        disasmPanel(disState, currentDisasm(), disassemblerReady()),
         e('div', { style: { fontWeight: 600 } }, 'Display registers'),
         canScan
           ? e('div', { style: { border: '1px solid var(--kt-widget-border-default)', borderRadius: 3 } },
@@ -904,6 +1424,30 @@
     memoryKeyHandler: onMemoryKey,
     setSaveState: setSaveState,
     clearSaveState: clearSaveState,
-    saveStateBlocks: saveStateBlocks
+    saveStateBlocks: saveStateBlocks,
+    /* disassembly and the static breakpoint list (Batch 159) */
+    DIS_ROWS: DIS_ROWS,
+    DIS_MAX_ROWS: DIS_MAX_ROWS,
+    DISASM_MODES: DIS_MODES.map(function (m) { return m.id; }),
+    BREAKPOINT_TYPES: BP_TYPES.slice(),
+    disassemblerReady: disassemblerReady,
+    disassembleView: currentDisasm,
+    getDisasm: getDisasm,
+    subscribeDisasm: subscribeDisasm,
+    typeDisasmOffset: typeDisasmOffset,
+    typeDisasmLines: typeDisasmLines,
+    setDisasmMode: setDisasmMode,
+    disassembleAt: disassembleAt,
+    entryPoints: entryCandidates,
+    breakpoints: breakpoints,
+    breakpointTypesAt: breakpointTypesAt,
+    breakpointsInRange: breakpointsInRange,
+    addBreakpoint: addBreakpoint,
+    removeBreakpoint: removeBreakpoint,
+    clearBreakpoints: clearBreakpoints,
+    typeBreakpointAddress: typeBreakpointAddress,
+    setBreakpointType: setBreakpointType,
+    addBreakpointFromBox: addBreakpointFromBox,
+    parseBreakpointType: normalizeBreakpointType
   };
 })(window);

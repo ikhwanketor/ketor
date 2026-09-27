@@ -16,10 +16,11 @@ const gbaProfile = require('./gba-profile.test');
 const headerlessRecord = require('./headerless-record.test');
 const readableFilter = require('./readable-filter.test');
 const debuggerTab = require('./debugger-tab.test');
+const armDisasm = require('./arm-disasm.test');
 const tileWriteback = require('./tile-writeback.test');
 const tileClipboard = require('./tile-clipboard.test');
 
-const suites = [insertPolicy.suite, pointerDetector.suite, translatePanel.suite, gameProfile.suite, saveState.suite, fontMap.suite, tableWidth.suite, extractFiller.suite, extractionRecords.suite, gbaProfile.suite, headerlessRecord.suite, readableFilter.suite, debuggerTab.suite, tileWriteback.suite, tileClipboard.suite];
+const suites = [insertPolicy.suite, pointerDetector.suite, translatePanel.suite, gameProfile.suite, saveState.suite, fontMap.suite, tableWidth.suite, extractFiller.suite, extractionRecords.suite, gbaProfile.suite, headerlessRecord.suite, readableFilter.suite, debuggerTab.suite, armDisasm.suite, tileWriteback.suite, tileClipboard.suite];
 const filter = process.argv[2] ? String(process.argv[2]) : '';
 const chosen = filter ? suites.filter(function (s) { return s.name.indexOf(filter) >= 0; }) : suites;
 
