@@ -575,46 +575,10 @@ function describeGap(gap) {
    One entry per gap the recon found, grouped by the area batch that will close it. */
 
 const ALLOWLIST = {
-  /* ---- tile: 32 gaps; batch 184 adds the tooltips and deletes every entry below ---- */
-  tile: {
-    "ketor-tile-activity.js|button|Tiles|TB + (st.view === 'tiles' ? '' : ' secondary')|-": "\"Tiles\" button — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|button|Map|TB + (st.view === 'map' ? '' : ' secondary')|-": "\"Map\" button — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|button|Goto Hex|kt-btn small|-": "\"Goto Hex\" button — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|button|key='map' + c.offset|'kt-btn small' + (st.mapScreenBase === c.offset ? '' : ' secondary')|-": "Map: \"key='map' + c.offset\" button — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|button|Go|kt-btn small|-#1": "Map: \"Go\" button — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|button|Go|kt-btn small|-#2": "Map: \"Go\" button — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|input|placeholder=name this screen|-|-": "Map: input (placeholder=name this screen) — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|button|Remember|kt-btn small|-": "Map: \"Remember\" button — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|select|value=st.mapSize|kt-select|-": "Map: select (value=st.mapSize) — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|input|placeholder=tile to place (hex, empty = selected)|-|-": "Map: input (placeholder=tile to place (hex, empty = selected)) — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|button|Set|kt-btn small|-": "Map: \"Set\" button — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|textarea|placeholder=your name, or two lines|-|-": "Write text on this screen: textarea (placeholder=your name, or two lines) — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|input|placeholder=start cell (empty = map cursor)|-|-": "Write text on this screen: input (placeholder=start cell (empty = map cursor)) — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|button|Write|kt-btn small|-": "Write text on this screen: \"Write\" button — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|input|value=st.fontBase|-|-": "Write text on this screen: input (value=st.fontBase) — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|input|value='0x' + (Number(st.fontFirstCode) || 0).toString(16).toUpperCase()|-|-": "Write text on this screen: input (value='0x' + (Number(st.fontFirstCode) || 0).toString(16).toUpperCase()) — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|input|placeholder=palette offset|-|-": "Palette: input (placeholder=palette offset) — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|button|Load|kt-btn small|-": "Palette: \"Load\" button — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|button|Export .pal|kt-btn small secondary|-": "Palette: \"Export .pal\" button — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|button|Import|kt-btn small secondary|-": "Palette: \"Import\" button — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|button|key='pal' + c.offset|'kt-btn small' + (st.paletteOffset === c.offset ? '' : ' secondary')|-": "Palette: \"key='pal' + c.offset\" button — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|button|Write back|kt-btn small|-": "Compressed graphic: \"Write back\" button — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|button|Read ROM|kt-btn small secondary|-": "Compressed graphic: \"Read ROM\" button — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|textarea|placeholder=20 21 22 ... tile bytes, or 32 bytes of BGR555 for a palette (512 for 8bpp)|-|-": "Paste hex from an emulator: textarea (placeholder=20 21 22 ... tile bytes, or 32 bytes of BGR555 for a palette (512 for 8bpp)) — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|select|value=targetSt[0]|kt-select|-": "Paste hex from an emulator: select (value=targetSt[0]) — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|button|Apply|kt-btn small|-": "Paste hex from an emulator: \"Apply\" button — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|button|Copy tile 0|kt-btn small secondary|-": "Paste hex from an emulator: \"Copy tile 0\" button — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|button|Clear|kt-btn small secondary|-": "Paste hex from an emulator: \"Clear\" button — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|select|value=st.format|kt-select|-": "select (value=st.format) — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|select|value=st.tiles|kt-select|-": "select (value=st.tiles) — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|input|placeholder=hex offset|-|-": "input (placeholder=hex offset) — no tooltip yet; batch 184",
-    "ketor-tile-activity.js|button|Go|kt-btn small|-#3": "\"Go\" button — no tooltip yet; batch 184",
-  },
-
-  /* ---- font, groups, chrome, dialog, patch, about and panel: closed by batch 184; hex:
-     closed by batch 185; translate: closed by batch 186; textSearch: closed by batch 187;
-     tables: closed by batch 188. The tooltips are in place and their entries were
-     deleted, so the list can only shrink ---- */
+  /* ---- tile: closed by batch 189; font, groups, chrome, dialog, patch, about and panel:
+     closed by batch 184; hex: closed by batch 185; translate: closed by batch 186;
+     textSearch: closed by batch 187; tables: closed by batch 188. Every control explains
+     itself and every entry was deleted, so the list is empty and can only shrink ---- */
 };
 
 /* Every entry of every area, keyed by the audit signature, with the area and the reason

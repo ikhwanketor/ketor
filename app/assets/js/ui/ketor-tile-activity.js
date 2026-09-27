@@ -3011,8 +3011,8 @@
           onClick: importTilesPngDialog
         }, 'Import PNG'),
         e('span', { style: { opacity: 0.25 } }, '|'),
-        e('button', { type: 'button', className: TB + (st.view === 'tiles' ? '' : ' secondary'), onClick: function () { _set({ view: 'tiles' }); } }, 'Tiles'),
-        e('button', { type: 'button', className: TB + (st.view === 'map' ? '' : ' secondary'), onClick: function () { _set({ view: 'map' }); } }, 'Map'),
+        e('button', { type: 'button', className: TB + (st.view === 'tiles' ? '' : ' secondary'), title: 'Shows the sheet as a grid of tiles; pick this to paint or copy tiles, and Map to see the screen the map builds', onClick: function () { _set({ view: 'tiles' }); } }, 'Tiles'),
+        e('button', { type: 'button', className: TB + (st.view === 'map' ? '' : ' secondary'), title: 'Shows the screen the map and character bases build; set both bases in the Map box first, or the canvas stays empty', onClick: function () { _set({ view: 'map' }); } }, 'Map'),
         e('button', {
           type: 'button', className: TB + (st.view === 'font' ? '' : ' secondary'),
           title: 'Draw the sheet in character order, labelled from the loaded table',
@@ -3097,7 +3097,7 @@
           },
           style: { width: 28, height: 20, padding: 0, background: 'transparent', border: '1px solid var(--kt-widget-border-default)' }
         }),
-        e('button', { type: 'button', className: 'kt-btn small', disabled: selected < 0, onClick: function () { K.hex.gotoOffset(tileAbsoluteOffset(selected, K.core)); } }, 'Goto Hex'),
+        e('button', { type: 'button', className: 'kt-btn small', disabled: selected < 0, title: 'Moves the Hex Editor cursor onto the bytes of the tile picked on the sheet; it does nothing while no tile is selected', onClick: function () { K.hex.gotoOffset(tileAbsoluteOffset(selected, K.core)); } }, 'Goto Hex'),
         e('span', { style: { flex: 1 } }),
         /* The one line summary of the window, the format and the step, the tiles, the
            patches inside it, the picked tile and pixel, the image length and the open
@@ -3225,6 +3225,7 @@
               key: 'map' + c.offset,
               type: 'button',
               className: 'kt-btn small' + (st.mapScreenBase === c.offset ? '' : ' secondary'),
+              title: 'Use 0x' + hex6(c.offset) + ' as the screen base; the score beside it says how well its cells reuse tile numbers',
               style: { fontFamily: MONO, justifyContent: 'flex-start' },
               onClick: function () { _set({ mapScreenBase: c.offset }); }
             }, '0x' + hex6(c.offset) + '  ' + c.score.toFixed(2) + '  ' + c.distinct + ' tiles');
@@ -3238,7 +3239,7 @@
             onChange: function (ev) { mapScreenSt[1](ev.target.value); },
             onKeyDown: function (ev) { if (ev.key === 'Enter') commitMapScreen(); }
           }),
-          e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapScreen }, 'Go'),
+          e('button', { type: 'button', className: 'kt-btn small', title: 'Takes the box beside it as the screen base and redraws the map from there; pair it with the character base below', onClick: commitMapScreen }, 'Go'),
           e('button', { type: 'button', className: 'kt-btn small secondary', title: 'Use the offset the hex cursor is on', onClick: screenFromCursor }, 'cursor')
         ),
         e('div', { style: rowStyle },
@@ -3249,16 +3250,17 @@
             onChange: function (ev) { mapCharSt[1](ev.target.value); },
             onKeyDown: function (ev) { if (ev.key === 'Enter') commitMapChar(); }
           }),
-          e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapChar }, 'Go'),
+          e('button', { type: 'button', className: 'kt-btn small', title: 'Takes the box beside it as the character base, the tile sheet the screen reads; the map cannot draw tiles without it', onClick: commitMapChar }, 'Go'),
           e('button', { type: 'button', className: 'kt-btn small secondary', title: 'Use the offset the hex cursor is on', onClick: charFromCursor }, 'cursor')
         ),
         e('div', { style: { display: 'flex', gap: 4 } },
           e('input', {
             style: inputStyle, value: nameSt[0], spellCheck: false, placeholder: 'name this screen',
+            title: 'Name to store with the current screen base and character base; leave it empty and the screen is saved under its offset',
             onChange: function (ev) { nameSt[1](ev.target.value); },
             onKeyDown: function (ev) { if (ev.key === 'Enter') commitScreenName(); }
           }),
-          e('button', { type: 'button', className: 'kt-btn small', onClick: commitScreenName, disabled: st.mapScreenBase === null }, 'Remember')
+          e('button', { type: 'button', className: 'kt-btn small', title: 'Stores the current screen and character bases under that name for this ROM; it needs a screen base set first', onClick: commitScreenName, disabled: st.mapScreenBase === null }, 'Remember')
         ),
         (st.savedScreens && st.savedScreens.length) ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
           e('div', { style: { opacity: 0.75 } }, 'Screens remembered for this ROM'),
@@ -3289,6 +3291,7 @@
           'Map size',
           e('select', {
             className: 'kt-select', value: st.mapSize,
+            title: 'Cells per side of the map, such as 32x32 or 64x64; a size the game does not use shifts every screen row',
             onChange: function (ev) { _set({ mapSize: ev.target.value }); },
             style: { fontSize: 11 }
           }, Object.keys(mapSizes()).map(function (id) { return e('option', { key: id, value: id }, id); }))
@@ -3296,10 +3299,11 @@
         e('div', { style: rowStyle },
           e('input', {
             style: inputStyle, value: mapTileSt[0], spellCheck: false, placeholder: 'tile to place (hex, empty = selected)',
+            title: 'Tile number a click paints on the map; leave it empty to paint the tile selected on the sheet instead',
             onChange: function (ev) { mapTileSt[1](ev.target.value); },
             onKeyDown: function (ev) { if (ev.key === 'Enter') commitMapTile(); }
           }),
-          e('button', { type: 'button', className: 'kt-btn small', onClick: commitMapTile }, 'Set')
+          e('button', { type: 'button', className: 'kt-btn small', title: 'Takes the tile number typed beside it as the one clicks paint; Set only arms the brush, nothing is written yet', onClick: commitMapTile }, 'Set')
         )
       ),
 
@@ -3309,26 +3313,30 @@
           value: textSt[0],
           onChange: function (ev) { textSt[1](ev.target.value); },
           placeholder: 'your name, or two lines',
+          title: 'Text to write on the screen, a newline starting the next row; the table and the font base turn it into tile numbers',
           spellCheck: false,
           style: { minHeight: 44, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: 4, resize: 'vertical' }
         }),
         e('div', { style: rowStyle },
           e('input', {
             style: inputStyle, value: startSt[0], spellCheck: false, placeholder: 'start cell (empty = map cursor)',
+            title: 'Cell the text starts at, counted from the top left of the screen; leave it empty to start at the map cursor',
             onChange: function (ev) { startSt[1](ev.target.value); }
           }),
-          e('button', { type: 'button', className: 'kt-btn small', onClick: writeText }, 'Write')
+          e('button', { type: 'button', className: 'kt-btn small', title: 'Turns the text into tile numbers with the table and writes them into the map as patches; load a table and set a base', onClick: writeText }, 'Write')
         ),
         e('div', { style: rowStyle },
           e('span', { style: { opacity: 0.7 } }, 'font base'),
           e('input', {
             style: { width: 58, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' },
+            title: 'Tile of the sheet that holds the first code of the font; the text tool counts characters on from this tile',
             type: 'number', value: st.fontBase,
             onChange: function (ev) { _set({ fontBase: Math.max(0, Number(ev.target.value) || 0) }); }
           }),
           e('span', { style: { opacity: 0.7 } }, 'first code'),
           e('input', {
             style: { width: 52, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: '2px 4px' },
+            title: 'Character code that first font tile stands for, 0x20 when the sheet starts at the space; it must match the table',
             type: 'text', value: '0x' + (Number(st.fontFirstCode) || 0).toString(16).toUpperCase(),
             onChange: function (ev) { _set({ fontFirstCode: parseInt(String(ev.target.value).replace(/^0x/i, ''), 16) || 0 }); }
           })
@@ -3490,15 +3498,16 @@
         e('div', { style: rowStyle },
           e('input', {
             style: inputStyle, value: palSt[0], spellCheck: false, placeholder: 'palette offset',
+            title: 'Hex offset of a palette in the ROM to read; type one and press Load, or Enter, to show those colours',
             onChange: function (ev) { palSt[1](ev.target.value); },
             onKeyDown: function (ev) { if (ev.key === 'Enter') commitPalette(); }
           }),
-          e('button', { type: 'button', className: 'kt-btn small', onClick: commitPalette, disabled: !hex || !hex.romBytes }, 'Load')
+          e('button', { type: 'button', className: 'kt-btn small', title: 'Reads the palette at the offset beside it from the ROM and arms colour edits there; Import takes a .pal file instead', onClick: commitPalette, disabled: !hex || !hex.romBytes }, 'Load')
         ),
         e('div', { style: { display: 'flex', gap: 4 } },
           e('button', { type: 'button', className: 'kt-btn small secondary', style: { flex: '1 1 auto' }, onClick: findPalette, title: paletteFindTitle(), disabled: !hex || !hex.romBytes || !paletteModel().inRom }, 'Find'),
-          e('button', { type: 'button', className: 'kt-btn small secondary', disabled: !st.palette, onClick: exportPalette }, 'Export .pal'),
-          e('button', { type: 'button', className: 'kt-btn small secondary', onClick: importPaletteDialog }, 'Import')
+          e('button', { type: 'button', className: 'kt-btn small secondary', disabled: !st.palette, title: 'Saves the loaded palette as a .pal file named after its offset; it needs a palette and writes nothing to the ROM', onClick: exportPalette }, 'Export .pal'),
+          e('button', { type: 'button', className: 'kt-btn small secondary', title: 'Reads a .pal, .act or JASC-PAL file; an imported palette has no ROM offset, so its colours cannot be written back', onClick: importPaletteDialog }, 'Import')
         ),
         st.paletteCandidates && st.paletteCandidates.length ? e('div', { style: { display: 'flex', flexDirection: 'column', gap: 3 } },
           e('div', { style: { opacity: 0.75 } }, 'Palette candidates'),
@@ -3507,6 +3516,7 @@
               key: 'pal' + c.offset,
               type: 'button',
               className: 'kt-btn small' + (st.paletteOffset === c.offset ? '' : ' secondary'),
+              title: 'Reads the palette at 0x' + hex6(c.offset) + ' from the ROM and uses those colours on the sheet and map',
               style: { fontFamily: MONO, justifyContent: 'flex-start' },
               onClick: function () { loadPalette(c.offset); }
             }, '0x' + hex6(c.offset) + '  ' + c.score.toFixed(2));
@@ -3531,8 +3541,8 @@
             ? (st.graphicSource.compressedSize + ' of ' + st.graphicSource.budget + ' byte(s) used' + (st.graphicSource.dirty ? ', waiting to write back' : ', written'))
             : 'not written back yet'),
           e('div', { style: { display: 'flex', gap: 4 } },
-            e('button', { type: 'button', className: 'kt-btn small', onClick: function () { writeBackCompressed(); } }, 'Write back'),
-            e('button', { type: 'button', className: 'kt-btn small secondary', onClick: clearSource }, 'Read ROM')
+            e('button', { type: 'button', className: 'kt-btn small', title: 'Compresses the edited graphic and writes it back to the ROM as a patch; a stream that does not read back is refused', onClick: function () { writeBackCompressed(); } }, 'Write back'),
+            e('button', { type: 'button', className: 'kt-btn small secondary', title: 'Closes the opened compressed graphic and shows the raw ROM bytes again; edits already written back stay', onClick: clearSource }, 'Read ROM')
           )
         ) : null,
 
@@ -3541,18 +3551,19 @@
           value: pasteSt[0],
           onChange: function (ev) { pasteSt[1](ev.target.value); },
           placeholder: '20 21 22 ... tile bytes, or 32 bytes of BGR555 for a palette (512 for 8bpp)',
+          title: 'Bytes copied out of an emulator as hex; the target below decides where Apply puts them, tile, screen or palette',
           spellCheck: false,
           style: { minHeight: 54, fontFamily: MONO, fontSize: 11, background: 'var(--kt-input-bg, #3c3c3c)', color: 'var(--kt-input-fg, #ccc)', border: '1px solid var(--kt-widget-border-default)', borderRadius: 2, padding: 4, resize: 'vertical' }
         }),
-        e('select', { className: 'kt-select', value: targetSt[0], onChange: function (ev) { targetSt[1](ev.target.value); }, style: { fontSize: 11 } },
+        e('select', { className: 'kt-select', value: targetSt[0], title: 'Destination Apply writes to: tile 0 of the region, the region start, or a palette from the text or the ROM offset', onChange: function (ev) { targetSt[1](ev.target.value); }, style: { fontSize: 11 } },
           e('option', { value: 'tile' }, 'Write at tile 0 of the region'),
           e('option', { value: 'region' }, 'Write at the region start'),
           e('option', { value: 'palette' }, 'Load as palette'),
           e('option', { value: 'palette-rom' }, 'Write at the palette offset')),
         e('div', { style: { display: 'flex', gap: 4 } },
-          e('button', { type: 'button', className: 'kt-btn small', onClick: applyPaste }, 'Apply'),
-          e('button', { type: 'button', className: 'kt-btn small secondary', onClick: copyHexText }, 'Copy tile 0'),
-          e('button', { type: 'button', className: 'kt-btn small secondary', onClick: function () { pasteSt[1](''); } }, 'Clear')
+          e('button', { type: 'button', className: 'kt-btn small', title: 'Writes the pasted bytes to the destination beside it as hex patches; for a tile target, bytes past one tile are dropped', onClick: applyPaste }, 'Apply'),
+          e('button', { type: 'button', className: 'kt-btn small secondary', title: 'Copies tile 0 of the region as hex text for an emulator; it is always tile 0, never the tile picked on the sheet', onClick: copyHexText }, 'Copy tile 0'),
+          e('button', { type: 'button', className: 'kt-btn small secondary', title: 'Empties the paste box only; bytes already applied stay in the ROM as patches and can still be undone', onClick: function () { pasteSt[1](''); } }, 'Clear')
         )
       )
     );
@@ -3590,6 +3601,7 @@
         'Format',
         e('select', {
           className: 'kt-select', value: st.format,
+          title: 'Tile layout of the ROM, which sets the tile size; changing it drops the region and any open graphic, so detect again',
           onChange: function (ev) {
             /* A format carries its own tile size - a Game Boy 2bpp tile is 16 bytes, a
                GBA 8bpp tile 64 - so the depth and the stride follow the pick. */
@@ -3607,6 +3619,7 @@
         'Tiles shown',
         e('select', {
           className: 'kt-select', value: st.tiles,
+          title: 'How many tiles the sheet draws; a larger number reaches further into the ROM and changes nothing in the file',
           onChange: function (ev) { _set({ tiles: Number(ev.target.value) }); },
           style: { fontSize: 11 }
         }, [64, 128, 256, 512].map(function (n) { return e('option', { key: 't' + n, value: n }, String(n)); }))
@@ -3640,10 +3653,11 @@
       e('div', { style: rowStyle },
         e('input', {
           style: inputStyle, value: regionSt[0], spellCheck: false, placeholder: 'hex offset',
+          title: 'Hex offset the tile region starts at; Go opens the sheet there, and Detect tiles fills this box in for you',
           onChange: function (ev) { regionSt[1](ev.target.value); },
           onKeyDown: function (ev) { if (ev.key === 'Enter') commitRegion(); }
         }),
-        e('button', { type: 'button', className: 'kt-btn small', onClick: commitRegion }, 'Go')
+        e('button', { type: 'button', className: 'kt-btn small', title: 'Opens the sheet at the offset typed beside it; use Goto Hex to move the hex cursor onto a tile instead', onClick: commitRegion }, 'Go')
       ),
       e('div', { style: { opacity: 0.7, lineHeight: 1.45 } }, 'Palette, map, text and hex controls live in the boxes on the right of the canvas.')
     );
