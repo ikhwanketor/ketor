@@ -16,20 +16,31 @@ const suite = createSuite('headerless record');
 
 const BASE = 0x08000000;
 
-function tableContent() {
+function tableContent(twoByte) {
   const lines = [];
   for (let i = 0; i < 26; i++) {
     const code = (0x41 + i).toString(16).toUpperCase();
-    lines.push(code + '=' + String.fromCharCode(0x41 + i));
+    lines.push((twoByte ? code + '00' : code) + '=' + String.fromCharCode(0x41 + i));
   }
-  lines.push('20=[SPACE]');
-  lines.push('00=[END]');
+  lines.push((twoByte ? '2000' : '20') + '=[SPACE]');
+  lines.push((twoByte ? '0000' : '00') + '=[END]');
   return lines.join('\n') + '\n';
+}
+
+function writeText(rom, at, text, twoByte) {
+  for (let k = 0; k < text.length; k++) {
+    rom[at] = text.charCodeAt(k);
+    if (twoByte) rom[at + 1] = 0x00;
+    at += twoByte ? 2 : 1;
+  }
+  rom[at] = 0x00;
+  if (twoByte) rom[at + 1] = 0x00;
+  return at + (twoByte ? 2 : 1);
 }
 
 /* Ten records that begin with their text, a four byte pointer table in front of them,
    and nothing else that looks like a pointer. */
-function fixture(withHeader) {
+function fixture(withHeader, prefix, twoByte) {
   /* The region that holds the table and the records is filled with something that is
      not free space, and the rest of the rom stays zero - which is what the allocator
      looks for. A rom with no free space at all cannot move a record, and the point of
@@ -43,9 +54,9 @@ function fixture(withHeader) {
     const text = 'MESSAGE ' + String.fromCharCode(0x41 + i) + ' SAYS HELLO';
     let at = head;
     if (withHeader) { rom[head] = 0x01; rom[head + 1] = 0x00; at = head + 2; }
-    for (let k = 0; k < text.length; k++) rom[at + k] = text.charCodeAt(k);
-    rom[at + text.length] = 0x00;
-    const byteLength = at + text.length + 1 - at;
+    else if (prefix) { for (let p = 0; p < prefix.length; p++) rom[head + p] = prefix[p]; at = head + prefix.length; }
+    const end = writeText(rom, at, text, twoByte);
+    const byteLength = end - at;
     records.push({ head: head, textStart: at, byteLength: byteLength, text: text });
     texts.push({
       startByte: at, offset: at, byteLength: byteLength,
@@ -63,16 +74,16 @@ function fixture(withHeader) {
     project: {
       format: 'ketor-project', version: 1,
       rom: { name: 'synthetic.gba', size: rom.length, system: 'GBA' },
-      table: { name: 'synthetic.tbl', entryCount: 28, content: tableContent() },
+      table: { name: 'synthetic.tbl', entryCount: 28, content: tableContent(twoByte) },
       groups: [], texts: texts
     }
   };
 }
 
-async function buildOne(withHeader, longerBy) {
+async function buildOne(withHeader, longerBy, prefix, twoByte) {
   const env = loadWorkbench();
   const K = env.K;
-  const f = fixture(withHeader);
+  const f = fixture(withHeader, prefix, twoByte);
   const target = f.records[3];
   f.project.texts[3].translatedText = target.text + ' AND MORE';
   const info = { data: f.rom, name: 'synthetic.gba', size: f.rom.length };
@@ -126,6 +137,54 @@ suite.test('a record that has a header still has to keep it', async function (t)
     assertEqual(out[offset], 0x01, 'the record still opens with its header byte');
     assertEqual(out[offset + 1], 0x00, 'and its second header byte');
   }
+});
+
+suite.test('a text that starts inside a record moves the whole record', async function (t) {
+  /* Kingdom Hearts opens its intro record with 00 E0 before the first letter, so the
+     text the translator sees starts two bytes inside the record the table names. The
+     record is what the engine reaches through its entry, so the record is what moves. */
+  const built = await buildOne(false, 9, [0x02, 0x03]);
+  const log = built.log;
+  assert(log.indexOf('This page sits inside') < 0, 'it was not left where it was: ' + log.slice(0, 500));
+  assert(log.indexOf('Relocated to 0x') >= 0, 'the record moved: ' + log.slice(0, 500));
+  assert(log.indexOf('Self check failed') < 0, 'and the self check did not refuse it: ' + log.slice(0, 400));
+  const out = built.state.modifiedRom;
+  assert(out, 'an image came back');
+  const at = 0x1000 + 3 * 4;
+  const target = (out[at] | (out[at + 1] << 8) | (out[at + 2] << 16) | (out[at + 3] << 24)) >>> 0;
+  const offset = target - BASE;
+  assertEqual(out[offset], 0x02, 'the record still opens with its first prefix byte');
+  assertEqual(out[offset + 1], 0x03, 'and its second prefix byte');
+  let read = '';
+  for (let p = offset + 2; p < out.length && out[p] !== 0x00; p++) read += String.fromCharCode(out[p]);
+  assertEqual(read, built.fixture.records[3].text + ' AND MORE',
+    'with the translation behind the prefix, at the address its entry now names');
+});
+
+suite.test('a two byte table moves the record its text sits in', async function (t) {
+  /* This is the shape of the Kingdom Hearts intro: the table is two bytes a character,
+     the record opens with a two byte code, and the text the translator sees starts two
+     bytes into the record. A two byte table is not one of the layouts that group a text
+     with its record up front, so the block starts at the text and the record has to be
+     pulled in - otherwise the build reports "This page sits inside record ... and has no
+     pointer of its own" and the translation never reaches the game. */
+  const built = await buildOne(false, 9, [0x02, 0x03], true);
+  const log = built.log;
+  assert(log.indexOf('the text starts inside the record the table names') >= 0,
+    'the build named the record the text belongs to: ' + log.slice(0, 500));
+  assert(log.indexOf('Relocated to 0x') >= 0, 'and moved the record: ' + log.slice(0, 500));
+  assert(log.indexOf('Self check failed') < 0, 'the self check did not refuse it: ' + log.slice(0, 400));
+  const out = built.state.modifiedRom;
+  assert(out, 'an image came back');
+  const at = 0x1000 + 3 * 4;
+  const target = (out[at] | (out[at + 1] << 8) | (out[at + 2] << 16) | (out[at + 3] << 24)) >>> 0;
+  const offset = target - BASE;
+  assertEqual(out[offset], 0x02, 'the moved record still opens with its first code byte');
+  assertEqual(out[offset + 1], 0x03, 'and its second');
+  let read = '';
+  for (let p = offset + 2; p + 1 < out.length && !(out[p] === 0x00 && out[p + 1] === 0x00); p += 2) read += String.fromCharCode(out[p]);
+  assertEqual(read, built.fixture.records[3].text + ' AND MORE',
+    'with the translation behind it, as two byte codes');
 });
 
 module.exports = { suite: suite };

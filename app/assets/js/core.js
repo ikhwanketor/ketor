@@ -2075,6 +2075,30 @@ let _recordTable = null;
             }
           }
         }
+        /* A text can start inside the record the table names - a control code in front of
+           it, as Kingdom Hearts opens its intro record with 00 E0 before the first letter.
+           The record is the unit the engine reaches through its entry, so the record is
+           the unit that has to move: the block is extended back to the address the table
+           names and the entry then carries the whole record to its new place. Without
+           this the build said "This page sits inside record 0x... and has no pointer of
+           its own" and left a translation that did not fit where it was. */
+        if (isGbaNonPaddingProfile || isGbaMultibyteProfile) {
+          const firstTextStart = Number(sortedTexts[0].startByte);
+          if (Number.isFinite(firstTextStart)) {
+            const recordIdx = recordIndexFor(firstTextStart);
+            const recordStart = recordIdx >= 0 ? Number(recordTable().entries[recordIdx]) : NaN;
+            if (Number.isFinite(recordStart) && recordStart < effectiveBlockStart && recordStart >= firstTextStart - 0x40) {
+              relocationLog.push('Block at 0x' + Number(block.start).toString(16).toUpperCase() + ': the text starts inside the record the table names at 0x' + recordStart.toString(16).toUpperCase() + ', so the whole record moves.');
+              effectiveBlockStart = recordStart;
+              const recordAliases = textAliasMap.get(firstTextStart) || [];
+              if (recordAliases.indexOf(recordStart) < 0) {
+                recordAliases.push(recordStart);
+                recordAliases.sort((a, b) => a - b);
+              }
+              textAliasMap.set(firstTextStart, recordAliases);
+            }
+          }
+        }
         if (isGbaNonPaddingProfile && effectiveBlockStart < sortedTexts[0].startByte) {
           const firstStart = sortedTexts[0].startByte;
           const aliases = textAliasMap.get(firstStart) || [firstStart];
