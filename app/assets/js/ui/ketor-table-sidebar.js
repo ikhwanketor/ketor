@@ -90,6 +90,7 @@
             e('input', {
               type: 'radio',
               name: 'kt-mm-mode',
+              title: 'Matches the sample by the differences between its characters, so the byte values themselves do not have to be known',
               checked: t.searchMode === 'relative',
               onChange: function () { K.table.setSearchMode('relative'); }
             }),
@@ -99,6 +100,7 @@
             e('input', {
               type: 'radio',
               name: 'kt-mm-mode',
+              title: 'Reads the box above as numbers, not text, and looks for that sequence by the gaps between the values',
               checked: t.searchMode === 'value-scan',
               onChange: function () { K.table.setSearchMode('value-scan'); }
             }),
@@ -108,6 +110,7 @@
 
         e('textarea', {
           className: 'kt-textarea',
+          title: 'One sample text per line; more lines make the match more reliable, and Value Scan mode reads them as numbers',
           placeholder: t.searchMode === 'value-scan'
             ? 'Values e.g., 41 42 43'
             : 'text in-game e.g., PRESS START',
@@ -130,6 +133,7 @@
 
         t.searchHistory.length > 0 ? e('select', {
           className: 'kt-select',
+          title: 'Fills the sample box with a text you searched before; picking one does not start a new run by itself',
           style: { fontSize: 11, marginBottom: 6 },
           value: '',
           onChange: onHistory
@@ -144,6 +148,7 @@
         e('button', {
           type: 'button',
           className: 'kt-btn',
+          title: 'Runs the sample over the whole ROM with the settings above; it waits for a ROM and at least one non-empty line',
           style: { width: '100%', marginBottom: 8 },
           onClick: onSearch,
           disabled: t.isSearching || !t.romBytes || sampleCount === 0
@@ -158,6 +163,7 @@
           e('label', { style: { display: 'flex', alignItems: 'center', gap: 4, flex: 1 } },
             e('input', {
               type: 'checkbox',
+              title: 'Lets the wildcard character stand for any single character in the sample; turn it off when the text has to match exactly',
               checked: t.wildcardEnabled,
               onChange: function (ev) { K.table.setWildcardEnabled(ev.target.checked); }
             }),
@@ -194,6 +200,7 @@
             e('input', {
               type: 'radio',
               name: 'kt-mm-bw',
+              title: 'Reads one character as one byte; this is only the fallback when the loaded table does not state a wider code',
               checked: t.byteWidth === 8,
               onChange: function () { K.table.setByteWidth(8); }
             }),
@@ -203,6 +210,7 @@
             e('input', {
               type: 'radio',
               name: 'kt-mm-bw',
+              title: 'Reads one character as two bytes and shows the byte order choice; only the fallback when the table states no width',
               checked: t.byteWidth === 16,
               onChange: function () { K.table.setByteWidth(16); }
             }),
@@ -215,6 +223,7 @@
         e('button', {
           type: 'button',
           className: 'kt-btn small',
+          title: 'Opens or closes the options most games do not need: charset, byte order and the control hint switch',
           style: { width: '100%', marginBottom: t.advancedOpen ? 8 : 0 },
           onClick: function () { K.table.toggleAdvanced(); }
         }, t.advancedOpen ? 'Hide Advanced' : 'Show Advanced'),
@@ -223,6 +232,7 @@
           e(Row, { label: 'Charset:' },
             e('select', {
               className: 'kt-select',
+              title: 'Character set the table codes follow; Custom assumes no built-in set and trusts the loaded .tbl for every character',
               value: t.charset,
               onChange: function (ev) { K.table.setCharset(ev.target.value); },
               style: { fontSize: 11 }
@@ -236,6 +246,7 @@
           t.byteWidth === 16 ? e(Row, { label: 'Byte order:' },
             e('select', {
               className: 'kt-select',
+              title: 'Which byte of a two-byte character comes first in the ROM; it is shown only while the 16-bit width is selected',
               value: t.endianness,
               onChange: function (ev) { K.table.setEndianness(ev.target.value); },
               style: { fontSize: 11 }
@@ -266,6 +277,7 @@
         e('button', {
           type: 'button',
           className: 'kt-btn small',
+          title: 'Reads a .tbl file into the Edit Table, replacing the rows already there; nothing is written to the ROM yet',
           style: { width: '100%' },
           onClick: onLoadFile
         }, 'Load .tbl file')

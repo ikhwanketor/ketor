@@ -611,39 +611,10 @@ const ALLOWLIST = {
     "ketor-tile-activity.js|button|Go|kt-btn small|-#3": "\"Go\" button — no tooltip yet; batch 184",
   },
 
-  /* ---- tables: 25 gaps; batch 186 adds the tooltips and deletes every entry below ---- */
-  tables: {
-    "ketor-table-sidebar.js|input|checked=t.searchMode === 'relative'|-|-": "Search Parameters: input (checked=t.searchMode === 'relative') — no tooltip yet; batch 186",
-    "ketor-table-sidebar.js|input|checked=t.searchMode === 'value-scan'|-|-": "Search Parameters: input (checked=t.searchMode === 'value-scan') — no tooltip yet; batch 186",
-    "ketor-table-sidebar.js|textarea|placeholder=t.searchMode === 'value-scan' ? 'Values e.g., 41 42 43' : 'text in-game e.g., PRESS START'|kt-textarea|-": "Search Parameters: textarea (placeholder=t.searchMode === 'value-scan' ? 'Values e.g., 41 42 43' : 'text in-game e.g., PRESS START') — no tooltip yet; batch 186",
-    "ketor-table-sidebar.js|select|value=|kt-select|-": "Search Parameters: select (value=) — no tooltip yet; batch 186",
-    "ketor-table-sidebar.js|button|Searching...|kt-btn|-": "Search Parameters: \"Searching...\" button — no tooltip yet; batch 186",
-    "ketor-table-sidebar.js|input|checked=t.wildcardEnabled|-|-": "Search Parameters: input (checked=t.wildcardEnabled) — no tooltip yet; batch 186",
-    "ketor-table-sidebar.js|input|checked=t.byteWidth === 8|-|-": "Search Parameters: input (checked=t.byteWidth === 8) — no tooltip yet; batch 186",
-    "ketor-table-sidebar.js|input|checked=t.byteWidth === 16|-|-": "Search Parameters: input (checked=t.byteWidth === 16) — no tooltip yet; batch 186",
-    "ketor-table-sidebar.js|button|Hide Advanced|kt-btn small|-": "Advanced: \"Hide Advanced\" button — no tooltip yet; batch 186",
-    "ketor-table-sidebar.js|select|value=t.charset|kt-select|-": "Advanced: select (value=t.charset) — no tooltip yet; batch 186",
-    "ketor-table-sidebar.js|select|value=t.endianness|kt-select|-": "Advanced: select (value=t.endianness) — no tooltip yet; batch 186",
-    "ketor-table-sidebar.js|button|Load .tbl file|kt-btn small|-": "Load .tbl: \"Load .tbl file\" button — no tooltip yet; batch 186",
-    "ketor-table-tab.js|textarea|placeholder=Edit generated table here (hex=char per line)...|-|-": "textarea (placeholder=Edit generated table here (hex=char per line)...) — no tooltip yet; batch 186",
-    "ketor-table-tab.js|button|+ Add|kt-btn small|-": "\"+ Add\" button — no tooltip yet; batch 186",
-    "ketor-table-tab.js|button|Sort|kt-btn small|-": "\"Sort\" button — no tooltip yet; batch 186",
-    "ketor-table-tab.js|button|Download .tbl|kt-btn small|-": "\"Download .tbl\" button — no tooltip yet; batch 186",
-    "ketor-table-tab.js|button|Clear|kt-btn small btn-danger|-": "\"Clear\" button — no tooltip yet; batch 186",
-    "ketor-table-tab.js|input|value=en.hex|-|-": "input (value=en.hex) — no tooltip yet; batch 186",
-    "ketor-table-tab.js|input|value=en.char|-|-": "input (value=en.char) — no tooltip yet; batch 186",
-    "ketor-table-tab.js|input|placeholder=note|-|-": "input (placeholder=note) — no tooltip yet; batch 186",
-    "ketor-table-tab.js|button|Clear|kt-btn small|-": "\"Clear\" button — no tooltip yet; batch 186",
-    "ketor-table-tab.js|button|Load .tbl to Compare|kt-btn small|-": "\"Load .tbl to Compare\" button — no tooltip yet; batch 186",
-    "ketor-table-tab.js|button|Clear Compare|kt-btn small btn-danger|-": "\"Clear Compare\" button — no tooltip yet; batch 186",
-    "ketor-table-tab.js|button|Apply .tbl to Edit Panel|kt-btn|-": "\"Apply .tbl to Edit Panel\" button — no tooltip yet; batch 186",
-    "ketor-table-tab.js|button|Applied for ROM|-|-": "\"Applied for ROM\" button — no tooltip yet; batch 186",
-  },
-
   /* ---- font, groups, chrome, dialog, patch, about and panel: closed by batch 184; hex:
-     closed by batch 185; translate: closed by batch 186; textSearch: closed by batch 187.
-     The tooltips are in place and their entries were deleted, so the list can only
-     shrink ---- */
+     closed by batch 185; translate: closed by batch 186; textSearch: closed by batch 187;
+     tables: closed by batch 188. The tooltips are in place and their entries were
+     deleted, so the list can only shrink ---- */
 };
 
 /* Every entry of every area, keyed by the audit signature, with the area and the reason

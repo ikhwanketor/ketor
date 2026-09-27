@@ -194,6 +194,7 @@
           value: previewContent || '',
           onChange: function (ev) { onPreviewChange(ev.target.value); },
           spellCheck: false,
+          title: 'Edits the generated table in place, one hex=char pair per line; the rows reach the Edit Panel, not the ROM',
           placeholder: 'Edit generated table here (hex=char per line)...',
           style: textareaStyle
         });
@@ -253,20 +254,24 @@
       e('div', { style: { display: 'flex', gap: 4, marginBottom: 6, flexWrap: 'wrap', flex: '0 0 auto' } },
         e('button', {
           type: 'button', className: 'kt-btn small',
+          title: 'Appends an empty row at the end so a code the search missed can be typed in by hand',
           onClick: function () { K.table.addEditEntry(); }
         }, '+ Add'),
         e('button', {
           type: 'button', className: 'kt-btn small',
+          title: 'Puts the edit rows in hex order; it needs at least two rows and reorders nothing else',
           onClick: function () { K.table.sortEditTable(); },
           disabled: entries.length < 2
         }, 'Sort'),
         e('button', {
           type: 'button', className: 'kt-btn small',
+          title: 'Saves the Edit Table as a .tbl file named after the loaded ROM; it needs at least one row',
           onClick: function () { K.table.downloadEditTable(); },
           disabled: entries.length === 0
         }, 'Download .tbl'),
         e('button', {
           type: 'button', className: 'kt-btn small btn-danger',
+          title: 'Removes every row of the Edit Table and forgets where it came from; the ROM is untouched, the table is lost',
           onClick: function () { K.table.clearEditTable(); },
           disabled: entries.length === 0
         }, 'Clear')
@@ -319,6 +324,7 @@
                     e('td', { style: tdStyle('left') },
                       e('input', {
                         type: 'text',
+                        title: 'Code of this row in hex; changing it updates the bytes and the automatic comment beside it',
                         value: en.hex,
                         onChange: function (ev) {
                           var v = ev.target.value.toUpperCase().replace(/[^0-9A-F]/g, '');
@@ -330,6 +336,7 @@
                     e('td', { style: tdStyle('left') },
                       e('input', {
                         type: 'text',
+                        title: 'Character this code stands for; typing one refreshes the bytes and comment so the .tbl line stays consistent',
                         value: en.char,
                         onChange: function (ev) {
                           K.table.updateEditEntry(en.id, { char: ev.target.value });
@@ -341,6 +348,7 @@
                     e('td', { style: tdStyle('left') },
                       e('input', {
                         type: 'text',
+                        title: 'Free note kept with this row in the .tbl export; it never reaches the ROM and may be left empty',
                         value: en.comment || '',
                         placeholder: 'note',
                         onChange: function (ev) {
@@ -437,6 +445,7 @@
         key: 'clear',
         type: 'button',
         className: 'kt-btn small',
+        title: 'Drops every search result and the preview built from them; the Edit Table and a loaded compare file stay',
         onClick: function () { K.table.clearResults(); }
       }, 'Clear'));
     }
@@ -446,6 +455,7 @@
       key: 'load-compare',
       type: 'button',
       className: 'kt-btn small',
+      title: 'Reads a second .tbl beside the generated preview so the two label sets can be compared side by side',
       onClick: onLoadCompare
     }, 'Load .tbl to Compare'));
 
@@ -462,6 +472,7 @@
         key: 'clear-compare',
         type: 'button',
         className: 'kt-btn small btn-danger',
+        title: 'Unloads the compare table and leaves the Preview box showing the generated table alone',
         onClick: onClearCompare
       }, 'Clear Compare'));
     }
@@ -524,6 +535,7 @@
             t.previewTbl ? e('button', {
               type: 'button',
               className: 'kt-btn',
+              title: 'Copies the generated preview into the Edit Table, replacing its rows; use it once the preview reads well',
               style: { flex: '0 0 auto', width: '100%' },
               onClick: onApplyPreview
             }, 'Apply .tbl to Edit Panel') : null
@@ -551,6 +563,7 @@
 
         e('button', {
           type: 'button',
+          title: 'Keeps this Edit Table as the table of the ROM and moves on to Search Text, which reads the texts with it; needs a row',
           onClick: onApplyForRom,
           disabled: t.editEntries.length === 0,
           style: {
