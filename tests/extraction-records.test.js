@@ -7,7 +7,7 @@
    built for it - with a table present and with none, so the fallback stays honest. */
 'use strict';
 const { loadWorkbench } = require('./helpers/workbench');
-const { buildSyntheticRom } = require('./helpers/synthetic-rom');
+const { buildSyntheticRom, tableContent } = require('./helpers/synthetic-rom');
 const { createSuite, assert, assertEqual } = require('./helpers/tiny-test');
 
 const suite = createSuite('extraction records');
@@ -215,6 +215,68 @@ suite.test('the shape of the Kingdom Hearts table is read: sixteen byte stride, 
       'the record whose text starts at 0x' + at.toString(16) + ' is in the list: ' + st.status);
   });
   assertEqual(texts.length, expected.length, 'and the list is those records and nothing else: ' + st.status);
+});
+
+suite.test('a banked console is read with its own pointer model', async function (t) {
+  /* The list called the detector without naming a console, and the detector answers that by
+     falling back to the first rules in its table - GBA's four byte flat pointers. Measured in
+     batch 150 on Metal Gear (USA).nes: with GBA rules it reported one table, which was a
+     coincidence of the scan, and with the console named it reports none - and either way the
+     802 texts offered were scan runs, not records the game points at. The rules a console name
+     stands for are now resolved in one place (K.core.pointerRulesIdFor) and the list names its
+     console, so a rom whose pointers carry only the address inside the bank is readable. */
+  const NES = {
+    name: 'NES', terminator: [0x00], pipelineId: 'pipeline_nes', profileId: 'profile_nes',
+    pointerSize: 2, pointerEndianness: 'little', pointerBase: 0x8000, hasHeader: true, headerSize: 16
+  };
+  t.assertEqual(K.core.pointerRulesIdFor('NES'), 'nes', 'the console name resolves to the banked rules');
+  t.assertEqual(K.core.pointerRulesIdFor('profile_nes'), 'nes', 'and so does the profile id');
+  t.assertEqual(K.core.pointerRulesIdFor('GB'), 'gb', 'a Game Boy resolves to its own banked rules');
+  t.assertEqual(K.core.pointerRulesIdFor('GBA'), 'gba', 'a flat console keeps its own rules');
+  t.assertEqual(K.core.pointerRulesIdFor('Nothing'), null, 'a name nobody knows resolves to nothing');
+  t.assertEqual(K.core.POINTER_CONSOLE_RULES[K.core.pointerRulesIdFor('NES')].bankStep, 0x4000,
+    'and the rules it resolves to carry the model the console really has');
+
+  /* A handheld rom with the shape a banked console has: two byte pointers that carry only the
+     address inside a 16 KB window, a message region in the low bank, records that close with
+     0x00. The value written is the one the engine's own pointer search says it writes for a
+     bank relative pair - base plus the address inside the bank (findPointersForTexts, kind
+     'bank'). */
+  const rom = new Uint8Array(0x8000);
+  rom.fill(0xAA);
+  const tableAt = 0x100;
+  const regionAt = 0x2000;
+  const stride = 48;
+  const heads = [];
+  for (let i = 0; i < 12; i++) {
+    const head = regionAt + i * stride;
+    const text = 'MESSAGE ' + String.fromCharCode(0x41 + i) + ' OF THE ROM';
+    rom[head] = 0x01;
+    rom[head + 1] = 0x00;
+    for (let k = 0; k < text.length; k++) rom[head + 2 + k] = text.charCodeAt(k);
+    rom[head + 2 + text.length] = 0x00;
+    const value = 0x4000 + (head % 0x4000);
+    rom[tableAt + i * 2] = value & 0xFF;
+    rom[tableAt + i * 2 + 1] = (value >>> 8) & 0xFF;
+    heads.push(head);
+  }
+  K.search.setExtractionOptions({ readableOnly: true });
+  K.search.setRomFromLoad({ data: rom, name: 'synthetic.gb', size: rom.length }, 'GB');
+  K.search.setSystemProfile(Object.assign({}, NES, { name: 'GB', pipelineId: 'pipeline_gb', profileId: 'profile_gb', pointerBase: 0x4000, terminator: [0x50], hasHeader: false, headerSize: 0 }));
+  K.search.setTableData(tableMaps(tableContent()));
+  K.search.extractTexts();
+  for (let i = 0; i < 300; i++) {
+    await env.runPending();
+    await env.sleep(15);
+    if (!K.search.getState().isExtracting && i > 3) break;
+  }
+  const st = K.search.getState();
+  const starts = (st.texts || []).map(function (x) { return Number(x.startByte); });
+  heads.forEach(function (head) {
+    assert(starts.indexOf(head + 2) >= 0,
+      'the record at 0x' + head.toString(16) + ' is indexed: ' + st.status);
+  });
+  assert(/the game points at/.test(String(st.status)), 'and the table is the source: ' + st.status);
 });
 
 suite.test('the list does not depend on the terminator the profile guessed', async function (t) {

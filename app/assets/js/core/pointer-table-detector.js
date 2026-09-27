@@ -443,6 +443,46 @@
   };
 
   K.core.POINTER_CONSOLE_RULES = CONSOLE_RULES;
+  /* Which rules a console name stands for. Two entries can share a name - "NES" is both
+     the bank relative pair (nes) and a legacy entry that carries no bank step (nesBank) -
+     and taking the first match silently picks the one that cannot find a banked pointer,
+     so the richest rule wins: the one that knows how the address is built.
+
+     This lives here because both the Pointers panel and the extraction list have to agree
+     on it, and they did not: the list called the detector without any console at all, so
+     every console was read with the first rules in the table (GBA). Measured in batch 150
+     on Metal Gear (USA).nes: the detector found the rom's table, the list refused it, and
+     the 802 texts it offered were scan runs instead of the records the game points at. */
+  K.core.pointerRulesIdFor = function (systemName) {
+    var wanted = String(systemName || '').toLowerCase().replace(/^profile_/, '').trim();
+    if (!wanted) return null;
+    if (CONSOLE_RULES[wanted]) return wanted;
+    var matches = Object.keys(CONSOLE_RULES).filter(function (key) {
+      return String(CONSOLE_RULES[key].name || '').toLowerCase() === wanted;
+    });
+    if (!matches.length) {
+      /* 'SMS/GG', 'Game Boy Advance', 'NES (Famicom)': the first word is the console. */
+      var head = wanted.split(/[\/\s(]/)[0];
+      if (CONSOLE_RULES[head]) return head;
+      matches = Object.keys(CONSOLE_RULES).filter(function (key) {
+        return String(CONSOLE_RULES[key].name || '').toLowerCase().split(/[\/\s(]/)[0] === head;
+      });
+      if (!matches.length) return null;
+    }
+    if (matches.length === 1) return matches[0];
+    var score = function (key) {
+      var rule = CONSOLE_RULES[key];
+      var s = 0;
+      if (Number(rule.bankStep) > 0) s += 8;
+      if (Number(rule.bankSize) > 0) s += 4;
+      if (rule.threeByte) s += 4;
+      if (rule.flagMask) s += 2;
+      if (Number(rule.window) > 0) s += 1;
+      return s;
+    };
+    matches.sort(function (a, b) { return score(b) - score(a); });
+    return matches[0];
+  };
   K.core.detectPointerTables = detect;
   K.core.readPointerTable = function (bytes, table, index) {
     if (!bytes || !table) return -1;

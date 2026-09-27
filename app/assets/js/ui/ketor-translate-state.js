@@ -541,25 +541,8 @@
      match silently picked the one that cannot find a banked pointer, so the richest
      rule wins: the one that knows how the address is built. */
   function _consoleRulesIdFor(systemName) {
-    var rules = (K.core && K.core.POINTER_CONSOLE_RULES) ? K.core.POINTER_CONSOLE_RULES : null;
-    if (!rules) return null;
-    var wanted = String(systemName || '').toLowerCase();
-    var matches = Object.keys(rules).filter(function (key) {
-      return String(rules[key].name || '').toLowerCase() === wanted;
-    });
-    if (!matches.length) return null;
-    if (matches.length === 1) return matches[0];
-    var score = function (key) {
-      var rule = rules[key];
-      var s = 0;
-      if (Number(rule.bankStep) > 0) s += 8;
-      if (rule.threeByte) s += 4;
-      if (rule.flagMask) s += 2;
-      if (Number(rule.window) > 0) s += 1;
-      return s;
-    };
-    matches.sort(function (a, b) { return score(b) - score(a); });
-    return matches[0];
+    if (K.core && typeof K.core.pointerRulesIdFor === 'function') return K.core.pointerRulesIdFor(systemName);
+    return null;
   }
 
   /* Which write the engine has to use to store this kind of value again. A bank

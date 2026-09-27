@@ -959,7 +959,15 @@
     if (terminators.indexOf(0x00) < 0) terminators.push(0x00);
     var found = null;
     try {
+      /* The console rules have to be named here. Without them the detector falls back to
+         the first rules in its table (GBA), and a banked console is read with the wrong
+         pointer model: measured in batch 150 on Metal Gear, the detector found the rom's
+         table and this list threw it away, offering 802 scan runs instead of records. */
+      var consoleRulesId = (K.core && typeof K.core.pointerRulesIdFor === 'function')
+        ? (K.core.pointerRulesIdFor(profile.profileId) || K.core.pointerRulesIdFor(profile.name) || K.core.pointerRulesIdFor(_state.romSystem))
+        : null;
       found = detect(_state.romBytes, {
+        console: consoleRulesId || undefined,
         system: profile.name || _state.romSystem || 'Unknown',
         pipelineId: profile.pipelineId,
         terminator: terminators,
@@ -1017,6 +1025,14 @@
          at least one mapped text sitting on it - is taken too: on Kingdom Hearts the
          intro's own table is like that, because its records do not all open with the
          same number of header bytes, and dropping it lost the intro line. */
+      /* Batch 150 tried dropping the matchedTexts rule here, on the theory that the European
+         item tables of Aria of Sorrow ("... NORMAL DIFFICILE", "s pouvoirs de Dracula") were
+         being lost because their pointers land a few bytes off the first character. Measured:
+         eleven more tables reached this point, every one of them failed the readable gate
+         below, and the list did not change by a single text - so the rule stays. What that
+         also settles is the menu: STATUS, SOULS, ITEMS and CONFIG do not appear anywhere in
+         the USA cartridge as text (searched through the table, both cases), so their absence
+         from the list is the cartridge, not the extractor. */
       var structural = Number(table.spansBad) === 0 && Number(table.count) >= 6 && Number(table.matchedTexts) >= 2;
       if (table.confirmed !== true && !structural) return;
       considered++;
