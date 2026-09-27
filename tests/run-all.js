@@ -29,8 +29,9 @@ const tileCodec = require('./tile-codec.test');
 const tilePaletteModel = require('./tile-palette-model.test');
 const tilePanel = require('./tile-panel.test');
 const hexAppend = require('./hex-append.test');
+const structure = require('./structure.test');
 
-const suites = [insertPolicy.suite, pointerDetector.suite, translatePanel.suite, gameProfile.suite, saveState.suite, fontMap.suite, tableWidth.suite, extractFiller.suite, extractionRecords.suite, gbaProfile.suite, headerlessRecord.suite, readableFilter.suite, debuggerTab.suite, armDisasm.suite, tileWriteback.suite, tileClipboard.suite, tileSelection.suite, tileMarquee.suite, tileImage.suite, tilePng.suite, tileStatusbar.suite, tilePalette256.suite, tileCodec.suite, tilePaletteModel.suite, tilePanel.suite, hexAppend.suite];
+const suites = [insertPolicy.suite, pointerDetector.suite, translatePanel.suite, gameProfile.suite, saveState.suite, fontMap.suite, tableWidth.suite, extractFiller.suite, extractionRecords.suite, gbaProfile.suite, headerlessRecord.suite, readableFilter.suite, debuggerTab.suite, armDisasm.suite, tileWriteback.suite, tileClipboard.suite, tileSelection.suite, tileMarquee.suite, tileImage.suite, tilePng.suite, tileStatusbar.suite, tilePalette256.suite, tileCodec.suite, tilePaletteModel.suite, tilePanel.suite, hexAppend.suite, structure.suite];
 const filter = process.argv[2] ? String(process.argv[2]) : '';
 const chosen = filter ? suites.filter(function (s) { return s.name.indexOf(filter) >= 0; }) : suites;
 
