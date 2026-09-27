@@ -3154,6 +3154,20 @@ let _recordTable = null;
                 const site = Number(kTable.sites[ki]);
                 if (!Number.isFinite(site)) continue;
                 if (validPointers.some(function (p) { return Number(p.ptrOffset) === site; })) continue;
+                /* The bytes at the site have to be the address the engine stores, or this
+                   entry is not a pointer at all. A detector that merges tables keeps some
+                   sites whose four bytes only look like an address (on Aria of Sorrow 2,903
+                   entries are reported where the game's table has 2,893: two pointers of a
+                   neighbouring table and eight such coincidences). Rewriting one of those
+                   because its value happens to land inside the record being written would
+                   corrupt whatever the four bytes really are, so only a value that is the
+                   base plus the target - or its GBA mirror, base plus 16 MB - is rewritten. */
+                const stored = kSize >= 4
+                  ? (romView.getUint32(site, kLittle) >>> 0)
+                  : (kSize === 2 ? (romView.getUint16(site, kLittle) >>> 0) : (kBase + target) >>> 0);
+                const wanted = (kBase + target) >>> 0;
+                const mirrored = (wanted + 0x01000000) >>> 0;
+                if (kSize >= 2 && stored !== wanted && stored !== mirrored) continue;
                 let rel = null;
                 for (let ri = 0; ri < ranges.length; ri++) {
                   const rg = ranges[ri];
