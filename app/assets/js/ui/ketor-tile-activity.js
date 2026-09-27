@@ -2257,7 +2257,6 @@
       var ctx = canvas.getContext('2d');
       ctx.fillStyle = '#101014';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      var drawn = 0;
       for (var t = 0; t < props.tiles; t++) {
         // a font view draws the sheet in character order, so the drawn slot and the
         // tile in the buffer are two different numbers
@@ -2270,12 +2269,11 @@
         var ty = Math.floor(t / perRow) * 8 * z;
         for (var y = 0; y < 8; y++) {
           for (var x = 0; x < 8; x++) {
-            var c = props.colourOf ? props.colourOf(px[y][x]) : colourCss(px[y][x]);
+            var c = colourCss(px[y][x]);
             if (ctx.fillStyle !== c) ctx.fillStyle = c;
             ctx.fillRect(tx + x * z, ty + y * z, z, z);
           }
         }
-        drawn++;
       }
       // the byte under the Hex Editor cursor, so both views point at one place
       if (props.cursorTile >= 0 && props.cursorTile < props.tiles) {
@@ -2361,8 +2359,7 @@
           ctx.fillText(label, lx, ly);
         }
       }
-      if (props.onDrawn) props.onDrawn(drawn);
-    }, [props.windowKey, props.format, props.zoom, props.tiles, props.selected, props.selection, props.selPixel, props.cursorTile, props.cursorByte, props.palette, props.width, props.orderKey]);
+    }, [props.windowKey, props.format, props.zoom, props.tiles, props.selected, props.selection, props.selPixel, props.cursorTile, props.cursorByte, props.width, props.orderKey]);
     return e('canvas', {
       ref: ref,
       onMouseDown: props.onClick,
@@ -2703,7 +2700,9 @@
       var canvas = ev.currentTarget;
       var p = pixelAt(ev, canvas);
       if (!p) return;
-      var right = ev.button === 2 || ev.ctrlKey === false && false;
+      /* A right click is button 2 and nothing else: the second half of the old test was
+         and-ed with a literal false, so it could never change the result. */
+      var right = ev.button === 2;
       selectTile(p.tile);
       if (right || tool === 'pick') { pickColour(p.tile, p.x, p.y); return; }
       if (tool === 'select') {
@@ -3377,7 +3376,8 @@
     }
 
     function copyHexText() {
-      var selected = -1;
+      /* Tile 0, always: st.region only says a region exists, so tileHexText(0) is the only
+         tile this can copy - the removed `var selected = -1` never picked another one. */
       var tile = st.region === null ? '' : tileHexText(0);
       if (!tile) { _set({ status: 'Nothing to copy.' }); return; }
       if (global.navigator && global.navigator.clipboard && global.navigator.clipboard.writeText) {
@@ -3385,7 +3385,6 @@
       } else {
         _set({ status: 'Tile 0 bytes: ' + tile });
       }
-      return selected;
     }
 
     var rowStyle = { display: 'flex', gap: 4, alignItems: 'center' };
